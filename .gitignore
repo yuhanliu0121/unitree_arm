@@ -1,0 +1,32 @@
+# Codex session metadata
+/.agents/
+/.codex/
+
+# ROS 2 / CMake build products (including nested vendor workspaces)
+build/
+install/
+log/
+**/build/
+**/install/
+**/log/
+
+# Python products and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# The simulator consumes the OBJ/MTL/PBR exports. Keep the much larger,
+# redundant authoring and interchange formats outside this code repository.
+/objects/**/*.blend
+/objects/**/*.fbx
+/objects/**/*.glb
+/objects/**/*.stl

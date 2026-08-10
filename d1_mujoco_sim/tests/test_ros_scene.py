@@ -1,0 +1,145 @@
+from pathlib import Path
+
+import mujoco
+import numpy as np
+import pytest
+import yaml
+
+from d1_mujoco_sim.model import build_model
+from d1_mujoco_sim.ros_scene import (
+    object_mesh_specs,
+    physical_collision_specs,
+)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CONFIG = yaml.safe_load(
+    (ROOT / "d1_mujoco_sim" / "config" / "sim.yaml").read_text()
+)
+
+
+@pytest.fixture(scope="module")
+def model_and_data() -> tuple[mujoco.MjModel, mujoco.MjData]:
+    controller = dict(CONFIG["controller"])
+    controller["physics_timestep_s"] = CONFIG["simulation"][
+        "physics_timestep_s"
+    ]
+    model = build_model(
+        ROOT / "d1_constrained_description_20260728",
+        controller,
+        scene=CONFIG["scene"],
+        objects_root=ROOT / "objects",
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    return model, data
+
+
+def test_object_mesh_markers_use_original_assets_and_runtime_body_poses(
+    model_and_data: tuple[mujoco.MjModel, mujoco.MjData],
+) -> None:
+    model, data = model_and_data
+    specs = object_mesh_specs(model, data, ROOT / "objects")
+    assert [spec.name for spec in specs] == [
+        "yellow_cube",
+        "bowl",
+        "zucchini",
+    ]
+    for spec in specs:
+        body_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            f"object_{spec.name}",
+        )
+        assert spec.shape == "mesh"
+        assert spec.resource == (
+            ROOT
+            / "objects"
+            / spec.name
+            / f"{spec.name}-obj"
+            / f"{spec.name}.obj"
+        ).as_uri()
+        np.testing.assert_allclose(spec.position, data.xpos[body_id])
+        assert spec.scale == (1.0, 1.0, 1.0)
+        assert spec.opaque
+
+
+def test_object_mesh_markers_follow_free_body_motion(
+    model_and_data: tuple[mujoco.MjModel, mujoco.MjData],
+) -> None:
+    model, _ = model_and_data
+    data = mujoco.MjData(model)
+    joint_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        "object_yellow_cube_free",
+    )
+    qpos_address = model.jnt_qposadr[joint_id]
+    expected = np.asarray([0.21, -0.12, 0.17])
+    data.qpos[qpos_address:qpos_address + 3] = expected
+    data.qpos[qpos_address + 3:qpos_address + 7] = [1.0, 0.0, 0.0, 0.0]
+    mujoco.mj_forward(model, data)
+    cube = object_mesh_specs(model, data, ROOT / "objects")[0]
+    np.testing.assert_allclose(cube.position, expected)
+
+
+def test_physical_collision_markers_come_from_active_mujoco_geoms(
+    model_and_data: tuple[mujoco.MjModel, mujoco.MjData],
+) -> None:
+    model, data = model_and_data
+    specs = physical_collision_specs(model, data)
+    active_geoms = sum(
+        bool(model.geom_contype[index] or model.geom_conaffinity[index])
+        for index in range(model.ngeom)
+    )
+    assert len(specs) == active_geoms
+    by_name = {spec.name: spec for spec in specs}
+
+    ground = by_name["ground"]
+    assert ground.shape == "box"
+    assert ground.scale == (4.0, 4.0, 0.002)
+    assert ground.opaque
+
+    zucchini = by_name["object_collision_zucchini"]
+    assert zucchini.shape == "sphere"
+    np.testing.assert_allclose(zucchini.scale, [0.04, 0.15, 0.03312])
+
+    bowl_walls = [
+        spec for spec in specs
+        if spec.name.startswith("object_collision_bowl_wall_")
+    ]
+    assert len(bowl_walls) == 12
+    assert all(spec.shape == "box" for spec in bowl_walls)
+
+    wrist = by_name["collision_wrist_roll"]
+    assert wrist.shape == "cylinder"
+    np.testing.assert_allclose(wrist.scale, [0.0766, 0.0766, 0.132])
+
+
+def test_rviz_layer_defaults_keep_meshes_on_and_collisions_off() -> None:
+    rviz = yaml.safe_load(
+        (ROOT / "d1_moveit_config" / "config" / "moveit.rviz").read_text()
+    )
+    displays = {
+        display["Name"]: display
+        for display in rviz["Visualization Manager"]["Displays"]
+    }
+    assert displays["RobotModel"]["Value"] is True
+    assert displays["Object Meshes"]["Enabled"] is True
+    assert displays["MuJoCo Physical Collisions"]["Enabled"] is False
+    assert displays["MoveIt Planning Collisions"]["Value"] is False
+    assert displays["Wrist RGB"]["Enabled"] is True
+    assert displays["Wrist Aligned Depth (Plasma)"]["Enabled"] is True
+    assert displays["Wrist Raw Depth (Plasma)"]["Enabled"] is False
+    assert (
+        displays["Wrist RGB"]["Topic"]["Value"]
+        == "/wrist_camera/color/image_raw"
+    )
+    assert (
+        displays["Wrist Aligned Depth (Plasma)"]["Topic"]["Value"]
+        == "/wrist_camera/debug/aligned_depth_plasma"
+    )
+    assert (
+        displays["Wrist Raw Depth (Plasma)"]["Topic"]["Value"]
+        == "/wrist_camera/debug/depth_plasma"
+    )

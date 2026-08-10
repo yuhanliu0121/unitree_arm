@@ -1,0 +1,10 @@
+<library path="d1_ros2_control">
+  <class
+    name="d1_ros2_control/D1SystemHardware"
+    type="d1_ros2_control::D1SystemHardware"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Position-only Unitree D1 hardware interface using the native DDS service.
+    </description>
+  </class>
+</library>

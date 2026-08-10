@@ -1,0 +1,133 @@
+simulation:
+  physics_timestep_s: 0.001
+  realtime: true
+  # MuJoCo contacts are intentionally compliant and otherwise permit slow
+  # frictional creep even while the Coulomb friction limit is not exceeded.
+  # These settings suppress that solver drift without welding grasped objects.
+  friction_cone: elliptic
+  friction_impedance_ratio: 10.0
+  noslip_iterations: 2
+  # Rendering is diagnostic only. Synchronizing the viewer at every 1 kHz
+  # physics step can make simulation time lag behind ROS wall time.
+  viewer_sync_rate_hz: 60.0
+  initial_sdk_angles_deg: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+dds:
+  # Keep simulation isolated from a physical D1, whose examples use domain 0.
+  domain_id: 42
+  command_topic: rt/arm_Command
+  feedback_topic: rt/arm_Feedback
+  joint_feedback_topic: current_servo_angle
+  feedback_rate_hz: 8.97
+
+scene_state:
+  # Simulation-only object truth for the local MoveIt grasp baseline.
+  enabled: true
+  host: 127.0.0.1
+  port: 15002
+  publish_rate_hz: 25.0
+
+ros_visualization:
+  frame_id: base_link
+  publish_rate_hz: 25.0
+  object_mesh_topic: /d1_mujoco/object_meshes
+  physical_collision_topic: /d1_mujoco/physical_collisions
+
+camera:
+  enabled: true
+  model: Intel RealSense D435i
+  serial: "250122077729"
+  parent_link: Link6
+  link_frame: wrist_camera_link
+  # Stable role-based interface shared by simulation and the physical camera.
+  topic_root: /wrist_camera
+  publish_rate_hz: 10.0
+  min_depth_m: 0.2
+  max_depth_m: 10.0
+  display_min_depth_m: 0.2
+  display_max_depth_m: 2.0
+  # User-calibrated hand-eye transform. Optical convention is +X right,
+  # +Y down, +Z forward and p_link6 = T_link6_color * p_color.
+  T_link6_color_optical:
+    - [0.007802511223, 0.969491460227, 0.245000876253, -0.113433495391]
+    - [-0.999491412298, -0.000014772168, 0.031889128609, 0.033016808957]
+    - [0.030919857055, -0.245125087105, 0.968998273534, -0.051772117970]
+    - [0.0, 0.0, 0.0, 1.0]
+  # Factory calibration read from this physical camera. RealSense convention:
+  # p_color = T_color_depth * p_depth.
+  T_color_depth_optical:
+    - [0.9999279975891113, 0.011575860902667046, -0.0031572110019624233, 0.01492401398718357]
+    - [-0.011571220122277737, 0.9999319314956665, 0.0014840539079159498, -0.00006785027653677389]
+    - [0.003174175275489688, -0.001447414280846715, 0.9999939203262329, 0.0002797634806483984]
+    - [0.0, 0.0, 0.0, 1.0]
+  color:
+    name: d435i_color
+    frame: wrist_camera_color_optical_frame
+    width: 1280
+    height: 720
+    fps: 10
+    fx: 899.0229959122928
+    fy: 898.8742971332437
+    cx: 643.5243104090979
+    cy: 376.4273672241967
+    distortion_model: plumb_bob
+    distortion: [0.11524962820468163, -0.23164843141737868, 0.0, 0.0, 0.0]
+  depth:
+    name: d435i_depth
+    frame: wrist_camera_depth_optical_frame
+    width: 848
+    height: 480
+    fps: 10
+    fx: 430.4000244140625
+    fy: 430.4000244140625
+    cx: 425.4139709472656
+    cy: 239.32342529296875
+    distortion_model: plumb_bob
+    distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+    depth_scale_m_per_unit: 0.0010000000474974513
+
+controller:
+  command_rate_limit_hz: 10.0
+  mode_0_time_constant_s: 0.18
+  mode_1_time_constant_s: 0.35
+  arm_kp: 50.0
+  arm_kv: 5.0
+  arm_joint_damping: 2.0
+  arm_joint_armature: 0.02
+  # Deliberately stiff, damped grip for robust task-level grasp validation.
+  # The negative actuator target supplies preload against MuJoCo's compliant
+  # zero-aperture lower-limit constraint or against a grasped object.
+  gripper_kp: 800.0
+  gripper_kv: 80.0
+  gripper_closing_preload_m: 0.005
+  gripper_joint_damping: 0.2
+  gripper_joint_armature: 0.001
+
+gripper:
+  closed_angle_deg: -30.0
+  open_angle_deg: 60.0
+  travel_m: 0.03
+
+scene:
+  random_seed: 0
+  # Task-level damping copied from the ATEC Task E object configuration to
+  # suppress residual sliding that is not representative of the real gripper.
+  object_linear_damping: 2.0
+  object_angular_damping: 4.0
+  # Provisional physical side length of the black calibration square in the
+  # source floor photo. Change this after measuring it in the real scene.
+  ground_texture_square_size_m: 0.6
+  object_gap_m: 0.008
+  base_exclusion_radius_m: 0.06
+  spawn_region:
+    # Base centre is the midpoint of the x=0 edge; +x points inward.
+    depth_x_m: 0.6
+    width_y_m: 0.8
+    outline_width_m: 0.003
+  objects:
+    yellow_cube:
+      mass_kg: 0.08
+    bowl:
+      mass_kg: 0.08
+    zucchini:
+      mass_kg: 0.18

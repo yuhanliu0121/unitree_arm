@@ -1,0 +1,35 @@
+# Normalized command for the physical gripper actuator (SDK angle6).
+# This ratio is intentionally kept outside the URDF because it is
+# dimensionless; the URDF finger joints remain prismatic and use metres.
+gripper_ratio:
+  minimum: 0.0
+  maximum: 1.0
+  meaning:
+    minimum: open
+    maximum: closed
+
+  safe_motor_angle_deg:
+    ratio_0: 60.0
+    ratio_1: -30.0
+
+  conversion:
+    angle_deg_from_ratio: "60.0 - 90.0 * ratio"
+    ratio_from_angle_deg: "(60.0 - angle_deg) / 90.0"
+
+  simulation:
+    master_joint: Joint6
+    mimic_joint: Joint6_mimic
+    master_position_at_ratio_0_m: 0.03
+    master_position_at_ratio_1_m: 0.0
+    master_position_from_ratio: "0.03 * (1.0 - ratio)"
+
+  grasp_presets:
+    yellow_cube:
+      motor_angle_deg: 40.2
+      ratio: 0.22
+    bowl:
+      motor_angle_deg: -26.5
+      ratio: 0.961111111111
+    zucchini:
+      motor_angle_deg: 6.5
+      ratio: 0.594444444444

@@ -1,0 +1,6 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: d1_constrained_description
+    relative_path: urdf/d1_description.urdf
+  srdf:
+    relative_path: config/d1.srdf

@@ -1,0 +1,13 @@
+name: trash_collection
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - cyclonedds==11.0.1
+      - mujoco==3.11.0
+      - numpy>=2.0,<3
+      - PyYAML>=6,<7
+      - pytest>=9,<10
+      - -e .

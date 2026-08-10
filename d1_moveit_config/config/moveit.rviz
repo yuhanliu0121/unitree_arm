@@ -1,0 +1,124 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Class: rviz_default_plugins/Grid
+      Name: Grid
+      Plane: XY
+      Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+      Name: RobotModel
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Object Meshes
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /d1_mujoco/object_meshes
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: MuJoCo Physical Collisions
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /d1_mujoco/physical_collisions
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: MotionPlanning
+      Planned Path:
+        Loop Animation: false
+        Robot Alpha: 0.35
+        Show Trail: false
+        State Display Time: 0.05 s
+        Trajectory Topic: display_planned_path
+      Planning Request:
+        Query Goal State: false
+        Query Start State: false
+        Show Workspace: false
+      Planning Group: arm
+      Planning Scene Topic: monitored_planning_scene
+      Robot Description: robot_description
+      Scene Geometry:
+        Scene Alpha: 1
+        Show Scene Geometry: false
+      Scene Robot:
+        Robot Alpha: 0
+        Show Robot Collision: false
+        Show Robot Visual: false
+      Value: true
+    - Class: moveit_rviz_plugin/PlanningScene
+      Name: MoveIt Planning Collisions
+      Planning Scene Topic: monitored_planning_scene
+      Robot Description: robot_description
+      Scene Geometry:
+        Scene Alpha: 1
+        Show Scene Geometry: true
+      Scene Robot:
+        Robot Alpha: 0.55
+        Robot Color: 255; 115; 13
+        Show Robot Collision: true
+        Show Robot Visual: false
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Wrist RGB
+      Normalize Range: false
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera/color/image_raw
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Wrist Aligned Depth (Plasma)
+      Normalize Range: false
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera/debug/aligned_depth_plasma
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: Wrist Raw Depth (Plasma)
+      Normalize Range: false
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera/debug/depth_plasma
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_link
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.2
+      Focal Point:
+        X: 0.25
+        Y: 0.0
+        Z: 0.25
+      Name: Current View
+      Pitch: 0.45
+      Target Frame: base_link
+      Yaw: 0.75
+Window Geometry:
+  Height: 900
+  Width: 1400

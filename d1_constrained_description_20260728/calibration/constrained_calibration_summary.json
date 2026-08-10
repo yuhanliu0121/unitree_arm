@@ -1,0 +1,52 @@
+{
+  "date": "2026-07-28",
+  "status": "no_nonzero_kinematic_correction_accepted",
+  "release_model": "urdf/d1_description.urdf",
+  "release_model_sha256": "15c14167babf6db35de7de2d992dedb97cba7f3ccb4ff5419ab84a72cd1b78a6",
+  "source_model_sha256_before_package_uri_rewrite": "253cb7add4385b6dcde039997fe51c44733724f145df07d191e43380106d8532",
+  "constraints": {
+    "joint_origins": "fixed",
+    "link_translations": "fixed",
+    "observable_zero_offsets": ["Joint1", "Joint2", "Joint3", "Joint4"],
+    "unobservable_zero_offsets": ["Joint0", "Joint5"],
+    "joint_axis_tilt_limit_deg": 1.0
+  },
+  "data": {
+    "raw_corner_training_poses": 25,
+    "raw_corner_holdout_poses": 6,
+    "raw_corner_fresh_holdout_poses": 3,
+    "independent_external_session_total_poses": 42,
+    "independent_external_holdout_poses": 6
+  },
+  "raw_corner_rms_px": {
+    "nominal": {"training": 1.3423630718, "holdout": 1.8314720963, "fresh_holdout": 2.2063261324},
+    "zero_offsets": {"training": 1.1044015028, "holdout": 1.6437859120, "fresh_holdout": 2.1015436382},
+    "bounded_axis_tilts": {"training": 1.1131116205, "holdout": 1.4915059902, "fresh_holdout": 2.0186473060},
+    "combined": {"training": 1.0400659359, "holdout": 1.4490978967, "fresh_holdout": 1.9959079137}
+  },
+  "independent_holdout": {
+    "nominal": {"translation_rms_mm": 8.6729756588, "rotation_rms_deg": 2.9561299009},
+    "zero_offsets": {"translation_rms_mm": 9.6582574562, "rotation_rms_deg": 2.9641744911},
+    "bounded_axis_tilts": {"translation_rms_mm": 8.6941733706, "rotation_rms_deg": 2.8667099742},
+    "combined": {"translation_rms_mm": 9.2505053062, "rotation_rms_deg": 2.9432857627}
+  },
+  "selection_rule": "A correction must improve both raw-corner holdout groups and both translation and rotation RMS on the independent holdout without reaching an axis-tilt bound.",
+  "selected_model": "nominal_mechanically_continuous_urdf",
+  "gripper_visual_zero_correction": {
+    "arm_fk_affected": false,
+    "vendor_minimum_aperture_mm": 17.26286,
+    "corrected_minimum_aperture_mm": 0.0,
+    "corrected_maximum_aperture_mm": 60.0,
+    "joint6_range_m": [0.0, 0.03],
+    "left_finger_origin_y_m": -0.02100301,
+    "right_finger_origin_y_m": 0.02101013
+  },
+  "tcp_definition": {
+    "parent": "Link6",
+    "child": "tcp_link",
+    "xyz_m": [0.00038, 0.0, 0.1256],
+    "rpy_rad": [0.0, 0.0, 0.0],
+    "method": "midpoint_of_Link7_1_and_Link7_2_STL_tip_faces",
+    "physically_measured": false
+  }
+}

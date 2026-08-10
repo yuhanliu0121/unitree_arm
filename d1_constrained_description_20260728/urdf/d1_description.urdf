@@ -1,0 +1,549 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<!--
+  IMPORTANT: The mass, centre-of-mass, and inertia values below come from the
+  manufacturer's arm-with-gripper d1_description.csv. The effort and velocity
+  limits come from available manufacturer documentation/models. These
+  dynamics, effort, and velocity values have not been validated on this
+  physical robot and may be inaccurate. Do not treat them as certified safety
+  limits or use them for unverified torque control.
+  Maintained by Yuhan Liu.
+-->
+<robot
+  name="d1_constrained_description">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.0017 0 0.0295"
+        rpy="0 0 0" />
+      <mass
+        value="0.568" />
+      <inertia
+        ixx="0.000644"
+        ixy="2.97E-07"
+        ixz="3.33E-06"
+        iyy="0.0006769"
+        iyz="-4.52E-07"
+        izz="0.0010466" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="Link1">
+    <inertial>
+      <origin
+        xyz="-0.000843 -0.000119 0.0223535"
+        rpy="0 0 0" />
+      <mass
+        value="0.368" />
+      <inertia
+        ixx="3.45E-04"
+        ixy="-9.00E-08"
+        ixz="1.18E-06"
+        iyy="3.31E-04"
+        iyz="1.42E-06"
+        izz="2.14E-04" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint0"
+    type="revolute">
+    <origin
+      xyz="0 0 0.0533"
+      rpy="0 0 -3.1416" />
+    <parent
+      link="base_link" />
+    <child
+      link="Link1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-2.785545486183"
+      upper="2.809980095711"
+      effort="3.3"
+      velocity="1.05" />
+  </joint>
+  <link
+    name="Link2">
+    <inertial>
+      <origin
+        xyz="0.00011 0.184077 -0.027408"
+        rpy="0 0 0" />
+      <mass
+        value="0.477" />
+      <inertia
+        ixx="0.003553597"
+        ixy="4.79E-06"
+        ixz="1.29E-07"
+        iyy="1.42E-04"
+        iyz="-3.76E-06"
+        izz="0.003490769" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint1"
+    type="revolute">
+    <origin
+      xyz="0 0.028 0.0563"
+      rpy="1.5708 0 -3.1416" />
+    <parent
+      link="Link1" />
+    <child
+      link="Link2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-1.541125729511"
+      upper="1.619665545851"
+      effort="3.3"
+      velocity="1.05" />
+  </joint>
+  <link
+    name="Link3">
+    <inertial>
+      <origin
+        xyz="0.017869 0.04318 -0.0275"
+        rpy="0 0 0" />
+      <mass
+        value="0.159" />
+      <inertia
+        ixx="5.90E-05"
+        ixy="-6.41E-06"
+        ixz="0"
+        iyy="6.89E-05"
+        iyz="0"
+        izz="8.86E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint2"
+    type="revolute">
+    <origin
+      xyz="0 0.2693 0.0009"
+      rpy="0 0 0" />
+    <parent
+      link="Link2" />
+    <child
+      link="Link3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-1.619665545851"
+      upper="1.546361717267"
+      effort="1.7"
+      velocity="1.05" />
+  </joint>
+  <link
+    name="Link4">
+    <inertial>
+      <origin
+        xyz="-0.000626 0.00038 0.105418"
+        rpy="0 0 0" />
+      <mass
+        value="0.224" />
+      <inertia
+        ixx="5.43E-04"
+        ixy="-7.30E-08"
+        ixz="7.20E-06"
+        iyy="5.73E-04"
+        iyz="-1.31E-06"
+        izz="4.77E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint3"
+    type="revolute">
+    <origin
+      xyz="0.0577 0.042 -0.0275"
+      rpy="-1.5708 0 -1.5708" />
+    <parent
+      link="Link3" />
+    <child
+      link="Link4" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-2.623229865747"
+      upper="2.654645792283"
+      effort="1.7"
+      velocity="1.73" />
+  </joint>
+  <link
+    name="Link5">
+    <inertial>
+      <origin
+        xyz="0.044336 0.005481 -0.023801"
+        rpy="0 0 0" />
+      <mass
+        value="0.134" />
+      <inertia
+        ixx="3.62E-05"
+        ixy="6.42E-06"
+        ixz="-5.00E-09"
+        iyy="5.91E-05"
+        iyz="1.00E-09"
+        izz="6.66E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link5.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint4"
+    type="revolute">
+    <origin
+      xyz="-0.0001 -0.0237 0.14018"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="Link4" />
+    <child
+      link="Link5" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-1.610938899591"
+      upper="1.848303677862"
+      effort="1.7"
+      velocity="1.73" />
+  </joint>
+  <link
+    name="Link6">
+    <inertial>
+      <origin
+        xyz="7.00E-06 0.00365 0.076577"
+        rpy="0 0 0" />
+      <mass
+        value="0.238" />
+      <inertia
+        ixx="2.04E-04"
+        ixy="-2.80E-07"
+        ixz="-3.50E-08"
+        iyy="3.48E-04"
+        iyz="1.93E-05"
+        izz="2.09E-04" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link6.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link6.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint5"
+    type="revolute">
+    <origin
+      xyz="0.0825 -0.0010782 -0.023822"
+      rpy="-1.5708 0 -1.5708" />
+    <parent
+      link="Link5" />
+    <child
+      link="Link6" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-2.764601535159"
+      upper="2.778564169175"
+      effort="1.7"
+      velocity="1.73" />
+  </joint>
+  <link
+    name="left_finger">
+    <inertial>
+      <origin
+        xyz="0.012444 0.006 0.01067"
+        rpy="0 0 0" />
+      <mass
+        value="0.025" />
+      <inertia
+        ixx="2.37E-06"
+        ixy="-7.74E-20"
+        ixz="-1.04E-06"
+        iyy="7.24E-06"
+        iyz="-1.20E-20"
+        izz="7.84E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link7_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link7_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint6"
+    type="prismatic">
+    <!--
+      Vendor origin shifted inward by 8.63299 mm so Joint6=0 represents
+      zero nominal jaw aperture; Joint6=0.03 represents 60 mm aperture.
+    -->
+    <origin
+      xyz="-0.0056012 -0.02100301 0.0706"
+      rpy="-1.5714 -1.5708 0" />
+    <parent
+      link="Link6" />
+    <child
+      link="left_finger" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0.03"
+      effort="15"
+      velocity="0.02" />
+  </joint>
+  <link
+    name="right_finger">
+    <inertial>
+      <origin
+        xyz="0.012444 -0.006 0.01067"
+        rpy="0 0 0" />
+      <mass
+        value="0.025" />
+      <inertia
+        ixx="2.37E-06"
+        ixy="7.83E-20"
+        ixz="-1.04E-06"
+        iyy="7.24E-06"
+        iyz="1.21E-20"
+        izz="7.84E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link7_2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/Link7_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint6_mimic"
+    type="prismatic">
+    <!--
+      Vendor origin shifted inward by 8.62987 mm to match the master jaw.
+    -->
+    <origin
+      xyz="-0.0056388 0.02101013 0.0706"
+      rpy="1.5702 -1.5708 0" />
+    <parent
+      link="Link6" />
+    <child
+      link="right_finger" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.03"
+      upper="0"
+      effort="15"
+      velocity="0.02" />
+    <mimic
+      joint="Joint6"
+      multiplier="-1"
+      offset="0" />
+  </joint>
+  <link
+    name="tcp_link" />
+  <joint
+    name="tcp_fixed_joint"
+    type="fixed">
+    <!--
+      Centre of the two finger-tip faces, derived from Link7_1.STL and
+      Link7_2.STL. Link6 +Z points from the wrist toward the grasp point.
+      The symmetric gripper motion leaves this midpoint fixed.
+    -->
+    <origin
+      xyz="0.00038 0 0.1256"
+      rpy="0 0 0" />
+    <parent
+      link="Link6" />
+    <child
+      link="tcp_link" />
+  </joint>
+</robot>

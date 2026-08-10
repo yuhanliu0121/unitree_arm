@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d1-mujoco-sim"
+version = "0.1.0"
+description = "Protocol-compatible MuJoCo simulator for the Unitree D1 arm"
+requires-python = ">=3.10"
+dependencies = [
+  "cyclonedds==11.0.1",
+  "mujoco==3.11.0",
+  "numpy>=2.0,<3",
+  "Pillow>=11,<13",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=9,<10"]
+
+[project.scripts]
+d1-mujoco-sim = "d1_mujoco_sim.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+d1_mujoco_sim = ["assets/*.png", "assets/*.obj"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

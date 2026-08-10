@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<robot name="d1_constrained_description">
+  <group name="arm">
+    <chain base_link="base_link" tip_link="tcp_link" />
+  </group>
+  <group name="gripper">
+    <joint name="Joint6" />
+  </group>
+
+  <group_state name="home" group="arm">
+    <joint name="Joint0" value="0" />
+    <joint name="Joint1" value="0" />
+    <joint name="Joint2" value="0" />
+    <joint name="Joint3" value="0" />
+    <joint name="Joint4" value="0" />
+    <joint name="Joint5" value="0" />
+  </group_state>
+  <group_state name="open" group="gripper">
+    <joint name="Joint6" value="0.03" />
+  </group_state>
+  <group_state name="closed" group="gripper">
+    <joint name="Joint6" value="0" />
+  </group_state>
+
+  <end_effector
+    name="d1_gripper"
+    parent_link="Link6"
+    group="gripper"
+    parent_group="arm" />
+
+  <disable_collisions link1="base_link" link2="Link1" reason="Adjacent" />
+  <disable_collisions link1="Link1" link2="Link2" reason="Adjacent" />
+  <disable_collisions link1="Link2" link2="Link3" reason="Adjacent" />
+  <disable_collisions link1="Link3" link2="Link4" reason="Adjacent" />
+  <disable_collisions link1="Link4" link2="Link5" reason="Adjacent" />
+  <disable_collisions link1="Link5" link2="Link6" reason="Adjacent" />
+  <disable_collisions link1="Link6" link2="left_finger" reason="Adjacent" />
+  <disable_collisions link1="Link6" link2="right_finger" reason="Adjacent" />
+  <disable_collisions link1="left_finger" link2="right_finger" reason="Never" />
+</robot>

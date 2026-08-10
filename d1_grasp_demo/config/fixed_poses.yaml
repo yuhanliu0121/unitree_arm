@@ -1,0 +1,15 @@
+# Application-level fixed arm poses. Values map to Joint0 through Joint5 and
+# are expressed in radians. Gripper state is controlled separately.
+fixed_poses:
+  stowed:
+    arm_rad: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
+
+  home:
+    arm_rad: [0.0, -1.0, 1.047, 0.0, 0.0, 0.0]
+
+  carry:
+    arm_rad: [0.0, -1.5, 1.5, 0.0, -0.6, 0.0]
+
+  # Deliberately independent from home despite currently sharing its values.
+  place_ready:
+    arm_rad: [0.0, -1.0, 1.047, 0.0, 0.0, 0.0]
