@@ -35,3 +35,31 @@ ros2 action send_goal /arm/debug/observe_target \
 The automatic seed-0 regression selected candidate 56 (`beta=0 deg`,
 `alpha=65 deg`, `distance=0.60 m`) and measured the executed target projection
 0.3 pixels from the calibrated RGB image centre.
+
+## Wrist perception adapter
+
+`detect_target_server` is the ROS boundary around the frozen
+`perception_runtime_v1` package. It subscribes to:
+
+- `/wrist_camera/color/image_raw` (`rgb8` or `bgr8`);
+- `/wrist_camera/aligned_depth_to_color/image_raw` (`16UC1` millimetres or
+  `32FC1` metres);
+- `/wrist_camera/aligned_depth_to_color/camera_info`.
+
+The `/arm/perception/detect_target` service accepts a coarse
+`geometry_msgs/PointStamped` target hint. Each request clears cached frames,
+waits for a new timestamp-matched RGB-D pair, runs the unchanged arm-profile
+perception runtime, and chooses the depth-verified mask nearest the projected
+hint. Its response contains the class, confidence, mask centre, and the robust
+visible-surface point-cloud centre in both the color optical frame and
+`base_link`.
+
+The reported 3-D point is deliberately named an observation centre: a single
+camera view cannot recover the hidden half of an object, so it is not the full
+object's geometric centre. Cube, bowl, and zucchini grasp estimators must apply
+their own geometry after this adapter.
+
+The node publishes its latest annotated image on
+`/arm/perception/debug/overlay`; the standard RViz configuration enables this
+panel. The adapter owns no arm motion and does not change the released model,
+thresholds, or depth filter.

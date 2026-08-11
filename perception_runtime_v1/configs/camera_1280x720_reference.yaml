@@ -1,0 +1,14 @@
+camera:
+  model: RealSense D435i
+  serial: "250122077729"
+  color_width: 1280
+  color_height: 720
+  depth_width: 848
+  depth_height: 480
+  fps: 30
+  reference_color_intrinsics:
+    fx: 913.177124
+    fy: 912.526672
+    cx: 633.990051
+    cy: 377.505524
+  note: Runtime reads live intrinsics from each aligned color frame; these values are documentation only.

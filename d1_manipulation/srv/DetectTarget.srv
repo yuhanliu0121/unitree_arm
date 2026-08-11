@@ -1,0 +1,19 @@
+# Coarse target hint supplied by the caller, normally in go2_base/base_link.
+geometry_msgs/PointStamped target_hint
+---
+uint8 FAILURE_NONE=0
+uint8 FAILURE_INCOMPLETE_INFORMATION=1
+uint8 FAILURE_NO_MATCHING_DETECTION=2
+uint8 FAILURE_INTERNAL=3
+bool success
+uint8 failure_reason
+string detail
+string class_name
+float32 confidence
+string perception_status
+int32 center_u
+int32 center_v
+float32 hint_mask_distance_px
+float32 hint_position_distance_m
+geometry_msgs/PointStamped position_camera
+geometry_msgs/PointStamped position_base

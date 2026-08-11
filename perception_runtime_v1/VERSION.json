@@ -1,0 +1,11 @@
+{
+  "package": "perception_runtime_v1",
+  "release_id": "perception_runtime_v1_20260801",
+  "model": "YOLO11m-seg",
+  "classes": ["bowl", "yellow_cube", "zucchini"],
+  "model_sha256": "6f34b61e8c51de6535e13dbac7cec70f91cf8dd2280c4b9a6c81f9a26fb70cab",
+  "camera": "RealSense D435i",
+  "profiles": ["dog", "arm"],
+  "coordinate_frame": "camera_optical: +X right, +Y down, +Z forward"
+}
+

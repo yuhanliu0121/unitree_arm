@@ -1,0 +1,6 @@
+numpy>=1.26
+opencv-python>=4.10
+PyYAML>=6.0
+pyrealsense2>=2.56
+torch>=2.5
+ultralytics>=8.3

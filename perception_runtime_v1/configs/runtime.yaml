@@ -1,0 +1,66 @@
+release_id: perception_runtime_v1_20260801
+
+model:
+  path: weights/best.pt
+  imgsz: 960
+  confidence: 0.50
+  nms_iou: 0.70
+  maximum_detections: 100
+  mask_threshold: 0.50
+  device: auto
+
+camera:
+  # Empty = automatically use the connected RealSense.  Set a serial only
+  # when several cameras are connected and one must be selected explicitly.
+  serial: ""
+  color_width: 1280
+  color_height: 720
+  depth_width: 848
+  depth_height: 480
+  fps: 30
+  warmup_frames: 20
+
+depth_filter:
+  sensor_valid_min_m: 0.15
+  sensor_valid_max_m: 4.0
+  minimum_core_pixels: 20
+  core_distance_ratio: 0.35
+  minimum_size_points: 30
+  maximum_point_samples: 4000
+  point_percentile_low: 1.0
+  point_percentile_high: 99.0
+  dimension_percentile_low: 5.0
+  dimension_percentile_high: 95.0
+  apparent_size_tolerance: 1.8
+
+classes:
+  bowl:
+    measured_size_m: [0.115, 0.115, 0.060]
+    longest_size_range_m: [0.060, 0.200]
+  yellow_cube:
+    measured_size_m: [0.050, 0.050, 0.050]
+    longest_size_range_m: [0.025, 0.100]
+  zucchini:
+    measured_size_m: [0.150, 0.050, 0.050]
+    # End-on views can project the 15 cm long axis down to its 5 cm diameter.
+    longest_size_range_m: [0.035, 0.250]
+
+profiles:
+  dog:
+    minimum_depth_m: 0.35
+    maximum_depth_m: 3.50
+    minimum_mask_pixels: 20
+    minimum_valid_depth_ratio: 0.25
+    near_mask_fraction: 0.004
+    keep_far_unconfirmed: true
+  arm:
+    minimum_depth_m: 0.20
+    maximum_depth_m: 1.60
+    minimum_mask_pixels: 80
+    minimum_valid_depth_ratio: 0.30
+    near_mask_fraction: 0.010
+    keep_far_unconfirmed: false
+
+visualization:
+  display_width: 1600
+  depth_colormap_max_m: 3.5

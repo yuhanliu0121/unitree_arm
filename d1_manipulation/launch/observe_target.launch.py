@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -42,6 +42,10 @@ def generate_launch_description():
     observe_config = Path(
         get_package_share_directory("d1_manipulation")
     ) / "config" / "observe_target.yaml"
+    perception_config = Path(
+        get_package_share_directory("d1_manipulation")
+    ) / "config" / "perception_adapter.yaml"
+    workspace_root = Path(get_package_prefix("d1_manipulation")).parents[1]
 
     return LaunchDescription(
         [
@@ -57,6 +61,19 @@ def generate_launch_description():
                 executable="observe_target_server",
                 output="screen",
                 parameters=[moveit_config.to_dict(), str(observe_config)],
+            ),
+            Node(
+                package="d1_manipulation",
+                executable="detect_target_server",
+                output="screen",
+                parameters=[
+                    str(perception_config),
+                    {
+                        "perception_runtime_root": str(
+                            workspace_root / "perception_runtime_v1"
+                        )
+                    },
+                ],
             ),
         ]
     )

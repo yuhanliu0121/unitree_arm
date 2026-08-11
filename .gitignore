@@ -35,3 +35,7 @@ dist/
 /objects/**/*.fbx
 /objects/**/*.glb
 /objects/**/*.stl
+
+# Regenerable simulation-to-perception domain-gap reports.
+/validation/sim_perception_domain/artifacts/
+/perception_runtime_v1/.runtime_cache/

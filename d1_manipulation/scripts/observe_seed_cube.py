@@ -14,6 +14,7 @@ import rclpy
 from rclpy.action import ActionClient
 
 from d1_manipulation.action import ObserveTarget
+from d1_manipulation.srv import DetectTarget
 
 
 def rotate(qw: float, qx: float, qy: float, qz: float, vector):
@@ -61,6 +62,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument(
         "--action", default="/arm/debug/observe_target"
+    )
+    parser.add_argument(
+        "--detect-service", default="/arm/perception/detect_target"
     )
     args = parser.parse_args()
 
@@ -120,6 +124,38 @@ def main() -> int:
             f"beta={result.selected_beta_deg:.1f} "
             f"alpha={result.selected_alpha_deg:.1f} "
             f"distance={result.selected_distance_m:.2f}"
+        )
+        detect_client = node.create_client(DetectTarget, args.detect_service)
+        if not detect_client.wait_for_service(timeout_sec=args.timeout):
+            print(
+                f"DetectTarget service unavailable: {args.detect_service}",
+                file=sys.stderr,
+            )
+            return 1
+        request = DetectTarget.Request()
+        request.target_hint.header.frame_id = "base_link"
+        request.target_hint.header.stamp = node.get_clock().now().to_msg()
+        (
+            request.target_hint.point.x,
+            request.target_hint.point.y,
+            request.target_hint.point.z,
+        ) = target
+        detect_future = detect_client.call_async(request)
+        rclpy.spin_until_future_complete(
+            node, detect_future, timeout_sec=args.timeout + 5.0
+        )
+        detection = detect_future.result()
+        if detection is None or not detection.success:
+            detail = detection.detail if detection is not None else "no response"
+            print(f"DETECTION FAILED: {detail}", file=sys.stderr)
+            return 1
+        print(
+            "DETECTION SUCCEEDED: "
+            f"class={detection.class_name} confidence={detection.confidence:.3f} "
+            f"pixel=({detection.center_u},{detection.center_v}) "
+            f"base=({detection.position_base.point.x:.3f},"
+            f"{detection.position_base.point.y:.3f},"
+            f"{detection.position_base.point.z:.3f})"
         )
         return 0
     finally:

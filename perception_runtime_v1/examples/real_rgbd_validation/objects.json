@@ -1,0 +1,422 @@
+[
+  {
+    "instance_id": 1,
+    "class_id": 0,
+    "class_name": "bowl",
+    "confidence": 0.940354,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      633,
+      496,
+      724,
+      566
+    ],
+    "center_pixel": [
+      678,
+      530
+    ],
+    "depth_m": 1.2020000219345093,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.06300008296966553,
+    "position_camera_m": [
+      0.05836332589387894,
+      0.19960950314998627,
+      1.2020000219345093
+    ],
+    "dimensions_m": [
+      0.07146159559488297,
+      0.06709375977516174,
+      0.02953726053237915
+    ],
+    "longest_size_m": 0.07146159559488297,
+    "apparent_size_m": 0.11978180258623404,
+    "bearing_deg": 2.7798236105492595,
+    "mask_pixels": 5050,
+    "mask_fraction": 0.005479600694444444,
+    "core_pixels": 2389
+  },
+  {
+    "instance_id": 2,
+    "class_id": 1,
+    "class_name": "yellow_cube",
+    "confidence": 0.887022,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      472,
+      457,
+      509,
+      505
+    ],
+    "center_pixel": [
+      491,
+      482
+    ],
+    "depth_m": 1.3340001106262207,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.0549999475479126,
+    "position_camera_m": [
+      -0.21013738214969635,
+      0.15241435170173645,
+      1.3340001106262207
+    ],
+    "dimensions_m": [
+      0.06492205709218979,
+      0.03423430398106575,
+      0.029794933274388313
+    ],
+    "longest_size_m": 0.06492205709218979,
+    "apparent_size_m": 0.07017000954528499,
+    "bearing_deg": -8.951915079769831,
+    "mask_pixels": 1612,
+    "mask_fraction": 0.0017491319444444444,
+    "core_pixels": 805
+  },
+  {
+    "instance_id": 3,
+    "class_id": 1,
+    "class_name": "yellow_cube",
+    "confidence": 0.873002,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      513,
+      332,
+      542,
+      365
+    ],
+    "center_pixel": [
+      527,
+      350
+    ],
+    "depth_m": 1.8370001316070557,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.10099995136260986,
+    "position_camera_m": [
+      -0.21553708612918854,
+      -0.05537115037441254,
+      1.8370001316070557
+    ],
+    "dimensions_m": [
+      0.113109290599823,
+      0.03326648846268654,
+      0.01531776413321495
+    ],
+    "longest_size_m": 0.113109290599823,
+    "apparent_size_m": 0.06643203555468165,
+    "bearing_deg": -6.691975264950351,
+    "mask_pixels": 803,
+    "mask_fraction": 0.0008713107638888889,
+    "core_pixels": 414
+  },
+  {
+    "instance_id": 4,
+    "class_id": 1,
+    "class_name": "yellow_cube",
+    "confidence": 0.867025,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      694,
+      336,
+      728,
+      371
+    ],
+    "center_pixel": [
+      711,
+      354
+    ],
+    "depth_m": 1.7390000820159912,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.07800006866455078,
+    "position_camera_m": [
+      0.1476670205593109,
+      -0.04456259682774544,
+      1.7390000820159912
+    ],
+    "dimensions_m": [
+      0.0875965803861618,
+      0.04104120284318924,
+      0.0167068000882864
+    ],
+    "longest_size_m": 0.0875965803861618,
+    "apparent_size_m": 0.06669942338554356,
+    "bearing_deg": 4.853622070525963,
+    "mask_pixels": 1094,
+    "mask_fraction": 0.0011870659722222222,
+    "core_pixels": 542
+  },
+  {
+    "instance_id": 5,
+    "class_id": 2,
+    "class_name": "zucchini",
+    "confidence": 0.866907,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      616,
+      352,
+      661,
+      380
+    ],
+    "center_pixel": [
+      636,
+      367
+    ],
+    "depth_m": 1.7660000324249268,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.0690000057220459,
+    "position_camera_m": [
+      0.0039266739040613174,
+      -0.020331192761659622,
+      1.7660000324249268
+    ],
+    "dimensions_m": [
+      0.09583353996276855,
+      0.028749288991093636,
+      0.009827679954469204
+    ],
+    "longest_size_m": 0.09583353996276855,
+    "apparent_size_m": 0.08702583471318105,
+    "bearing_deg": 0.1273960743690817,
+    "mask_pixels": 764,
+    "mask_fraction": 0.0008289930555555556,
+    "core_pixels": 443
+  },
+  {
+    "instance_id": 6,
+    "class_id": 1,
+    "class_name": "yellow_cube",
+    "confidence": 0.865251,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      862,
+      237,
+      890,
+      262
+    ],
+    "center_pixel": [
+      876,
+      250
+    ],
+    "depth_m": 2.326000213623047,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.10500001907348633,
+    "position_camera_m": [
+      0.618556022644043,
+      -0.32388949394226074,
+      2.326000213623047
+    ],
+    "dimensions_m": [
+      0.12655144929885864,
+      0.040718015283346176,
+      0.01032996829599142
+    ],
+    "longest_size_m": 0.12655144929885864,
+    "apparent_size_m": 0.07132023379483358,
+    "bearing_deg": 14.89206833901317,
+    "mask_pixels": 640,
+    "mask_fraction": 0.0006944444444444445,
+    "core_pixels": 309
+  },
+  {
+    "instance_id": 7,
+    "class_id": 0,
+    "class_name": "bowl",
+    "confidence": 0.857617,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      288,
+      253,
+      330,
+      279
+    ],
+    "center_pixel": [
+      311,
+      266
+    ],
+    "depth_m": 2.683000087738037,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.2050001621246338,
+    "position_camera_m": [
+      -0.9542195200920105,
+      -0.3249070346355438,
+      2.683000087738037
+    ],
+    "dimensions_m": [
+      0.24082785844802856,
+      0.07502835988998413,
+      0.013837365433573723
+    ],
+    "longest_size_m": 0.24082785844802856,
+    "apparent_size_m": 0.1233999415014971,
+    "bearing_deg": -19.578129428940773,
+    "mask_pixels": 864,
+    "mask_fraction": 0.0009375,
+    "core_pixels": 443
+  },
+  {
+    "instance_id": 8,
+    "class_id": 2,
+    "class_name": "zucchini",
+    "confidence": 0.816205,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      115,
+      298,
+      130,
+      317
+    ],
+    "center_pixel": [
+      122,
+      308
+    ],
+    "depth_m": 2.383000135421753,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.06699991226196289,
+    "position_camera_m": [
+      -1.337471604347229,
+      -0.1808995008468628,
+      2.383000135421753
+    ],
+    "dimensions_m": [
+      0.08438460528850555,
+      0.020530803129076958,
+      0.010572699829936028
+    ],
+    "longest_size_m": 0.08438460528850555,
+    "apparent_size_m": 0.04961718264711534,
+    "bearing_deg": -29.303552635612853,
+    "mask_pixels": 220,
+    "mask_fraction": 0.00023871527777777777,
+    "core_pixels": 119
+  },
+  {
+    "instance_id": 9,
+    "class_id": 0,
+    "class_name": "bowl",
+    "confidence": 0.777883,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      1127,
+      270,
+      1190,
+      307
+    ],
+    "center_pixel": [
+      1156,
+      288
+    ],
+    "depth_m": 1.909000039100647,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.08500003814697266,
+    "position_camera_m": [
+      1.089141607284546,
+      -0.18675827980041504,
+      1.909000039100647
+    ],
+    "dimensions_m": [
+      0.09800709784030914,
+      0.06402711570262909,
+      0.018909502774477005
+    ],
+    "longest_size_m": 0.09800709784030914,
+    "apparent_size_m": 0.13170172499881194,
+    "bearing_deg": 29.706050805045635,
+    "mask_pixels": 1925,
+    "mask_fraction": 0.0020887586805555555,
+    "core_pixels": 982
+  },
+  {
+    "instance_id": 10,
+    "class_id": 2,
+    "class_name": "zucchini",
+    "confidence": 0.776346,
+    "accepted": true,
+    "status": "depth_verified",
+    "reject_reasons": [],
+    "bbox_xyxy": [
+      367,
+      257,
+      411,
+      269
+    ],
+    "center_pixel": [
+      389,
+      264
+    ],
+    "depth_m": 2.6730000972747803,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.07299995422363281,
+    "position_camera_m": [
+      -0.7169877290725708,
+      -0.3311155140399933,
+      2.6730000972747803
+    ],
+    "dimensions_m": [
+      0.10190744698047638,
+      0.05114290118217468,
+      0.006917915772646666
+    ],
+    "longest_size_m": 0.10190744698047638,
+    "apparent_size_m": 0.1287942954176234,
+    "bearing_deg": -15.015188496604802,
+    "mask_pixels": 392,
+    "mask_fraction": 0.0004253472222222222,
+    "core_pixels": 222
+  },
+  {
+    "instance_id": 11,
+    "class_id": 0,
+    "class_name": "bowl",
+    "confidence": 0.639839,
+    "accepted": false,
+    "status": "rejected",
+    "reject_reasons": [
+      "size_out_of_range"
+    ],
+    "bbox_xyxy": [
+      1039,
+      353,
+      1216,
+      414
+    ],
+    "center_pixel": [
+      1120,
+      383
+    ],
+    "depth_m": 1.5350000858306885,
+    "depth_valid_ratio": 1.0,
+    "depth_spread_m": 0.12200009822845459,
+    "position_camera_m": [
+      0.8173273801803589,
+      0.009242493659257889,
+      1.5350000858306885
+    ],
+    "dimensions_m": [
+      0.20898178219795227,
+      0.13413938879966736,
+      0.01575491763651371
+    ],
+    "longest_size_m": 0.20898178219795227,
+    "apparent_size_m": 0.29752718070175677,
+    "bearing_deg": 28.033551544981858,
+    "mask_pixels": 9111,
+    "mask_fraction": 0.009886067708333333,
+    "core_pixels": 5188
+  }
+]

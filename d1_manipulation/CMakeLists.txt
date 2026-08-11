@@ -6,6 +6,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
@@ -23,7 +24,12 @@ find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ObserveTarget.action"
+  "srv/DetectTarget.srv"
   DEPENDENCIES geometry_msgs
+)
+
+ament_python_install_package(d1_perception_adapter
+  PACKAGE_DIR python/d1_perception_adapter
 )
 
 add_library(observation_geometry src/observation_geometry.cpp)
@@ -62,6 +68,10 @@ install(TARGETS observation_geometry observe_target_server
 )
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/detect_target_server.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME detect_target_server
+)
 install(PROGRAMS scripts/observe_seed_cube.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME observe_seed_cube
@@ -70,8 +80,10 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   ament_add_gtest(test_observation_geometry test/test_observation_geometry.cpp)
   target_link_libraries(test_observation_geometry observation_geometry Eigen3::Eigen)
+  ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
 endif()
 
 ament_export_dependencies(rosidl_default_runtime)

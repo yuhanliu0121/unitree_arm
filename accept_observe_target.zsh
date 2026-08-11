@@ -110,7 +110,8 @@ setsid ${sim_args[@]} >${sim_log} 2>&1 &
 sim_pid=$!
 
 print '[2/3] Starting ros2_control, MoveIt, and ObserveTarget...'
-setsid ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} \
+setsid ${conda_bin} run --no-capture-output -n trash_collection \
+  ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} \
   >${stack_log} 2>&1 &
 stack_pid=$!
 
@@ -128,6 +129,7 @@ for attempt in {1..140}; do
   fi
   if grep -q 'You can start planning now' ${stack_log} && \
      grep -q 'ObserveTarget action server ready' ${stack_log} && \
+     grep -q 'DetectTarget ready' ${stack_log} && \
      grep -Eq 'Configured and activated.*arm_controller' ${stack_log} && \
      grep -Eq 'Configured and activated.*gripper_controller' ${stack_log} && \
      grep -Eq 'Configured and activated.*joint_state_broadcaster' ${stack_log} && \
@@ -146,7 +148,7 @@ fi
 
 if [[ ${server_only} == true ]]; then
   print
-  print 'ObserveTarget is ready for manual goals in another sourced terminal:'
+  print 'ObserveTarget and DetectTarget are ready for manual calls in another sourced terminal.'
   print
   print 'ros2 action send_goal /arm/debug/observe_target \
   d1_manipulation/action/ObserveTarget \
@@ -172,9 +174,10 @@ ros2 run d1_manipulation observe_seed_cube 2>&1 | tee ${goal_log}
 goal_status=${pipestatus[1]}
 set -e
 
-if (( goal_status == 0 )) && grep -q 'OBSERVE SUCCEEDED' ${goal_log}; then
+if (( goal_status == 0 )) && grep -q 'OBSERVE SUCCEEDED' ${goal_log} && \
+   grep -q 'DETECTION SUCCEEDED' ${goal_log}; then
   print
-  print 'ACCEPTANCE PASSED: the first feasible ordered observation pose was executed.'
+  print 'ACCEPTANCE PASSED: observation executed and the fresh RGB-D target was detected.'
   print "Logs: ${run_dir}"
   wait_for_enter \
     'Observation state is held. Inspect RGB/Depth and markers, then press Enter to close...'
@@ -184,7 +187,7 @@ fi
 print -u2
 print -u2 'ACCEPTANCE FAILED. Diagnostic summary:'
 grep -E \
-  'TF unavailable|All ordered|execution failed|State tolerances failed|PATH_TOLERANCE|ObserveTarget internal error|OBSERVE FAILED' \
+  'TF unavailable|All ordered|execution failed|State tolerances failed|PATH_TOLERANCE|internal error|OBSERVE FAILED|DETECTION FAILED' \
   ${goal_log} ${stack_log} 2>/dev/null | tail -n 20 >&2 || true
 print -u2 "Full logs: ${run_dir}"
 exit 1

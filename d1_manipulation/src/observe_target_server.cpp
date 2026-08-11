@@ -567,7 +567,11 @@ private:
   {
     visualization_msgs::msg::Marker marker;
     marker.header.frame_id = planning_frame_;
-    marker.header.stamp = node_->now();
+    // These transient debug markers remain attached to the planning frame.
+    // A zero stamp asks RViz for the latest TF instead of an old transform
+    // which may have aged out before a late subscriber receives the marker.
+    marker.header.stamp.sec = 0;
+    marker.header.stamp.nanosec = 0;
     marker.ns = name;
     marker.id = id;
     marker.type = visualization_msgs::msg::Marker::ARROW;
@@ -596,7 +600,8 @@ private:
 
     visualization_msgs::msg::Marker target_marker;
     target_marker.header.frame_id = planning_frame_;
-    target_marker.header.stamp = node_->now();
+    target_marker.header.stamp.sec = 0;
+    target_marker.header.stamp.nanosec = 0;
     target_marker.ns = "target";
     target_marker.id = 0;
     target_marker.type = visualization_msgs::msg::Marker::SPHERE;

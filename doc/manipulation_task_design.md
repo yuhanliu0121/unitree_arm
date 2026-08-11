@@ -397,6 +397,10 @@ MuJoCo 碰撞体和 MoveIt 碰撞体的现有开关。
 - [x] 编写候选几何自动化测试；
 - [x] 更新项目 README 和 `doc/codex_handoff.md`；
 - [ ] 接入真机 `LowState` 重力方向适配器；
+- [x] 接入腕部 RGB、对齐深度和 CameraInfo 的 ROS 感知适配层；
+- [x] 保证感知请求只使用调用后到达的新同步 RGB-D 帧；
+- [x] 使用粗略目标投影匹配 YOLO 实例并输出相机系/base_link 观测中心；
+- [ ] 将感知服务纳入正式 `PickObject.action` 状态机；
 - [ ] 真机接入地面平面估计并替换仿真固定地面碰撞体；
 - [ ] 自动测试取消、不可达目标和恢复路径。
 
