@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
@@ -19,8 +20,22 @@ COLLISION_GEOM_NAMES = (
     "collision_forearm",
     "collision_wrist_pitch",
     "collision_wrist_roll",
+    "collision_camera_main_stand",
+    "collision_camera_d435i",
     "collision_left_finger",
     "collision_right_finger",
+)
+GO2_COLLISION_GEOM_NAME = "collision_go2_bounding_box"
+D1_BODY_NAMES = (
+    "base_link",
+    "Link1",
+    "Link2",
+    "Link3",
+    "Link4",
+    "Link5",
+    "Link6",
+    "left_finger",
+    "right_finger",
 )
 
 
@@ -170,6 +185,10 @@ def default_camera_mount_mesh() -> Path:
     return Path(__file__).resolve().parent / "assets" / "d435i_main_stand.obj"
 
 
+def default_go2_mesh() -> Path:
+    return Path(__file__).resolve().parent / "assets" / "go2" / "go2_lie_down.obj"
+
+
 def _camera_transform(value: object, name: str) -> np.ndarray:
     transform = np.asarray(value, dtype=np.float64)
     if transform.shape != (4, 4):
@@ -182,6 +201,81 @@ def _camera_transform(value: object, name: str) -> np.ndarray:
     if not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-6):
         raise ValueError(f"Rotation in {name} must have determinant +1")
     return transform
+
+
+def _mount_arm_on_go2(
+    arm_spec: mujoco.MjSpec,
+    config: dict,
+    show_collisions: bool,
+) -> mujoco.MjSpec:
+    """Attach the D1 model to a fixed-pose, XY-movable Go2-shaped platform."""
+    mesh_path = Path(config.get("mesh_path", default_go2_mesh())).resolve()
+    if not mesh_path.is_file():
+        raise FileNotFoundError(f"Go2 visual mesh not found: {mesh_path}")
+
+    bounds_min = np.asarray(config["mesh_bounds_min_xyz_m"], dtype=np.float64)
+    bounds_max = np.asarray(config["mesh_bounds_max_xyz_m"], dtype=np.float64)
+    if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+        raise ValueError("Go2 mesh bounds must each contain exactly 3 values")
+    if np.any(bounds_max <= bounds_min):
+        raise ValueError("Go2 mesh bounding box must have positive extents")
+    centre = (bounds_min + bounds_max) / 2.0
+    half_size = (bounds_max - bounds_min) / 2.0
+
+    initial_xy = np.asarray(config.get("initial_xy_m", [0.0, 0.0]), dtype=np.float64)
+    if initial_xy.shape != (2,):
+        raise ValueError("mobile_base.initial_xy_m must contain exactly 2 values")
+    ground_clearance = float(config.get("ground_clearance_m", 0.0))
+    base_z = -float(bounds_min[2]) + ground_clearance
+
+    spec = mujoco.MjSpec()
+    spec.add_mesh(name="go2_lie_down_mesh", file=str(mesh_path))
+    go2 = spec.worldbody.add_body(
+        name=str(config.get("body_name", "go2_base")),
+        mocap=True,
+        pos=[float(initial_xy[0]), float(initial_xy[1]), base_z],
+    )
+    go2.add_geom(
+        name="go2_visual",
+        type=mujoco.mjtGeom.mjGEOM_MESH,
+        meshname="go2_lie_down_mesh",
+        contype=0,
+        conaffinity=0,
+        group=1,
+        rgba=[1.0, 1.0, 1.0, 1.0],
+    )
+    go2.add_geom(
+        name=GO2_COLLISION_GEOM_NAME,
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=centre.tolist(),
+        size=half_size.tolist(),
+        contype=1,
+        conaffinity=1,
+        condim=4,
+        friction=[0.8, 0.01, 0.001],
+        group=3,
+        rgba=_collision_rgba((0.25, 0.55, 1.0), show_collisions),
+    )
+
+    mount = _camera_transform(config["T_go2_base_d1_base"], "T_go2_base_d1_base")
+    mount_position, mount_quaternion = _position_quaternion(mount)
+    mount_frame = go2.add_frame(
+        name="d1_mount",
+        pos=mount_position,
+        quat=mount_quaternion,
+    )
+    spec.attach(arm_spec, prefix="", suffix="", frame=mount_frame)
+
+    # The single platform box intentionally overlaps the bolted-on D1 base.
+    # It represents only external world/object collision, not platform-arm
+    # self-collision.
+    for body_name in D1_BODY_NAMES:
+        spec.add_exclude(
+            name=f"exclude_go2_{body_name}",
+            bodyname1=go2.name,
+            bodyname2=body_name,
+        )
+    return spec
 
 
 def _position_quaternion(transform: np.ndarray) -> tuple[list[float], list[float]]:
@@ -240,6 +334,7 @@ def _add_d435i(
     config: dict,
     mesh_path: Path,
     mount_mesh_path: Path,
+    show_collisions: bool,
 ) -> None:
     if not config.get("enabled", True):
         return
@@ -306,6 +401,37 @@ def _add_d435i(
         group=1,
         contype=0,
         conaffinity=0,
+    )
+
+    collision_common = {
+        "type": mujoco.mjtGeom.mjGEOM_BOX,
+        "contype": 1,
+        "conaffinity": 1,
+        "condim": 4,
+        "friction": [0.8, 0.01, 0.001],
+        "group": 3,
+    }
+    link.add_geom(
+        name="collision_camera_main_stand",
+        pos=[-0.075368708772, -0.000022866946, -0.017460908006],
+        quat=[0.916890031757, -0.000583760542, -0.399139226693, -0.000454535605],
+        size=[0.065072925143, 0.040035982031, 0.017180994971],
+        rgba=_collision_rgba((1.0, 0.48, 0.05), show_collisions),
+        **collision_common,
+    )
+    camera_box = link_from_color.copy()
+    camera_box[:3, 3] = (link_from_color @ np.asarray(
+        [0.0324245356, -0.00030122605, -0.00787635474, 1.0],
+        dtype=np.float64,
+    ))[:3]
+    camera_box_position, camera_box_quaternion = _position_quaternion(camera_box)
+    link.add_geom(
+        name="collision_camera_d435i",
+        pos=camera_box_position,
+        quat=camera_box_quaternion,
+        size=[0.0449656881, 0.01288643755, 0.01266757446],
+        rgba=_collision_rgba((0.45, 0.48, 0.52), show_collisions),
+        **collision_common,
     )
 
     _add_calibrated_camera(link, link_from_color, config["color"])
@@ -381,6 +507,7 @@ def build_model(
     camera: dict | None = None,
     camera_mesh_path: Path | None = None,
     camera_mount_mesh_path: Path | None = None,
+    mobile_base: dict | None = None,
 ) -> mujoco.MjModel:
     description_root = Path(description_root).resolve()
     urdf_path = description_root / "urdf" / "d1_description.urdf"
@@ -388,12 +515,61 @@ def build_model(
     if not urdf_path.is_file():
         raise FileNotFoundError(f"D1 URDF not found: {urdf_path}")
 
-    xml = urdf_path.read_text(encoding="utf-8").replace(
+    urdf_root = ET.fromstring(urdf_path.read_text(encoding="utf-8"))
+    for link in urdf_root.findall("link"):
+        if link.attrib.get("name") != "Link6":
+            continue
+        for element in list(link):
+            if (
+                element.tag in {"visual", "collision"}
+                and element.attrib.get("name", "").startswith("wrist_camera_")
+            ):
+                link.remove(element)
+    xml = ET.tostring(urdf_root, encoding="unicode").replace(
         "package://d1_constrained_description/meshes/",
         "",
     )
     assets = {path.name: path.read_bytes() for path in mesh_dir.glob("*.STL")}
     spec = mujoco.MjSpec.from_string(xml, assets=assets)
+
+    # The vendor mesh collisions overlap at nominal zero. Keep the STL geoms as
+    # visual-only and use explicitly measured primitives for contact dynamics.
+    for geom in spec.geoms:
+        geom.contype = 0
+        geom.conaffinity = 0
+        geom.group = 1
+        if show_collisions:
+            geom.rgba = [*geom.rgba[:3], 0.20]
+
+    _add_simplified_collisions(spec, show_collisions)
+    if camera is not None:
+        _add_d435i(
+            spec,
+            camera,
+            camera_mesh_path or default_camera_mesh(),
+            camera_mount_mesh_path or default_camera_mount_mesh(),
+            show_collisions,
+        )
+
+    # Fixed URDF links are fused into their parent by MuJoCo. A retained site
+    # gives the scene-state bridge the exact physical tcp_link frame pose.
+    spec.body("tcp_link").add_site(
+        name="debug_tcp_site",
+        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        size=[0.002, 0.0, 0.0],
+        rgba=[1.0, 1.0, 0.0, 0.0],
+        group=3,
+    )
+
+    # Position-served hardware compensates gravity. Applying MuJoCo's body
+    # gravity compensation avoids artificial steady-state sag in this first
+    # position-control model.
+    for body in spec.bodies:
+        body.gravcomp = 1.0
+
+    if mobile_base is not None and mobile_base.get("enabled", True):
+        spec = _mount_arm_on_go2(spec, mobile_base, show_collisions)
+
     spec.modelname = "unitree_d1_protocol_sim"
     # URDF geoms with both collision masks cleared are otherwise discarded by
     # MuJoCo as unused visual geometry during compilation.
@@ -415,40 +591,6 @@ def build_model(
         spec.option.noslip_iterations = int(
             simulation.get("noslip_iterations", 0)
         )
-
-    # The vendor mesh collisions overlap at nominal zero. Keep the STL geoms as
-    # visual-only and use explicitly measured primitives for contact dynamics.
-    for geom in spec.geoms:
-        geom.contype = 0
-        geom.conaffinity = 0
-        geom.group = 1
-        if show_collisions:
-            geom.rgba = [*geom.rgba[:3], 0.20]
-
-    _add_simplified_collisions(spec, show_collisions)
-    if camera is not None:
-        _add_d435i(
-            spec,
-            camera,
-            camera_mesh_path or default_camera_mesh(),
-            camera_mount_mesh_path or default_camera_mount_mesh(),
-        )
-
-    # Fixed URDF links are fused into their parent by MuJoCo. A retained site
-    # gives the scene-state bridge the exact physical tcp_link frame pose.
-    spec.body("tcp_link").add_site(
-        name="debug_tcp_site",
-        type=mujoco.mjtGeom.mjGEOM_SPHERE,
-        size=[0.002, 0.0, 0.0],
-        rgba=[1.0, 1.0, 0.0, 0.0],
-        group=3,
-    )
-
-    # Position-served hardware compensates gravity. Applying MuJoCo's body
-    # gravity compensation avoids artificial steady-state sag in this first
-    # position-control model.
-    for body in spec.bodies:
-        body.gravcomp = 1.0
 
     gripper_mimic = spec.add_equality(
         name="gripper_mimic",

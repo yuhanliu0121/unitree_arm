@@ -17,6 +17,15 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
+      Name: Go2 Mesh
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /d1_mujoco/go2_mesh
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
       Name: Object Meshes
       Topic:
         Depth: 1
@@ -69,6 +78,15 @@ Visualization Manager:
         Show Robot Collision: true
         Show Robot Visual: false
       Value: false
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Observation Debug
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/debug/observation_markers
     - Class: rviz_default_plugins/Image
       Enabled: true
       Name: Wrist RGB
@@ -101,7 +119,7 @@ Visualization Manager:
         Value: /wrist_camera/debug/depth_plasma
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base_link
+    Fixed Frame: world
   Name: root
   Tools:
     - Class: rviz_default_plugins/Interact

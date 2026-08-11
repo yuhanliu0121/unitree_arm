@@ -1,0 +1,24 @@
+geometry_msgs/PointStamped target
+---
+uint8 FAILURE_NONE=0
+uint8 FAILURE_INCOMPLETE_INFORMATION=1
+uint8 FAILURE_THEORETICALLY_INFEASIBLE=2
+uint8 FAILURE_EXECUTION_ERROR=3
+bool success
+uint8 failure_category
+string failed_state
+string detail
+bool returned_to_stowed
+float64 selected_beta_deg
+float64 selected_alpha_deg
+float64 selected_distance_m
+geometry_msgs/PoseStamped selected_camera_pose
+geometry_msgs/PoseStamped selected_link6_pose
+---
+string current_state
+uint32 candidate_index
+uint32 candidate_count
+float64 beta_deg
+float64 alpha_deg
+float64 distance_m
+string detail

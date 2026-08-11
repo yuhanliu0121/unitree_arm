@@ -12,6 +12,8 @@ wrist-mounted RealSense D435i, and a fixed-cube grasp acceptance flow.
 - `d1_ros2_control`: D1 hardware interface and trajectory controllers.
 - `d1_moveit_config`: MoveIt planning and RViz configuration.
 - `d1_grasp_demo`: grasp baseline and application-level fixed poses.
+- `d1_manipulation`: gravity-aligned eye-in-hand observation Action and
+  ordered MoveIt candidate search.
 
 ## Acceptance
 
@@ -26,6 +28,19 @@ Optional visualization modes:
 ```zsh
 ./accept_cube_grasp.zsh --rviz
 ./accept_cube_grasp.zsh --headless --rviz
+```
+
+Run the automatic seed-0 target-observation acceptance:
+
+```zsh
+./accept_observe_target.zsh --headless
+./accept_observe_target.zsh --rviz
+```
+
+Keep the stack running and send `/arm/debug/observe_target` goals manually:
+
+```zsh
+./accept_observe_target.zsh --rviz --server-only
 ```
 
 For direct MuJoCo pose inspection:

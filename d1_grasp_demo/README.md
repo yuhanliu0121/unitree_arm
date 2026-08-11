@@ -10,7 +10,13 @@ This package is a simulation-only manipulation baseline. It receives MuJoCo
 object truth over UDP loopback, plans to a pose above the yellow cube, descends
 along a Cartesian path, closes the gripper, attaches the cube in MoveIt's
 planning scene, lifts 0.10 m, and verifies that the physical MuJoCo cube stays
-raised for two seconds.
+raised for 12 seconds.
+
+The MoveIt planning scene also contains the same single Go2 bounding box used
+by MuJoCo (`0.753442 x 0.338254 x 0.255121 m`). It is rigidly attached to
+`base_link`, so it follows the complete platform during later GT navigation.
+Only the unavoidable mounting overlap with `base_link` is allowed; moving arm
+links must avoid the platform box.
 
 It deliberately does not use camera data yet. The UDP scene-state protocol is
 bound to `127.0.0.1:15002` and is not part of the physical D1 interface.

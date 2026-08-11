@@ -25,7 +25,7 @@ d1-mujoco-sim = "d1_mujoco_sim.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-d1_mujoco_sim = ["assets/*.png", "assets/*.obj"]
+d1_mujoco_sim = ["assets/*.png", "assets/*.obj", "assets/go2/*.obj"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

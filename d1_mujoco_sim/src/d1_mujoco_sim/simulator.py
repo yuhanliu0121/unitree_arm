@@ -81,6 +81,19 @@ class D1Simulator:
         self.last_feedback_time = -np.inf
         self._base_gain = self.model.actuator_gainprm[:, 0].copy()
         self._base_bias = self.model.actuator_biasprm[:, :3].copy()
+        mobile_base_name = str(
+            config.get("mobile_base", {}).get("body_name", "go2_base")
+        )
+        mobile_base_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            mobile_base_name,
+        )
+        self.mobile_base_mocap_id = (
+            int(model.body_mocapid[mobile_base_id])
+            if mobile_base_id >= 0
+            else -1
+        )
 
     @property
     def joint_positions(self) -> np.ndarray:
@@ -94,6 +107,22 @@ class D1Simulator:
             self.open_angle_deg,
             self.gripper_travel_m,
         )
+
+    @property
+    def mobile_base_xy(self) -> np.ndarray:
+        if self.mobile_base_mocap_id < 0:
+            raise RuntimeError("This model has no movable Go2 base")
+        return self.data.mocap_pos[self.mobile_base_mocap_id, :2].copy()
+
+    def set_mobile_base_xy(self, x: float, y: float) -> None:
+        """Set the GT platform position while preserving z and orientation."""
+        if self.mobile_base_mocap_id < 0:
+            raise RuntimeError("This model has no movable Go2 base")
+        xy = np.asarray([x, y], dtype=np.float64)
+        if not np.isfinite(xy).all():
+            raise ValueError("Mobile-base x and y must be finite")
+        self.data.mocap_pos[self.mobile_base_mocap_id, :2] = xy
+        mujoco.mj_forward(self.model, self.data)
 
     def _set_target_deg(self, targets_deg: np.ndarray, mode: int) -> None:
         target_qpos = sdk_angles_to_qpos(

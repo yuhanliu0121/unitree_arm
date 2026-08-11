@@ -49,8 +49,32 @@ def _site_pose(
     return data.site_xpos[site_id], quaternion
 
 
+def _pose_in_body_frame(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    body_name: str,
+    position: np.ndarray,
+    quaternion: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    body_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        body_name,
+    )
+    if body_id < 0:
+        raise ValueError(f"Unknown reference body: {body_name}")
+    world_from_body = data.xmat[body_id].reshape(3, 3)
+    body_position = world_from_body.T @ (position - data.xpos[body_id])
+    world_from_pose = np.empty(9, dtype=np.float64)
+    mujoco.mju_quat2Mat(world_from_pose, quaternion)
+    body_from_pose = world_from_body.T @ world_from_pose.reshape(3, 3)
+    body_quaternion = np.empty(4, dtype=np.float64)
+    mujoco.mju_mat2Quat(body_quaternion, body_from_pose.reshape(-1))
+    return body_position, body_quaternion
+
+
 def scene_state_payload(model: mujoco.MjModel, data: mujoco.MjData) -> str:
-    """Serialize object world poses for the simulation-only planning bridge."""
+    """Serialize physical poses in MoveIt's ``base_link`` planning frame."""
     lines = [f"{SCENE_STATE_MAGIC} {SCENE_STATE_VERSION} {data.time:.9f}"]
     for name in OBJECT_NAMES:
         body_id = mujoco.mj_name2id(
@@ -62,6 +86,9 @@ def scene_state_payload(model: mujoco.MjModel, data: mujoco.MjData) -> str:
             continue
         position = data.xpos[body_id]
         quaternion = data.xquat[body_id]  # MuJoCo order: w, x, y, z.
+        position, quaternion = _pose_in_body_frame(
+            model, data, "base_link", position, quaternion
+        )
         lines.append(_pose_line(name, position, quaternion))
 
     # These diagnostics share the same compact pose-shaped record so the
@@ -69,7 +96,12 @@ def scene_state_payload(model: mujoco.MjModel, data: mujoco.MjData) -> str:
     # independently verifiable instead of trusting MoveIt's attached object.
     tcp_pose = _site_pose(model, data, "debug_tcp_site")
     if tcp_pose is not None:
-        lines.append(_pose_line("debug_tcp_link", *tcp_pose))
+        lines.append(
+            _pose_line(
+                "debug_tcp_link",
+                *_pose_in_body_frame(model, data, "base_link", *tcp_pose),
+            )
+        )
 
     for output_name, geom_name in (
         ("debug_left_finger", "collision_left_finger"),
@@ -77,7 +109,12 @@ def scene_state_payload(model: mujoco.MjModel, data: mujoco.MjData) -> str:
     ):
         pose = _geom_pose(model, data, geom_name)
         if pose is not None:
-            lines.append(_pose_line(output_name, *pose))
+            lines.append(
+                _pose_line(
+                    output_name,
+                    *_pose_in_body_frame(model, data, "base_link", *pose),
+                )
+            )
 
     cube_geom = mujoco.mj_name2id(
         model, mujoco.mjtObj.mjOBJ_GEOM, "object_collision_yellow_cube"

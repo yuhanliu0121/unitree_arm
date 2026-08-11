@@ -10,7 +10,9 @@ simulation:
   # Rendering is diagnostic only. Synchronizing the viewer at every 1 kHz
   # physics step can make simulation time lag behind ROS wall time.
   viewer_sync_rate_hz: 60.0
-  initial_sdk_angles_deg: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  # Limit-safe stowed pose: arm radians [0, -1.5, 1.5, 0, 0, 0],
+  # with the gripper SDK angle left at neutral zero degrees.
+  initial_sdk_angles_deg: [0.0, -85.943669270, 85.943669270, 0.0, 0.0, 0.0, 0.0]
 
 dds:
   # Keep simulation isolated from a physical D1, whose examples use domain 0.
@@ -28,10 +30,26 @@ scene_state:
   publish_rate_hz: 25.0
 
 ros_visualization:
-  frame_id: base_link
+  frame_id: world
   publish_rate_hz: 25.0
+  go2_mesh_topic: /d1_mujoco/go2_mesh
   object_mesh_topic: /d1_mujoco/object_meshes
   physical_collision_topic: /d1_mujoco/physical_collisions
+
+mobile_base:
+  enabled: true
+  body_name: go2_base
+  initial_xy_m: [0.0, 0.0]
+  ground_clearance_m: 0.0
+  # Bounds of the fixed official stand_down mesh in the Go2 base frame.
+  mesh_bounds_min_xyz_m: [-0.421484, -0.169127, -0.166287]
+  mesh_bounds_max_xyz_m: [0.331958, 0.169127, 0.088834]
+  # Manually aligned in calibration/go2_d1_mount/go2_d1_mount.blend.
+  T_go2_base_d1_base:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.057961769402]
+    - [0.0, 0.0, 0.0, 1.0]
 
 camera:
   enabled: true
@@ -119,6 +137,12 @@ scene:
   ground_texture_square_size_m: 0.6
   object_gap_m: 0.008
   base_exclusion_radius_m: 0.06
+  # Keep random objects out of the fixed-pose Go2 platform box without moving
+  # or resizing the visible white workspace rectangle.
+  base_exclusion_box:
+    min_x_m: -0.421484
+    max_x_m: 0.331958
+    half_width_y_m: 0.169127
   spawn_region:
     # Base centre is the midpoint of the x=0 edge; +x points inward.
     depth_x_m: 0.6

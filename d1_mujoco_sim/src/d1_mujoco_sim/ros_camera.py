@@ -470,6 +470,8 @@ class RosCameraPublisher:
         self._publish_static_transforms()
         self._condition = threading.Condition()
         self._pending_qpos: np.ndarray | None = None
+        self._pending_mocap_pos: np.ndarray | None = None
+        self._pending_mocap_quat: np.ndarray | None = None
         self._worker_stop = False
         self._worker_error: BaseException | None = None
         self._worker_ready = threading.Event()
@@ -624,8 +626,16 @@ class RosCameraPublisher:
                     if self._worker_stop:
                         break
                     qpos = self._pending_qpos
+                    mocap_pos = self._pending_mocap_pos
+                    mocap_quat = self._pending_mocap_quat
                     self._pending_qpos = None
+                    self._pending_mocap_pos = None
+                    self._pending_mocap_quat = None
                 render_data.qpos[:] = qpos
+                if mocap_pos is not None:
+                    render_data.mocap_pos[:] = mocap_pos
+                if mocap_quat is not None:
+                    render_data.mocap_quat[:] = mocap_quat
                 mujoco.mj_forward(self._model, render_data)
                 self._publish_frame(
                     render_data,
@@ -650,6 +660,8 @@ class RosCameraPublisher:
             )
         with self._condition:
             self._pending_qpos = self._data.qpos.copy()
+            self._pending_mocap_pos = self._data.mocap_pos.copy()
+            self._pending_mocap_quat = self._data.mocap_quat.copy()
             self._condition.notify()
 
     def _publish_frame(

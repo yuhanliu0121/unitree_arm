@@ -42,6 +42,7 @@ def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
     width = float(region["width_y_m"])
     gap = float(scene["object_gap_m"])
     base_radius = float(scene["base_exclusion_radius_m"])
+    base_box = scene.get("base_exclusion_box")
     rng = np.random.default_rng(int(scene["random_seed"]))
 
     # Largest-first rejection sampling is deterministic and avoids cases where
@@ -56,6 +57,12 @@ def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
             yaw = float(rng.uniform(-math.pi, math.pi))
             if math.hypot(x, y) < base_radius + radius + gap:
                 continue
+            if base_box is not None:
+                min_x = float(base_box["min_x_m"]) - radius - gap
+                max_x = float(base_box["max_x_m"]) + radius + gap
+                half_y = float(base_box["half_width_y_m"]) + radius + gap
+                if min_x <= x <= max_x and abs(y) <= half_y:
+                    continue
             if any(
                 math.hypot(x - other.x, y - other.y)
                 < radius + other.footprint_radius + gap

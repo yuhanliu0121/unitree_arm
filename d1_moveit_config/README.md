@@ -51,9 +51,18 @@ Use `--headless` in a terminal-only session, or `--rviz` when the MoveIt scene
 also needs to be inspected. Logs from each run are retained under
 `/tmp/d1_cube_accept.*`.
 
-The RViz configuration keeps the live robot and MuJoCo-driven textured object
-meshes visible by default. `MuJoCo Physical Collisions` and `MoveIt Planning
-Collisions` are separate, disabled-by-default displays. The object mesh layer
-continues to follow MuJoCo while the target is removed from or attached to the
-MoveIt planning scene. Interactive `--rviz` acceptance pauses for Enter before
-the grasp and after success; non-interactive runs remain automatic.
+The RViz configuration uses `world` as its fixed frame and keeps the live
+robot, Go2 mesh and MuJoCo-driven textured object meshes visible by default.
+`MuJoCo Physical Collisions` and `MoveIt Planning Collisions` are separate,
+disabled-by-default displays. The object mesh layer continues to follow MuJoCo
+while the target is removed from or attached to the MoveIt planning scene.
+Interactive `--rviz` acceptance pauses for Enter before the grasp and after
+success; non-interactive runs remain automatic.
+
+The RViz configuration also contains an `Observation Debug` MarkerArray layer
+for the selected gravity-aligned camera axes, optical ray, target, and up
+direction. Start the observation Action and its complete stack with:
+
+```bash
+./accept_observe_target.zsh --rviz
+```

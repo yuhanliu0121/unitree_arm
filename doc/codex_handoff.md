@@ -17,6 +17,41 @@
 - eye-in-hand D435i：官方 CAD 和 `main_stand` 支架可视模型、RGB/Depth 独立光学 frame、真机
   内参、实测 Link6→RGB 外参和本机 factory Depth→RGB 外参均已进入
   MuJoCo；固定相机名为 `d435i_color`、`d435i_depth`。
+- Go2 平台：官方 `stand_down` mesh 已按手工 Blender 装配结果导入
+  MuJoCo。标定关系为 `T_go2_base_d1_base` 平移
+  `[0, 0, 0.057961769402] m`、旋转为单位四元数。Go2 被明确简化成
+  固定趴卧外观、一个整机 bounding box 和仅允许 GT `x/y` 平移的
+  mocap 母体；不模拟腿关节、站立、步态、yaw 或避障。
+- Go2 机械臂作业趴姿已固化到
+  `calibration/go2_d1_mount/go2_manipulation_posture.yaml`：采用官方
+  `stand_down_joint_pos`，记录了 SDK 12 电机顺序、`ground→go2_base`、
+  `go2_base→D1 base_link` 和真机待验收字段；面向运控的交接说明位于同目录
+  `LOCOMOTION_HANDOFF_CN.md`。官方关节目标已验证全部位于当前 Go2 URDF
+  限位内，但安装 D1 后的稳定阈值仍必须由运控真机验证。
+
+2026-08-11 加入 Go2 后的端到端回归结果：
+
+- Go2 mesh 最低点贴地，D1、相机和全部机械臂 frame 随 Go2 母体移动；
+- 仿真真值在发送给 MoveIt 前转换为 `base_link` 规划坐标，地面相对高度
+  同步调整；
+- 固定方块从新位置完成抓取，闭合后左右法向力约 `7.50 N / 7.50 N`；
+- 抬升 0.10 m 后保持 12 秒，最终高度增量 `0.099 m`，验收通过；
+- `d1_mujoco_sim` 共 42 项 pytest 全部通过。
+
+2026-08-11 目标引导观测第一阶段结果：
+
+- 新增 `d1_manipulation` 和调试 Action `/arm/debug/observe_target`；
+- 在实时重力法平面中，以固定 `beta → alpha → distance` 顺序生成 441 个
+  相机候选，不使用加权评分；
+- 每个候选通过手眼外参换算为 `Link6` 位姿，顺序执行 IK、限位、碰撞和
+  MoveIt 完整轨迹规划，执行第一个全部成功的候选；
+- seed-0 方块在第 56 个候选 `beta=0°、alpha=65°、distance=0.60 m`
+  找到首条可行轨迹并成功执行；
+- 执行后使用实时 TF、D435i CameraInfo 和 `plumb_bob` 参数复核，目标距
+  RGB 图像中心 `0.3 px`；
+- 候选几何 3 项 gtest、无 GUI 端到端和 `--headless --rviz` 联合启动均通过；
+- 一键入口为 `./accept_observe_target.zsh`，`--server-only` 用于另一个终端
+  手动发送 Action。
 
 2026-08-10 的端到端验收结果：
 
@@ -62,9 +97,10 @@ MuJoCo→RViz 场景可视化桥已经实现：`Object Meshes` 以 25 Hz 显示�
 碰撞层；两套碰撞层打开时地面均不透明。固定方块 mesh 不再受 MoveIt
 移除/附着生命周期影响。
 
-下一步最值得做的是把固定真值方块替换为“相机观测得到的方块位姿”。
-先保持同一套 MoveIt 抓取执行链不变，从而把感知
-误差与运动控制问题分开验收。
+下一步最值得做的是由用户在 `--rviz` 下人工验收最终观测姿态、RGB/Depth
+画面和 Observation Debug 标记；通过后再实现 RGB-D 黄色方块位姿估计，
+用感知结果替换固定真值，同时保持现有 MoveIt 抓取执行链不变。真机部署前
+还需实现 `LowState` 重力适配器和真实地面平面碰撞输入。
 
 日常固定方块验收已经封装为工作区根目录的单命令脚本：
 

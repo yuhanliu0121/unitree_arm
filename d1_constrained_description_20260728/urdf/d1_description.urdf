@@ -373,6 +373,51 @@
           rgba="1 1 1 1" />
       </material>
     </visual>
+    <!--
+      Visual-only wrist-camera assembly. The mount mesh is expressed directly
+      in Link6. The camera mesh is expressed in the calibrated RGB optical
+      frame, so its origin below is the measured T_Link6_RGB transform.
+    -->
+    <visual name="wrist_camera_main_stand">
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/d435i_main_stand.obj" />
+      </geometry>
+      <material name="wrist_camera_mount_orange">
+        <color rgba="1 0.22 0.02 1" />
+      </material>
+    </visual>
+    <visual name="wrist_camera_d435i">
+      <origin
+        xyz="-0.113433495391 0.033016808957 -0.051772117970"
+        rpy="-0.24776966 -0.03092479 -1.56299000" />
+      <geometry>
+        <mesh
+          filename="package://d1_constrained_description/meshes/d435i_official_cad.obj" />
+      </geometry>
+      <material name="wrist_camera_dark_gray">
+        <color rgba="0.32 0.34 0.37 1" />
+      </material>
+    </visual>
+    <collision name="wrist_camera_main_stand_collision">
+      <origin
+        xyz="-0.075368708772 -0.000022866946 -0.017460908006"
+        rpy="-0.001038550187 -0.821156144440 -0.000539372075" />
+      <geometry>
+        <box size="0.130145850286 0.080071964063 0.034361989941" />
+      </geometry>
+    </collision>
+    <collision name="wrist_camera_d435i_collision">
+      <origin
+        xyz="-0.115402252 0.000357598 -0.058327892"
+        rpy="-0.24776966 -0.03092479 -1.56299000" />
+      <geometry>
+        <box size="0.0899313762 0.0257728751 0.02533514892" />
+      </geometry>
+    </collision>
     <collision>
       <origin
         xyz="0 0 0"

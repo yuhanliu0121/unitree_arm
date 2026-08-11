@@ -23,6 +23,11 @@ dist/
 *.swp
 *~
 .DS_Store
+*.blend1
+
+# Regenerable Blender interchange meshes used only while building the manual
+# mounting-calibration scene.
+/calibration/go2_d1_mount/converted/
 
 # The simulator consumes the OBJ/MTL/PBR exports. Keep the much larger,
 # redundant authoring and interchange formats outside this code repository.

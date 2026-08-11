@@ -53,6 +53,7 @@ def test_seed_zero_layout_is_deterministic_and_nonoverlapping() -> None:
     half_width = region["width_y_m"] / 2
     gap = CONFIG["scene"]["object_gap_m"]
     base_radius = CONFIG["scene"]["base_exclusion_radius_m"]
+    base_box = CONFIG["scene"]["base_exclusion_box"]
     for index, pose in enumerate(first):
         assert pose.footprint_radius <= pose.x <= depth - pose.footprint_radius
         assert (
@@ -62,6 +63,13 @@ def test_seed_zero_layout_is_deterministic_and_nonoverlapping() -> None:
         )
         assert math.hypot(pose.x, pose.y) >= (
             base_radius + pose.footprint_radius + gap
+        )
+        assert not (
+            base_box["min_x_m"] - pose.footprint_radius - gap
+            <= pose.x
+            <= base_box["max_x_m"] + pose.footprint_radius + gap
+            and abs(pose.y)
+            <= base_box["half_width_y_m"] + pose.footprint_radius + gap
         )
         for other in first[index + 1 :]:
             assert math.hypot(pose.x - other.x, pose.y - other.y) >= (
@@ -228,7 +236,7 @@ def test_objects_settle_on_ground_without_interobject_contact(
         assert not (name1.startswith("object_") and name2.startswith("object_"))
 
 
-def test_scene_state_payload_contains_world_poses(
+def test_scene_state_payload_contains_planning_frame_poses(
     scene_model: mujoco.MjModel,
 ) -> None:
     data = mujoco.MjData(scene_model)
@@ -245,3 +253,44 @@ def test_scene_state_payload_contains_world_poses(
         "debug_gripper_state",
     }.issubset(names)
     assert all(len(line.split()) == 8 for line in lines[1:])
+
+
+def test_scene_state_tracks_mobile_base_link_frame() -> None:
+    model = build_model(
+        ROOT / "d1_constrained_description_20260728",
+        controller_config(),
+        scene=CONFIG["scene"],
+        objects_root=ROOT / "objects",
+        mobile_base=CONFIG["mobile_base"],
+    )
+    simulator = D1Simulator(model, CONFIG)
+
+    def object_position(name: str) -> np.ndarray:
+        records = {
+            line.split()[0]: line.split()[1:]
+            for line in scene_state_payload(model, simulator.data).splitlines()[1:]
+        }
+        return np.asarray(records[name][:3], dtype=np.float64)
+
+    cube_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "object_yellow_cube",
+    )
+    arm_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "base_link",
+    )
+    np.testing.assert_allclose(
+        object_position("yellow_cube"),
+        simulator.data.xpos[cube_id] - simulator.data.xpos[arm_id],
+        atol=1e-9,
+    )
+    before = object_position("yellow_cube")
+    simulator.set_mobile_base_xy(0.1, -0.05)
+    np.testing.assert_allclose(
+        object_position("yellow_cube") - before,
+        [-0.1, 0.05, 0.0],
+        atol=1e-9,
+    )

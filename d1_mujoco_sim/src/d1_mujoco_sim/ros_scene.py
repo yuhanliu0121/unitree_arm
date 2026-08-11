@@ -20,6 +20,16 @@ class MarkerSpec:
     scale: tuple[float, float, float]
     resource: str | None = None
     opaque: bool = False
+    embedded_materials: bool = True
+    color_rgba: tuple[float, float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class TransformSpec:
+    parent: str
+    child: str
+    position: tuple[float, float, float]
+    orientation_xyzw: tuple[float, float, float, float]
 
 
 def _quaternion_xyzw(rotation: np.ndarray) -> tuple[float, float, float, float]:
@@ -76,6 +86,80 @@ def object_mesh_specs(
             )
         )
     return tuple(specs)
+
+
+def go2_mesh_specs(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    mesh_path: Path,
+) -> tuple[MarkerSpec, ...]:
+    """Describe the fixed-pose Go2 visual at its runtime mocap pose."""
+    body_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "go2_base",
+    )
+    if body_id < 0:
+        return ()
+    mesh_path = Path(mesh_path).resolve()
+    if not mesh_path.is_file():
+        raise FileNotFoundError(f"RViz Go2 mesh not found: {mesh_path}")
+    return (
+        MarkerSpec(
+            name="go2",
+            shape="mesh",
+            position=tuple(float(value) for value in data.xpos[body_id]),
+            orientation_xyzw=_quaternion_xyzw(
+                data.xmat[body_id].reshape(3, 3)
+            ),
+            scale=(1.0, 1.0, 1.0),
+            resource=mesh_path.as_uri(),
+            opaque=True,
+            embedded_materials=False,
+            color_rgba=(1.0, 1.0, 1.0, 1.0),
+        ),
+    )
+
+
+def mobile_base_transform_specs(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+) -> tuple[TransformSpec, ...]:
+    """Return world→Go2 and Go2→D1 transforms for the RViz TF tree."""
+    go2_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "go2_base"
+    )
+    arm_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "base_link"
+    )
+    if go2_id < 0 or arm_id < 0:
+        return ()
+    go2_quaternion = data.xquat[go2_id]
+    arm_quaternion = model.body_quat[arm_id]
+    return (
+        TransformSpec(
+            parent="world",
+            child="go2_base",
+            position=tuple(float(value) for value in data.xpos[go2_id]),
+            orientation_xyzw=(
+                float(go2_quaternion[1]),
+                float(go2_quaternion[2]),
+                float(go2_quaternion[3]),
+                float(go2_quaternion[0]),
+            ),
+        ),
+        TransformSpec(
+            parent="go2_base",
+            child="base_link",
+            position=tuple(float(value) for value in model.body_pos[arm_id]),
+            orientation_xyzw=(
+                float(arm_quaternion[1]),
+                float(arm_quaternion[2]),
+                float(arm_quaternion[3]),
+                float(arm_quaternion[0]),
+            ),
+        ),
+    )
 
 
 def _primitive_spec(
@@ -197,6 +281,8 @@ class RosScenePublisher:
                 ReliabilityPolicy,
             )
             from rclpy.signals import SignalHandlerOptions
+            from geometry_msgs.msg import TransformStamped
+            from tf2_ros import TransformBroadcaster
             from visualization_msgs.msg import Marker, MarkerArray
         except ImportError as exc:
             raise RuntimeError(
@@ -207,6 +293,7 @@ class RosScenePublisher:
         self._rclpy = rclpy
         self._Marker = Marker
         self._MarkerArray = MarkerArray
+        self._TransformStamped = TransformStamped
         self._owns_rclpy = not rclpy.ok()
         if self._owns_rclpy:
             rclpy.init(
@@ -217,8 +304,18 @@ class RosScenePublisher:
         self._model = model
         self._data = data
         self._objects_root = Path(objects_root).resolve()
-        self._frame_id = str(config.get("frame_id", "base_link"))
+        self._frame_id = str(config.get("frame_id", "world"))
+        self._go2_mesh_path = Path(
+            config.get(
+                "go2_mesh_path",
+                Path(__file__).resolve().parent
+                / "assets"
+                / "go2"
+                / "go2_lie_down.obj",
+            )
+        ).resolve()
         self.publish_rate_hz = float(config.get("publish_rate_hz", 25.0))
+        self._tf_broadcaster = TransformBroadcaster(self._node)
 
         qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -229,6 +326,11 @@ class RosScenePublisher:
         self._mesh_publisher = self._node.create_publisher(
             MarkerArray,
             str(config.get("object_mesh_topic", "/d1_mujoco/object_meshes")),
+            qos,
+        )
+        self._go2_mesh_publisher = self._node.create_publisher(
+            MarkerArray,
+            str(config.get("go2_mesh_topic", "/d1_mujoco/go2_mesh")),
             qos,
         )
         self._collision_publisher = self._node.create_publisher(
@@ -276,11 +378,12 @@ class RosScenePublisher:
             marker.scale.z = spec.scale[2]
             if spec.resource is not None:
                 marker.mesh_resource = spec.resource
-                marker.mesh_use_embedded_materials = True
-                marker.color.r = 1.0
-                marker.color.g = 1.0
-                marker.color.b = 1.0
-                marker.color.a = 1.0
+                marker.mesh_use_embedded_materials = spec.embedded_materials
+                color = spec.color_rgba or (1.0, 1.0, 1.0, 1.0)
+                marker.color.r = color[0]
+                marker.color.g = color[1]
+                marker.color.b = color[2]
+                marker.color.a = color[3]
             elif collision:
                 marker.color.r = 0.05
                 marker.color.g = 0.85
@@ -289,7 +392,38 @@ class RosScenePublisher:
             result.markers.append(marker)
         return result
 
+    def _publish_transforms(self) -> None:
+        stamp = self._node.get_clock().now().to_msg()
+        messages = []
+        for spec in mobile_base_transform_specs(self._model, self._data):
+            message = self._TransformStamped()
+            message.header.stamp = stamp
+            message.header.frame_id = spec.parent
+            message.child_frame_id = spec.child
+            message.transform.translation.x = spec.position[0]
+            message.transform.translation.y = spec.position[1]
+            message.transform.translation.z = spec.position[2]
+            message.transform.rotation.x = spec.orientation_xyzw[0]
+            message.transform.rotation.y = spec.orientation_xyzw[1]
+            message.transform.rotation.z = spec.orientation_xyzw[2]
+            message.transform.rotation.w = spec.orientation_xyzw[3]
+            messages.append(message)
+        if messages:
+            self._tf_broadcaster.sendTransform(messages)
+
     def publish(self) -> None:
+        self._publish_transforms()
+        self._go2_mesh_publisher.publish(
+            self._message(
+                go2_mesh_specs(
+                    self._model,
+                    self._data,
+                    self._go2_mesh_path,
+                ),
+                "go2_mesh",
+                False,
+            )
+        )
         self._mesh_publisher.publish(
             self._message(
                 object_mesh_specs(

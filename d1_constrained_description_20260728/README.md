@@ -19,6 +19,9 @@ independent dataset.
 - `tcp_link` is fixed at the midpoint of the two finger-tip faces:
   `[0.00038, 0, 0.1256] m` in `Link6`. Its `+Z` axis points from the wrist
   toward the grasp point.
+- The visual robot model includes the `main_stand` wrist-camera mount in
+  `Link6` coordinates and the D435i CAD at the calibrated RGB optical pose.
+  Each accessory uses its mesh bounding box for collision checking.
 - The distributable URDF retains the vendor STL geometry. The MuJoCo builder
   and `d1_moveit_config` independently substitute the same validated
   box/cylinder collision approximation, avoiding detailed-mesh assembly

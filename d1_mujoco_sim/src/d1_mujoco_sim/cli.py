@@ -149,6 +149,7 @@ def main() -> None:
         scene=config["scene"],
         objects_root=args.objects_root,
         camera=config.get("camera"),
+        mobile_base=config.get("mobile_base"),
     )
     object_positions = []
     for name in OBJECT_NAMES:

@@ -67,7 +67,14 @@ def load_planning_description(urdf_path: Path) -> str:
     root = ET.fromstring(Path(urdf_path).read_text(encoding="utf-8"))
     links = {link.attrib["name"]: link for link in root.findall("link")}
     for link_name, (kind, xyz, rpy, attributes) in _COLLISIONS.items():
-        collision = links[link_name].find("collision")
+        collision = next(
+            (
+                item
+                for item in links[link_name].findall("collision")
+                if not item.attrib.get("name", "").startswith("wrist_camera_")
+            ),
+            None,
+        )
         if collision is None:
             raise ValueError(
                 f"URDF link has no collision element: {link_name}"

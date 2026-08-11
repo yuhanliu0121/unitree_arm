@@ -1,0 +1,33 @@
+d1_observe_target:
+  ros__parameters:
+    action_name: /arm/debug/observe_target
+    planning_frame: base_link
+    gravity_frame: world
+    arm_group: arm
+    link6_frame: Link6
+    color_optical_frame: wrist_camera_color_optical_frame
+    color_camera_info_topic: /wrist_camera/color/camera_info
+
+    # Ordered samples. The server uses beta as the outer loop, alpha as the
+    # middle loop, and distance as the inner loop without re-sorting.
+    beta_degrees: [0.0, -5.0, 5.0, -10.0, 10.0, -15.0, 15.0]
+    alpha_degrees: [45.0, 40.0, 50.0, 35.0, 55.0, 30.0, 60.0, 65.0, 70.0]
+    distances_m: [0.35, 0.30, 0.40, 0.45, 0.50, 0.55, 0.60]
+
+    tf_timeout_s: 10.0
+    planning_time_s: 1.5
+    planning_attempts: 2
+    velocity_scaling: 0.10
+    acceleration_scaling: 0.10
+    position_tolerance_m: 0.005
+    orientation_tolerance_rad: 0.03
+    camera_settle_s: 0.5
+    max_target_pixel_error: 30.0
+    stowed_tolerance_rad: 0.08
+    stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
+
+    # Simulation-only planning-scene input. The formal Action remains a pure
+    # PointStamped interface; real perception will replace this provider.
+    use_simulation_scene_truth: true
+    scene_state_port: 15002
+    ground_surface_z_m: -0.225248769402

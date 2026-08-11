@@ -1,0 +1,73 @@
+schema_version: 1
+
+# Nominal Go2 posture used while the D1 performs manipulation.  Values are
+# radians and follow the Unitree LowCmd motor ordering below.
+posture:
+  name: manipulation_lie_down
+  source:
+    repository: https://github.com/unitreerobotics/unitree_mujoco
+    commit: ae6a8403e272733e9996ef59990880330496177f
+    file: example/python/stand_go2.py
+    symbol: stand_down_joint_pos
+  motor_order:
+    - FR_hip_joint
+    - FR_thigh_joint
+    - FR_calf_joint
+    - FL_hip_joint
+    - FL_thigh_joint
+    - FL_calf_joint
+    - RR_hip_joint
+    - RR_thigh_joint
+    - RR_calf_joint
+    - RL_hip_joint
+    - RL_thigh_joint
+    - RL_calf_joint
+  joint_positions_rad:
+    - 0.0473455
+    - 1.22187
+    - -2.44375
+    - -0.0473455
+    - 1.22187
+    - -2.44375
+    - 0.0473455
+    - 1.22187
+    - -2.44375
+    - -0.0473455
+    - 1.22187
+    - -2.44375
+
+frames:
+  convention: ROS_REP_103
+  go2_base_axes: {x: forward, y: left, z: up}
+  # p_ground = T_ground_go2_base @ p_go2_base at the nominal simulation pose.
+  T_ground_go2_base:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.166287]
+    - [0.0, 0.0, 0.0, 1.0]
+  # p_go2_base = T_go2_base_d1_base @ p_d1_base_link.
+  T_go2_base_d1_base:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.057961769402]
+    - [0.0, 0.0, 0.0, 1.0]
+  nominal_d1_base_height_m: 0.224248769402
+
+simulation_model:
+  visual_mesh_pose: official_stand_down
+  dynamics: fixed_pose_xy_movable_rigid_body
+  collision_shape: whole_mesh_axis_aligned_bounding_box
+  mesh_bounds_in_go2_base_m:
+    min: [-0.421484, -0.169127, -0.166287]
+    max: [0.331958, 0.169127, 0.088834]
+
+# These are integration fields, not validated real-robot limits.  The
+# locomotion owner must fill them after testing the D1 payload on the Go2.
+real_robot_acceptance:
+  validation_status: pending_with_mounted_d1
+  max_abs_roll_error_deg: null
+  max_abs_pitch_error_deg: null
+  max_abs_base_height_error_m: null
+  max_body_angular_speed_rad_s: null
+  max_body_linear_speed_m_s: null
+  stable_hold_time_s: null

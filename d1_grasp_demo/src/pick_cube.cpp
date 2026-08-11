@@ -21,6 +21,7 @@
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
+#include <moveit_msgs/msg/attached_collision_object.hpp>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <moveit_msgs/msg/object_color.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -38,6 +39,7 @@ constexpr char kPlanningFrame[] = "base_link";
 constexpr char kArmGroup[] = "arm";
 constexpr char kTcpLink[] = "tcp_link";
 constexpr char kCubeName[] = "yellow_cube";
+constexpr char kGo2PlatformName[] = "go2_platform";
 constexpr double kPi = 3.14159265358979323846;
 
 struct ScenePose
@@ -261,6 +263,8 @@ public:
     hold_time_ = parameterOrDeclare(node_, "hold_s", 2.0);
     velocity_scaling_ = parameterOrDeclare(node_, "velocity_scaling", 0.10);
     acceleration_scaling_ = parameterOrDeclare(node_, "acceleration_scaling", 0.10);
+    ground_surface_z_ = parameterOrDeclare(
+      node_, "ground_surface_z_m", -0.225248769402);
 
     move_group_.setEndEffectorLink(kTcpLink);
     move_group_.setPoseReferenceFrame(kPlanningFrame);
@@ -479,7 +483,7 @@ private:
     geometry_msgs::msg::Pose ground_pose;
     ground_pose.orientation.w = 1.0;
     ground_pose.position.x = 0.3;
-    ground_pose.position.z = -0.011;
+    ground_pose.position.z = ground_surface_z_ - 0.01;
 
     std::vector<moveit_msgs::msg::CollisionObject> objects;
     objects.push_back(makeBox("ground", ground_pose, 2.0, 2.0, 0.02));
@@ -519,6 +523,23 @@ private:
     }
     if (!planning_scene_.applyCollisionObjects(objects, colors)) {
       throw std::runtime_error("failed to apply MoveIt planning scene objects");
+    }
+
+    // Mirror MuJoCo's single whole-mesh AABB in the planning model. The box
+    // is rigidly attached to base_link so it follows later GT XY navigation.
+    // Its unavoidable bolted-mount overlap is allowed only for base_link;
+    // every moving arm link must still avoid the Go2 platform.
+    geometry_msgs::msg::Pose go2_pose;
+    go2_pose.orientation.w = 1.0;
+    go2_pose.position.x = -0.044763;
+    go2_pose.position.z = -0.096688269402;
+    moveit_msgs::msg::AttachedCollisionObject go2_platform;
+    go2_platform.link_name = kPlanningFrame;
+    go2_platform.object = makeBox(
+      kGo2PlatformName, go2_pose, 0.753442, 0.338254, 0.255121);
+    go2_platform.touch_links = {kPlanningFrame};
+    if (!planning_scene_.applyAttachedCollisionObject(go2_platform)) {
+      throw std::runtime_error("failed to attach the Go2 planning collision box");
     }
     std::this_thread::sleep_for(500ms);
   }
@@ -602,6 +623,7 @@ private:
   double hold_time_{};
   double velocity_scaling_{};
   double acceleration_scaling_{};
+  double ground_surface_z_{};
 };
 }  // namespace
 
