@@ -32,6 +32,7 @@ dist/
 # The simulator consumes the OBJ/MTL/PBR exports. Keep the much larger,
 # redundant authoring and interchange formats outside this code repository.
 /objects/**/*.blend
+!/objects/bowl/bowl_grasp_annotation.blend
 /objects/**/*.fbx
 /objects/**/*.glb
 /objects/**/*.stl
