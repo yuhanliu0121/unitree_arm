@@ -83,6 +83,22 @@ def test_seed_override_changes_layout() -> None:
     assert sample_spawn_poses(changed) != sample_spawn_poses(CONFIG["scene"])
 
 
+def test_fixed_layout_overrides_seed_without_removing_random_capability() -> None:
+    fixed = deepcopy(CONFIG["scene"])
+    fixed["placement_mode"] = "fixed"
+    first = sample_spawn_poses(fixed)
+    fixed["random_seed"] = 12345
+    second = sample_spawn_poses(fixed)
+    assert first == second
+    cube = next(pose for pose in first if pose.name == "yellow_cube")
+    assert cube.x == pytest.approx(0.28)
+    assert cube.y == pytest.approx(-0.24)
+
+    random_scene = deepcopy(fixed)
+    random_scene["placement_mode"] = "random"
+    assert sample_spawn_poses(random_scene) != first
+
+
 def test_scene_imports_pbr_visuals_and_dynamic_collision(
     scene_model: mujoco.MjModel,
 ) -> None:

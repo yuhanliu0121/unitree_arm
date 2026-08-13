@@ -175,3 +175,134 @@ def transform_point(
         dtype=np.float64,
     )
     return rotation @ vector + translation_array
+
+
+def transform_rotation(quaternion_xyzw: Sequence[float]) -> np.ndarray:
+    """Return the 3x3 rotation represented by an xyzw quaternion."""
+    quaternion = np.asarray(quaternion_xyzw, dtype=np.float64)
+    if quaternion.shape != (4,):
+        raise ValueError("quaternion must contain four values")
+    norm = np.linalg.norm(quaternion)
+    if norm <= 1e-12:
+        raise ValueError("quaternion has zero norm")
+    x, y, z, w = quaternion / norm
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+
+
+def undistorted_rays(pixels: np.ndarray, intrinsic: Sequence[float], distortion: Sequence[float]) -> np.ndarray:
+    """Convert raw plumb-bob pixels to unit optical-frame bearing vectors."""
+    import cv2
+
+    values = np.asarray(pixels, dtype=np.float64).reshape(-1, 1, 2)
+    camera = np.asarray(intrinsic, dtype=np.float64).reshape(3, 3)
+    coefficients = np.asarray(distortion, dtype=np.float64)
+    normalized = cv2.undistortPoints(values, camera, coefficients).reshape(-1, 2)
+    rays = np.column_stack((normalized, np.ones(len(normalized))))
+    return rays / np.linalg.norm(rays, axis=1, keepdims=True)
+
+
+def fit_ground_plane_ransac(
+    points: np.ndarray,
+    up: Sequence[float],
+    distance_threshold: float = 0.008,
+    normal_tolerance_deg: float = 15.0,
+    iterations: int = 160,
+    seed: int = 0,
+) -> tuple[np.ndarray, float, np.ndarray]:
+    """Fit n.p+d=0 while rejecting planes inconsistent with gravity."""
+    cloud = np.asarray(points, dtype=np.float64)
+    direction = np.asarray(up, dtype=np.float64)
+    valid = np.isfinite(cloud).all(axis=1)
+    cloud = cloud[valid]
+    direction /= np.linalg.norm(direction)
+    if len(cloud) < 3:
+        raise ValueError("not enough valid points for ground RANSAC")
+    cosine_limit = np.cos(np.deg2rad(normal_tolerance_deg))
+    rng = np.random.default_rng(seed)
+    best: np.ndarray | None = None
+    for _ in range(iterations):
+        sample = cloud[rng.choice(len(cloud), 3, replace=False)]
+        normal = np.cross(sample[1] - sample[0], sample[2] - sample[0])
+        norm = np.linalg.norm(normal)
+        if norm < 1e-9:
+            continue
+        normal /= norm
+        if normal.dot(direction) < 0:
+            normal = -normal
+        if normal.dot(direction) < cosine_limit:
+            continue
+        offset = -normal.dot(sample[0])
+        inliers = np.abs(cloud @ normal + offset) <= distance_threshold
+        if best is None or int(inliers.sum()) > int(best.sum()):
+            best = inliers
+    if best is None or int(best.sum()) < 50:
+        raise ValueError("no gravity-consistent ground plane found")
+    selected = cloud[best]
+    centroid = selected.mean(axis=0)
+    covariance = (selected - centroid).T @ (selected - centroid)
+    _, _, vh = np.linalg.svd(covariance, full_matrices=False)
+    normal = vh[-1]
+    if normal.dot(direction) < 0:
+        normal = -normal
+    if normal.dot(direction) < cosine_limit:
+        raise ValueError("refined ground normal violates gravity constraint")
+    offset = -float(normal.dot(centroid))
+    inliers = np.abs(cloud @ normal + offset) <= distance_threshold
+    return normal, offset, inliers
+
+
+def intersect_rays_with_plane(
+    origins: np.ndarray,
+    directions: np.ndarray,
+    normal: Sequence[float],
+    offset: float,
+) -> np.ndarray:
+    """Intersect one or many world-frame rays with n.p+d=0."""
+    starts = np.asarray(origins, dtype=np.float64)
+    rays = np.asarray(directions, dtype=np.float64)
+    n = np.asarray(normal, dtype=np.float64)
+    starts = np.broadcast_to(starts, rays.shape)
+    denominator = rays @ n
+    if np.any(np.abs(denominator) < 1e-9):
+        raise ValueError("ray is parallel to plane")
+    distance = -(starts @ n + float(offset)) / denominator
+    if np.any(distance <= 0):
+        raise ValueError("plane intersection lies behind camera")
+    return starts + distance[:, None] * rays
+
+
+def fit_square_on_plane(points: np.ndarray, normal: Sequence[float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit a minimum-area rectangle and return center, unit edge, four corners."""
+    import cv2
+
+    cloud = np.asarray(points, dtype=np.float64)
+    n = np.asarray(normal, dtype=np.float64)
+    n /= np.linalg.norm(n)
+    reference = np.array([1.0, 0.0, 0.0])
+    if abs(reference.dot(n)) > 0.9:
+        reference = np.array([0.0, 1.0, 0.0])
+    axis_u = reference - reference.dot(n) * n
+    axis_u /= np.linalg.norm(axis_u)
+    axis_v = np.cross(n, axis_u)
+    coordinates = np.column_stack((cloud @ axis_u, cloud @ axis_v)).astype(np.float32)
+    rectangle = cv2.minAreaRect(coordinates)
+    corners_2d = cv2.boxPoints(rectangle).astype(np.float64)
+    normal_coordinate = float(np.mean(cloud @ n))
+    corners = (
+        corners_2d[:, :1] * axis_u
+        + corners_2d[:, 1:] * axis_v
+        + normal_coordinate * n
+    )
+    center = corners.mean(axis=0)
+    edge = corners[1] - corners[0]
+    if np.linalg.norm(corners[2] - corners[1]) > np.linalg.norm(edge):
+        edge = corners[2] - corners[1]
+    edge /= np.linalg.norm(edge)
+    return center, edge, corners

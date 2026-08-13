@@ -127,7 +127,14 @@ gripper:
   travel_m: 0.03
 
 scene:
+  placement_mode: random
   random_seed: 0
+  # Deterministic acceptance layout. Normal simulation remains seeded-random;
+  # d1-mujoco-sim --fixed-layout selects these poses explicitly.
+  fixed_object_poses:
+    yellow_cube: {x_m: 0.28, y_m: -0.24, yaw_deg: 0.0}
+    bowl: {x_m: 0.50, y_m: 0.28, yaw_deg: 0.0}
+    zucchini: {x_m: 0.10, y_m: 0.30, yaw_deg: 90.0}
   # Task-level damping copied from the ATEC Task E object configuration to
   # suppress residual sliding that is not representative of the real gripper.
   object_linear_damping: 2.0

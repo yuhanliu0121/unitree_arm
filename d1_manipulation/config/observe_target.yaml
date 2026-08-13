@@ -31,3 +31,40 @@ d1_observe_target:
     use_simulation_scene_truth: true
     scene_state_port: 15002
     ground_surface_z_m: -0.225248769402
+
+d1_pick_object:
+  ros__parameters:
+    action_name: /arm/tasks/pick_object
+    observe_action_name: /arm/debug/observe_target
+    cube_estimation_service_name: /arm/perception/estimate_cube
+    planning_frame: base_link
+    gravity_frame: world
+    arm_group: arm
+    link6_frame: Link6
+    tcp_frame: tcp_link
+    color_optical_frame: wrist_camera_color_optical_frame
+    cube_size_m: 0.05
+    pregrasp_distance_max_m: 0.080
+    pregrasp_distance_min_m: 0.015
+    pregrasp_distance_step_m: 0.005
+    grasp_distance_min_m: -0.040
+    grasp_distance_max_m: -0.024
+    grasp_distance_step_m: 0.002
+    lift_distance_m: 0.10
+    top_observation_distance_m: 0.35
+    top_observation_distances_m: [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
+    top_observation_roll_degrees: [0.0, 90.0, -90.0, 180.0, 45.0, -45.0, 135.0, -135.0]
+    camera_settle_s: 0.5
+    cartesian_step_m: 0.005
+    minimum_cartesian_fraction: 0.95
+    gripper_open_m: 0.03
+    gripper_closed_m: 0.0
+    grasp_settle_s: 0.5
+    planning_time_s: 5.0
+    planning_attempts: 6
+    velocity_scaling: 0.10
+    acceleration_scaling: 0.10
+    position_tolerance_m: 0.005
+    orientation_tolerance_rad: 0.03
+    stowed_tolerance_rad: 0.08
+    stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]

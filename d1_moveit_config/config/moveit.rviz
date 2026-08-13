@@ -87,6 +87,15 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /arm/debug/observation_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Cube Grasp Geometry
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/debug/cube_grasp_markers
     - Class: rviz_default_plugins/Image
       Enabled: true
       Name: Wrist RGB
@@ -127,6 +136,16 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /wrist_camera/debug/depth_plasma
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: Cube Geometry Image
+      Normalize Range: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/perception/debug/cube_geometry
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: world

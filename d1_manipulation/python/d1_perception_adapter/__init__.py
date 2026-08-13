@@ -3,17 +3,27 @@
 from .core import (
     MatchResult,
     image_to_bgr,
+    fit_ground_plane_ransac,
+    fit_square_on_plane,
+    intersect_rays_with_plane,
     match_target_detection,
     project_plumb_bob,
     ros_depth_to_meters,
     transform_point,
+    transform_rotation,
+    undistorted_rays,
 )
 
 __all__ = [
     "MatchResult",
     "image_to_bgr",
+    "fit_ground_plane_ransac",
+    "fit_square_on_plane",
+    "intersect_rays_with_plane",
     "match_target_detection",
     "project_plumb_bob",
     "ros_depth_to_meters",
     "transform_point",
+    "transform_rotation",
+    "undistorted_rays",
 ]

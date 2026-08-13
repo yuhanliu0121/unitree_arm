@@ -1,10 +1,12 @@
 d1_detect_target:
   ros__parameters:
     service_name: /arm/perception/detect_target
+    cube_estimation_service_name: /arm/perception/estimate_cube
     color_topic: /wrist_camera/color/image_raw
     aligned_depth_topic: /wrist_camera/aligned_depth_to_color/image_raw
     aligned_camera_info_topic: /wrist_camera/aligned_depth_to_color/camera_info
     planning_frame: base_link
+    gravity_frame: world
     profile: arm
     fresh_frame_timeout_s: 3.0
     tf_timeout_s: 1.0
@@ -12,3 +14,9 @@ d1_detect_target:
     max_hint_mask_distance_px: 120.0
     depth_scale_m_per_unit: 0.001
     debug_overlay_topic: /arm/perception/debug/overlay
+    cube_debug_overlay_topic: /arm/perception/debug/cube_geometry
+    ground_ransac_distance_m: 0.008
+    ground_normal_tolerance_deg: 15.0
+    ground_ransac_iterations: 160
+    ground_max_points: 12000
+    cube_half_size_m: 0.025

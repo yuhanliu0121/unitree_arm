@@ -1,0 +1,23 @@
+uint8 COARSE=0
+uint8 FINE=1
+uint8 stage
+geometry_msgs/PointStamped target_hint
+# Plane convention in planning_frame: dot(normal, p) + offset = 0.
+geometry_msgs/Vector3 ground_normal
+float64 ground_offset
+---
+uint8 FAILURE_NONE=0
+uint8 FAILURE_INCOMPLETE_INFORMATION=1
+uint8 FAILURE_NO_MATCHING_DETECTION=2
+uint8 FAILURE_GEOMETRY=3
+uint8 FAILURE_INTERNAL=4
+bool success
+uint8 failure_reason
+string detail
+string class_name
+float32 confidence
+geometry_msgs/PointStamped center
+geometry_msgs/Vector3 ground_normal
+float64 ground_offset
+geometry_msgs/Vector3 edge_direction
+geometry_msgs/PolygonStamped top_polygon

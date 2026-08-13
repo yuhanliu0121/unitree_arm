@@ -37,6 +37,19 @@ def default_objects_root() -> Path:
 
 def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
     """Deterministically place all objects without footprint overlap."""
+    if scene.get("placement_mode", "random") == "fixed":
+        configured = scene["fixed_object_poses"]
+        return tuple(
+            SpawnPose(
+                name=name,
+                x=float(configured[name]["x_m"]),
+                y=float(configured[name]["y_m"]),
+                yaw=math.radians(float(configured[name].get("yaw_deg", 0.0))),
+                footprint_radius=_FOOTPRINT_RADIUS[name],
+            )
+            for name in OBJECT_NAMES
+        )
+
     region = scene["spawn_region"]
     depth = float(region["depth_x_m"])
     width = float(region["width_y_m"])

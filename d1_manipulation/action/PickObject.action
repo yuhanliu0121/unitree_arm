@@ -1,0 +1,29 @@
+uint8 COMPUTE_ONLY=0
+uint8 MOVE_PREGRASP=1
+uint8 DESCEND=2
+uint8 GRASP_AND_LIFT=3
+geometry_msgs/PointStamped target
+uint8 stop_after
+---
+uint8 FAILURE_NONE=0
+uint8 FAILURE_INCOMPLETE_INFORMATION=1
+uint8 FAILURE_THEORETICALLY_INFEASIBLE=2
+uint8 FAILURE_EXECUTION_ERROR=3
+uint8 FAILURE_REPOSITION_REQUIRED=4
+bool success
+uint8 failure_category
+string failed_state
+string detail
+bool returned_to_stowed
+string class_name
+geometry_msgs/PointStamped estimated_center
+geometry_msgs/PoseStamped grasp_pose
+geometry_msgs/PoseStamped pregrasp_pose
+float64 pregrasp_distance_m
+float64 grasp_distance_m
+float64 grasp_yaw_degrees
+float64 approach_tilt_degrees
+---
+string current_state
+float32 progress
+string detail

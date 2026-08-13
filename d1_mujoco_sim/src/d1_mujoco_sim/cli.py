@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         help="Override the configured object placement seed",
     )
     parser.add_argument(
+        "--fixed-layout",
+        action="store_true",
+        help="Use the configured fixed object poses instead of seeded random placement",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="Run without the MuJoCo viewer",
@@ -129,6 +134,8 @@ def main() -> None:
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     if args.seed is not None:
         config["scene"]["random_seed"] = args.seed
+    if args.fixed_layout:
+        config["scene"]["placement_mode"] = "fixed"
     if args.initial_arm_pose is not None:
         initial_angles_deg = list(
             config["simulation"]["initial_sdk_angles_deg"]
@@ -161,7 +168,8 @@ def main() -> None:
             f"{name}=({position[0]:.3f},{position[1]:.3f})"
         )
     logging.getLogger(__name__).info(
-        "Object layout seed=%s: %s",
+        "Object layout mode=%s seed=%s: %s",
+        config["scene"].get("placement_mode", "random"),
         config["scene"]["random_seed"],
         " ".join(object_positions),
     )

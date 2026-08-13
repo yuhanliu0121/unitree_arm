@@ -10,11 +10,12 @@ from pathlib import Path
 import sys
 import threading
 import time
+import json
 
 import cv2
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import Point32, PointStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
@@ -30,12 +31,18 @@ from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from d1_manipulation.srv import DetectTarget
+from d1_manipulation.srv import EstimateCube
 from d1_perception_adapter import (
     image_to_bgr,
+    fit_ground_plane_ransac,
+    fit_square_on_plane,
+    intersect_rays_with_plane,
     match_target_detection,
     project_plumb_bob,
     ros_depth_to_meters,
     transform_point,
+    transform_rotation,
+    undistorted_rays,
 )
 
 
@@ -45,6 +52,9 @@ class DetectTargetServer(Node):
         self._callback_group = ReentrantCallbackGroup()
         self._service_name = self.declare_parameter(
             "service_name", "/arm/perception/detect_target"
+        ).value
+        self._cube_service_name = self.declare_parameter(
+            "cube_estimation_service_name", "/arm/perception/estimate_cube"
         ).value
         self._color_topic = self.declare_parameter(
             "color_topic", "/wrist_camera/color/image_raw"
@@ -59,6 +69,9 @@ class DetectTargetServer(Node):
         ).value
         self._planning_frame = self.declare_parameter(
             "planning_frame", "base_link"
+        ).value
+        self._gravity_frame = self.declare_parameter(
+            "gravity_frame", "world"
         ).value
         self._runtime_root = Path(
             self.declare_parameter("perception_runtime_root", "").value
@@ -82,6 +95,27 @@ class DetectTargetServer(Node):
         self._debug_topic = self.declare_parameter(
             "debug_overlay_topic", "/arm/perception/debug/overlay"
         ).value
+        self._cube_debug_topic = self.declare_parameter(
+            "cube_debug_overlay_topic", "/arm/perception/debug/cube_geometry"
+        ).value
+        self._ground_distance = float(
+            self.declare_parameter("ground_ransac_distance_m", 0.008).value
+        )
+        self._ground_normal_tolerance = float(
+            self.declare_parameter("ground_normal_tolerance_deg", 15.0).value
+        )
+        self._ground_iterations = int(
+            self.declare_parameter("ground_ransac_iterations", 160).value
+        )
+        self._ground_max_points = int(
+            self.declare_parameter("ground_max_points", 12000).value
+        )
+        self._cube_half_size = float(
+            self.declare_parameter("cube_half_size_m", 0.025).value
+        )
+        self._cube_debug_directory = Path(
+            self.declare_parameter("cube_debug_directory", "/tmp/d1_cube_debug_latest").value
+        )
         if not self._runtime_root.is_dir():
             raise RuntimeError(
                 f"perception_runtime_root is unavailable: {self._runtime_root}"
@@ -135,16 +169,26 @@ class DetectTargetServer(Node):
         self._debug_publisher = self.create_publisher(
             Image, self._debug_topic, debug_qos
         )
+        self._cube_debug_publisher = self.create_publisher(
+            Image, self._cube_debug_topic, debug_qos
+        )
         self._service = self.create_service(
             DetectTarget,
             self._service_name,
             self._detect,
             callback_group=self._callback_group,
         )
+        self._cube_service = self.create_service(
+            EstimateCube,
+            self._cube_service_name,
+            self._estimate_cube,
+            callback_group=self._callback_group,
+        )
         self.get_logger().info(
-            "DetectTarget ready: service=%s device=%s RGB=%s aligned_depth=%s"
+            "DetectTarget ready: service=%s cube_service=%s device=%s RGB=%s aligned_depth=%s"
             % (
                 self._service_name,
+                self._cube_service_name,
                 self._runtime.segmenter.device,
                 self._color_topic,
                 self._depth_topic,
@@ -272,6 +316,192 @@ class DetectTargetServer(Node):
         output.step = output.width * 3
         output.data = array.array("B", overlay[..., ::-1].tobytes())
         self._debug_publisher.publish(output)
+
+    @staticmethod
+    def _to_ros_image(image_bgr: np.ndarray, header) -> Image:
+        output = Image()
+        output.header = header
+        output.height, output.width = image_bgr.shape[:2]
+        output.encoding = "rgb8"
+        output.is_bigendian = 0
+        output.step = output.width * 3
+        output.data = array.array("B", image_bgr[..., ::-1].tobytes())
+        return output
+
+    @staticmethod
+    def _transform_arrays(transform) -> tuple[np.ndarray, np.ndarray]:
+        translation = transform.transform.translation
+        quaternion = transform.transform.rotation
+        rotation = transform_rotation((quaternion.x, quaternion.y, quaternion.z, quaternion.w))
+        return rotation, np.array([translation.x, translation.y, translation.z], dtype=np.float64)
+
+    def _runtime_frame(self):
+        color_message, depth_message, camera_info = self._wait_for_fresh_pair()
+        color_bgr = image_to_bgr(
+            bytes(color_message.data), color_message.height, color_message.width,
+            color_message.step, color_message.encoding,
+        )
+        depth_m = ros_depth_to_meters(
+            bytes(depth_message.data), depth_message.height, depth_message.width,
+            depth_message.step, depth_message.encoding,
+            bool(depth_message.is_bigendian), self._depth_scale,
+        )
+        if color_bgr.shape[:2] != depth_m.shape:
+            raise ValueError(
+                f"RGB and aligned depth shapes differ: {color_bgr.shape[:2]} vs {depth_m.shape}"
+            )
+        optical_frame = camera_info.header.frame_id
+        if not optical_frame:
+            raise ValueError("aligned CameraInfo frame_id is empty")
+        intrinsics = self._CameraIntrinsics(
+            fx=float(camera_info.k[0]), fy=float(camera_info.k[4]),
+            cx=float(camera_info.k[2]), cy=float(camera_info.k[5]),
+            width=int(camera_info.width), height=int(camera_info.height),
+        )
+        detections = self._runtime.process(color_bgr, depth_m, intrinsics)
+        return color_message, color_bgr, depth_m, camera_info, optical_frame, detections
+
+    def _match(self, hint, optical_frame, camera_info, detections):
+        hint_camera = self._point_in_frame(hint, optical_frame)
+        hint_pixel = project_plumb_bob(hint_camera, camera_info.k, camera_info.d)
+        match = match_target_detection(
+            detections, hint_pixel, hint_camera, self._max_mask_distance_px
+        )
+        if match is None:
+            raise LookupError("no depth-verified detection matches the projected target hint")
+        return match
+
+    def _estimate_cube(self, request, response):
+        if not self._request_lock.acquire(blocking=False):
+            return self._cube_fail(response, EstimateCube.Response.FAILURE_INTERNAL,
+                                   "another perception request is already running")
+        try:
+            (color_message, color_bgr, depth_m, camera_info,
+             optical_frame, detections) = self._runtime_frame()
+            match = self._match(request.target_hint, optical_frame, camera_info, detections)
+            detection = match.detection
+            if detection.class_name != "yellow_cube":
+                raise LookupError(f"matched object is {detection.class_name}, not yellow_cube")
+            planning_transform = self._lookup_transform(self._planning_frame, optical_frame)
+            rotation, camera_origin = self._transform_arrays(planning_transform)
+
+            if request.stage == EstimateCube.Request.COARSE:
+                world_transform = self._lookup_transform(
+                    self._planning_frame, self._gravity_frame
+                )
+                world_rotation, _ = self._transform_arrays(world_transform)
+                gravity_up = world_rotation[:, 2]
+                rows, columns = np.nonzero(np.isfinite(depth_m) & (depth_m > 0.0))
+                if len(columns) > self._ground_max_points:
+                    rng = np.random.default_rng(0)
+                    indices = rng.choice(len(columns), self._ground_max_points, replace=False)
+                    rows, columns = rows[indices], columns[indices]
+                pixels = np.column_stack((columns, rows))
+                rays_camera = undistorted_rays(pixels, camera_info.k, camera_info.d)
+                points_camera = rays_camera * (depth_m[rows, columns] / rays_camera[:, 2])[:, None]
+                points_planning = points_camera @ rotation.T + camera_origin
+                normal, offset, _ = fit_ground_plane_ransac(
+                    points_planning, gravity_up, self._ground_distance,
+                    self._ground_normal_tolerance, self._ground_iterations, 0,
+                )
+                mask_y, mask_x = np.nonzero(detection.mask)
+                center_pixel = np.array([[np.median(mask_x), np.median(mask_y)]])
+                center_ray = undistorted_rays(center_pixel, camera_info.k, camera_info.d) @ rotation.T
+                center = intersect_rays_with_plane(
+                    camera_origin, center_ray, normal, offset - self._cube_half_size
+                )[0]
+                edge = np.zeros(3)
+                corners = np.empty((0, 3))
+                detail = "ground fitted and mask-centre ray intersected with cube mid-plane"
+            elif request.stage == EstimateCube.Request.FINE:
+                normal = np.array([
+                    request.ground_normal.x, request.ground_normal.y,
+                    request.ground_normal.z,
+                ], dtype=np.float64)
+                if not np.isfinite(normal).all() or np.linalg.norm(normal) < 0.9:
+                    raise ValueError("fine estimate requires a valid ground normal")
+                normal /= np.linalg.norm(normal)
+                offset = float(request.ground_offset)
+                contours, _ = cv2.findContours(
+                    detection.mask.astype(np.uint8), cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_NONE,
+                )
+                if not contours:
+                    raise ValueError("yellow_cube mask has no contour")
+                contour = max(contours, key=cv2.contourArea).reshape(-1, 2)
+                if len(contour) < 12:
+                    raise ValueError("yellow_cube contour is too small")
+                rays_planning = undistorted_rays(contour, camera_info.k, camera_info.d) @ rotation.T
+                top_points = intersect_rays_with_plane(
+                    camera_origin, rays_planning, normal,
+                    offset - 2.0 * self._cube_half_size,
+                )
+                top_center, edge, corners = fit_square_on_plane(top_points, normal)
+                center = top_center - self._cube_half_size * normal
+                detail = "mask contour projected to known top plane and fitted with minAreaRect"
+                debug = color_bgr.copy()
+                cv2.drawContours(debug, [contour.astype(np.int32)], -1, (255, 0, 255), 2)
+                cv2.putText(debug, "yellow_cube fine geometry", (20, 32),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2, cv2.LINE_AA)
+                self._cube_debug_publisher.publish(self._to_ros_image(debug, color_message.header))
+            else:
+                raise ValueError(f"unsupported cube estimation stage {request.stage}")
+
+            response.success = True
+            response.failure_reason = EstimateCube.Response.FAILURE_NONE
+            response.detail = detail
+            response.class_name = detection.class_name
+            response.confidence = float(detection.confidence)
+            self._set_point(response.center, self._planning_frame,
+                            color_message.header.stamp, center)
+            response.ground_normal.x, response.ground_normal.y, response.ground_normal.z = map(float, normal)
+            response.ground_offset = float(offset)
+            response.edge_direction.x, response.edge_direction.y, response.edge_direction.z = map(float, edge)
+            response.top_polygon.header = response.center.header
+            for corner in corners:
+                point = Point32()
+                point.x, point.y, point.z = map(float, corner)
+                response.top_polygon.polygon.points.append(point)
+            self._publish_overlay(color_bgr, detections, detection, color_message.header)
+            self._cube_debug_directory.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(
+                str(self._cube_debug_directory / ("coarse.png" if request.stage == 0 else "fine.png")),
+                color_bgr if request.stage == 0 else debug,
+            )
+            geometry = {
+                "stage": "coarse" if request.stage == 0 else "fine",
+                "class_name": detection.class_name,
+                "confidence": float(detection.confidence),
+                "center_base_m": center.tolist(),
+                "ground_normal_base": normal.tolist(),
+                "ground_offset_m": float(offset),
+                "edge_direction_base": edge.tolist(),
+                "top_corners_base_m": corners.tolist(),
+            }
+            (self._cube_debug_directory / ("coarse.json" if request.stage == 0 else "fine.json")).write_text(
+                json.dumps(geometry, indent=2), encoding="utf-8"
+            )
+            self.get_logger().info(
+                "Cube %s estimate: center=(%.3f, %.3f, %.3f) normal=(%.3f, %.3f, %.3f)"
+                % ("coarse" if request.stage == 0 else "fine", *center, *normal)
+            )
+            return response
+        except LookupError as exception:
+            return self._cube_fail(response, EstimateCube.Response.FAILURE_NO_MATCHING_DETECTION, str(exception))
+        except (TimeoutError, ValueError, TransformException) as exception:
+            return self._cube_fail(response, EstimateCube.Response.FAILURE_INCOMPLETE_INFORMATION, str(exception))
+        except Exception as exception:
+            self.get_logger().error(f"EstimateCube internal error: {exception}")
+            return self._cube_fail(response, EstimateCube.Response.FAILURE_INTERNAL, str(exception))
+        finally:
+            self._request_lock.release()
+
+    def _cube_fail(self, response, reason: int, detail: str):
+        response.success = False
+        response.failure_reason = reason
+        response.detail = detail
+        self.get_logger().warning(detail)
+        return response
 
     def _fail(self, response, reason: int, detail: str):
         response.success = False

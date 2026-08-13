@@ -63,3 +63,21 @@ The node publishes its latest annotated image on
 `/arm/perception/debug/overlay`; the standard RViz configuration enables this
 panel. The adapter owns no arm motion and does not change the released model,
 thresholds, or depth filter.
+
+## Visual yellow-cube grasp
+
+The formal staged development Action is `/arm/tasks/pick_object`. For the
+seed-0 simulation scene, run one of:
+
+```zsh
+./accept_visual_cube_grasp.zsh --headless --stage compute
+./accept_visual_cube_grasp.zsh --rviz --stage pregrasp
+./accept_visual_cube_grasp.zsh --rviz --stage descend
+./accept_visual_cube_grasp.zsh --rviz --stage lift
+```
+
+The pipeline performs an oblique RGB-D observation, gravity-constrained ground
+RANSAC, a strict top-down RGB observation, metric top-contour projection,
+minimum-area square fitting, ordered symmetric grasp planning, and the selected
+execution stage. RViz exposes `Cube Grasp Geometry`; the latest coarse/fine
+images and JSON estimates are copied into the acceptance log directory.

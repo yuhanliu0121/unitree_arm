@@ -12,10 +12,14 @@ sys.path.insert(
 
 from d1_perception_adapter import (  # noqa: E402
     image_to_bgr,
+    fit_ground_plane_ransac,
+    fit_square_on_plane,
+    intersect_rays_with_plane,
     match_target_detection,
     project_plumb_bob,
     ros_depth_to_meters,
     transform_point,
+    undistorted_rays,
 )
 
 
@@ -70,3 +74,45 @@ def test_match_prefers_hint_mask_then_3d_distance() -> None:
     assert match.detection is detections[1]
     assert match.mask_distance_px == 0.0
     assert np.isclose(match.position_distance_m, 0.02)
+
+
+def test_ground_ransac_rejects_object_points_and_obeys_gravity() -> None:
+    rng = np.random.default_rng(4)
+    ground = np.column_stack(
+        (rng.uniform(-0.4, 0.4, 800), rng.uniform(-0.3, 0.3, 800),
+         rng.normal(-0.2, 0.001, 800))
+    )
+    object_points = rng.uniform([-0.05, -0.05, -0.17], [0.05, 0.05, -0.12], (100, 3))
+    normal, offset, inliers = fit_ground_plane_ransac(
+        np.vstack((ground, object_points)), [0, 0, 1], seed=7
+    )
+    np.testing.assert_allclose(normal, [0, 0, 1], atol=0.01)
+    assert np.isclose(offset, 0.2, atol=0.003)
+    assert inliers.sum() > 750
+
+
+def test_ray_plane_intersection_and_metric_square_fit() -> None:
+    directions = np.array([[0, 0, -1], [0.1, 0, -1]], dtype=np.float64)
+    points = intersect_rays_with_plane([0, 0, 1], directions, [0, 0, 1], 0)
+    np.testing.assert_allclose(points, [[0, 0, 0], [0.1, 0, 0]], atol=1e-12)
+    angle = np.deg2rad(27.0)
+    edge = np.array([np.cos(angle), np.sin(angle), 0.0])
+    perpendicular = np.array([-edge[1], edge[0], 0.0])
+    center = np.array([0.3, -0.1, -0.15])
+    samples = []
+    for coordinate in np.linspace(-0.025, 0.025, 50):
+        samples.extend(
+            [center + coordinate * edge - 0.025 * perpendicular,
+             center + coordinate * edge + 0.025 * perpendicular,
+             center - 0.025 * edge + coordinate * perpendicular,
+             center + 0.025 * edge + coordinate * perpendicular]
+        )
+    fitted_center, fitted_edge, corners = fit_square_on_plane(samples, [0, 0, 1])
+    np.testing.assert_allclose(fitted_center, center, atol=1e-5)
+    assert abs(fitted_edge.dot(edge)) > 0.999
+    assert corners.shape == (4, 3)
+
+
+def test_undistorted_ray_at_principal_point_is_optical_z() -> None:
+    ray = undistorted_rays([[640, 360]], [900, 0, 640, 0, 900, 360, 0, 0, 1], [0, 0, 0, 0, 0])
+    np.testing.assert_allclose(ray[0], [0, 0, 1], atol=1e-12)

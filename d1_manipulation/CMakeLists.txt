@@ -9,7 +9,9 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(control_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(moveit_core REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -20,11 +22,14 @@ find_package(std_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ObserveTarget.action"
+  "action/PickObject.action"
   "srv/DetectTarget.srv"
+  "srv/EstimateCube.srv"
   DEPENDENCIES geometry_msgs
 )
 
@@ -57,11 +62,31 @@ ament_target_dependencies(observe_target_server
   tf2_ros
   visualization_msgs
 )
+
+add_executable(pick_object_server src/pick_object_server.cpp)
+target_compile_features(pick_object_server PRIVATE cxx_std_17)
+target_link_libraries(pick_object_server Eigen3::Eigen)
+ament_target_dependencies(pick_object_server
+  control_msgs
+  geometry_msgs
+  moveit_core
+  moveit_msgs
+  moveit_ros_planning_interface
+  rclcpp
+  rclcpp_action
+  shape_msgs
+  tf2_eigen
+  tf2_geometry_msgs
+  tf2_ros
+  trajectory_msgs
+  visualization_msgs
+)
 rosidl_get_typesupport_target(cpp_typesupport_target
   ${PROJECT_NAME} rosidl_typesupport_cpp)
 target_link_libraries(observe_target_server "${cpp_typesupport_target}")
+target_link_libraries(pick_object_server "${cpp_typesupport_target}")
 
-install(TARGETS observation_geometry observe_target_server
+install(TARGETS observation_geometry observe_target_server pick_object_server
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -75,6 +100,10 @@ install(PROGRAMS scripts/detect_target_server.py
 install(PROGRAMS scripts/observe_seed_cube.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME observe_seed_cube
+)
+install(PROGRAMS scripts/pick_seed_cube.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pick_seed_cube
 )
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
