@@ -74,6 +74,7 @@ seed-0 simulation scene, run one of:
 ./accept_visual_cube_grasp.zsh --rviz --stage pregrasp
 ./accept_visual_cube_grasp.zsh --rviz --stage descend
 ./accept_visual_cube_grasp.zsh --rviz --stage lift
+./accept_visual_cube_grasp.zsh --rviz --stage carry
 ```
 
 The pipeline performs an oblique RGB-D observation, gravity-constrained ground
@@ -81,3 +82,16 @@ RANSAC, a strict top-down RGB observation, metric top-contour projection,
 minimum-area square fitting, ordered symmetric grasp planning, and the selected
 execution stage. RViz exposes `Cube Grasp Geometry`; the latest coarse/fine
 images and JSON estimates are copied into the acceptance log directory.
+
+MoveIt deliberately does not receive MuJoCo ground-truth collision geometry
+for the cube, bowl, or zucchini. Its world contains the arm, the Go2 proxy and
+the perception-fitted ground plane; MuJoCo retains the complete physical object
+scene, and RViz retains the independent object-mesh visualization. A grasped
+object will be added from perception as an attached collision object rather
+than copied from simulation truth.
+
+The `carry` stage attaches the visually estimated 50 mm cube to `tcp_link` for
+MoveIt collision checking, executes the configured CARRY joint pose, and then
+checks three fresh wrist RGB frames. Yellow HSV connected components are
+measured only inside an ROI projected from the expected held-object position;
+MuJoCo object truth is not used by this verification.

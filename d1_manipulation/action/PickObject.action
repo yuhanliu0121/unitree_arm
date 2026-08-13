@@ -2,6 +2,7 @@ uint8 COMPUTE_ONLY=0
 uint8 MOVE_PREGRASP=1
 uint8 DESCEND=2
 uint8 GRASP_AND_LIFT=3
+uint8 GRASP_AND_CARRY=4
 geometry_msgs/PointStamped target
 uint8 stop_after
 ---

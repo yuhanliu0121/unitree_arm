@@ -1,17 +1,10 @@
-#include <arpa/inet.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -47,9 +40,9 @@ namespace d1_manipulation
 {
 namespace
 {
-constexpr char kSceneMagic[] = "D1SCENE";
-constexpr int kSceneVersion = 1;
 constexpr char kGo2PlatformName[] = "go2_platform";
+const std::vector<std::string> kLegacySceneObjectNames{
+  "yellow_cube", "bowl", "zucchini", "observe_target"};
 
 template<typename T>
 T parameterOrDeclare(
@@ -66,102 +59,6 @@ T parameterOrDeclare(
   return node->declare_parameter<T>(name, default_value);
 }
 
-struct ScenePose
-{
-  Eigen::Vector3d position{Eigen::Vector3d::Zero()};
-  Eigen::Quaterniond orientation{Eigen::Quaterniond::Identity()};
-};
-
-class UdpSceneSnapshot
-{
-public:
-  explicit UdpSceneSnapshot(int port)
-  {
-    socket_ = ::socket(AF_INET, SOCK_DGRAM, 0);
-    if (socket_ < 0) {
-      throw std::runtime_error("failed to create scene-state UDP socket");
-    }
-    int reuse = 1;
-    ::setsockopt(socket_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(static_cast<uint16_t>(port));
-    if (::bind(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
-      ::close(socket_);
-      socket_ = -1;
-      throw std::runtime_error("failed to bind scene-state UDP port " + std::to_string(port));
-    }
-  }
-
-  ~UdpSceneSnapshot()
-  {
-    if (socket_ >= 0) {
-      ::close(socket_);
-    }
-  }
-
-  std::map<std::string, ScenePose> receive(std::chrono::milliseconds timeout)
-  {
-    pollfd descriptor{socket_, POLLIN, 0};
-    if (::poll(&descriptor, 1, static_cast<int>(timeout.count())) <= 0) {
-      return {};
-    }
-    char buffer[4096];
-    const auto size = ::recv(socket_, buffer, sizeof(buffer) - 1, 0);
-    if (size <= 0) {
-      return {};
-    }
-    buffer[size] = '\0';
-    auto result = parse(buffer);
-    while (true) {
-      const auto queued = ::recv(socket_, buffer, sizeof(buffer) - 1, MSG_DONTWAIT);
-      if (queued <= 0) {
-        break;
-      }
-      buffer[queued] = '\0';
-      auto newer = parse(buffer);
-      if (!newer.empty()) {
-        result = std::move(newer);
-      }
-    }
-    return result;
-  }
-
-private:
-  static std::map<std::string, ScenePose> parse(const std::string& payload)
-  {
-    std::istringstream stream(payload);
-    std::string magic;
-    int version = 0;
-    double simulation_time = 0.0;
-    if (!(stream >> magic >> version >> simulation_time) || magic != kSceneMagic ||
-      version != kSceneVersion)
-    {
-      return {};
-    }
-    std::map<std::string, ScenePose> poses;
-    std::string name;
-    while (stream >> name) {
-      ScenePose pose;
-      double qw = 1.0;
-      double qx = 0.0;
-      double qy = 0.0;
-      double qz = 0.0;
-      if (!(stream >> pose.position.x() >> pose.position.y() >> pose.position.z() >>
-        qw >> qx >> qy >> qz))
-      {
-        return {};
-      }
-      pose.orientation = Eigen::Quaterniond(qw, qx, qy, qz).normalized();
-      poses[name] = pose;
-    }
-    return poses;
-  }
-
-  int socket_{-1};
-};
-
 geometry_msgs::msg::Pose poseMessage(const Eigen::Isometry3d& transform)
 {
   geometry_msgs::msg::Pose message;
@@ -174,16 +71,6 @@ geometry_msgs::msg::Pose poseMessage(const Eigen::Isometry3d& transform)
   message.orientation.z = quaternion.z();
   message.orientation.w = quaternion.w();
   return message;
-}
-
-geometry_msgs::msg::Pose offsetPose(
-  const ScenePose& body,
-  const Eigen::Vector3d& local_offset)
-{
-  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-  transform.linear() = body.orientation.toRotationMatrix();
-  transform.translation() = body.position + body.orientation * local_offset;
-  return poseMessage(transform);
 }
 
 moveit_msgs::msg::CollisionObject makeBox(
@@ -200,25 +87,6 @@ moveit_msgs::msg::CollisionObject makeBox(
   shape_msgs::msg::SolidPrimitive shape;
   shape.type = shape_msgs::msg::SolidPrimitive::BOX;
   shape.dimensions = {x, y, z};
-  object.primitives.push_back(shape);
-  object.primitive_poses.push_back(pose);
-  object.operation = moveit_msgs::msg::CollisionObject::ADD;
-  return object;
-}
-
-moveit_msgs::msg::CollisionObject makeCylinder(
-  const std::string& id,
-  const std::string& frame,
-  const geometry_msgs::msg::Pose& pose,
-  double height,
-  double radius)
-{
-  moveit_msgs::msg::CollisionObject object;
-  object.header.frame_id = frame;
-  object.id = id;
-  shape_msgs::msg::SolidPrimitive shape;
-  shape.type = shape_msgs::msg::SolidPrimitive::CYLINDER;
-  shape.dimensions = {height, radius};
   object.primitives.push_back(shape);
   object.primitive_poses.push_back(pose);
   object.operation = moveit_msgs::msg::CollisionObject::ADD;
@@ -268,8 +136,6 @@ public:
     stowed_tolerance_rad_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
     stowed_ = parameterOrDeclare(
       node_, "stowed_joint_positions", std::vector<double>{0.0, -1.5, 1.5, 0.0, 0.0, 0.0});
-    use_simulation_scene_truth_ = parameterOrDeclare(node_, "use_simulation_scene_truth", true);
-    scene_state_port_ = parameterOrDeclare(node_, "scene_state_port", 15002);
     ground_surface_z_ = parameterOrDeclare(node_, "ground_surface_z_m", -0.225248769402);
 
     move_group_.setEndEffectorLink(link6_frame_);
@@ -461,6 +327,21 @@ private:
 
   void applyPlanningScene(const Eigen::Vector3d& target)
   {
+    (void)target;
+    // Simulation object truth is deliberately excluded from MoveIt.  Keep
+    // MuJoCo's physical scene and RViz mesh markers independent from the
+    // planning scene, and clear objects left by older server versions.
+    const auto known_objects = planning_scene_.getKnownObjectNames();
+    std::vector<std::string> stale_objects;
+    for (const auto& name : kLegacySceneObjectNames) {
+      if (std::find(known_objects.begin(), known_objects.end(), name) != known_objects.end()) {
+        stale_objects.push_back(name);
+      }
+    }
+    if (!stale_objects.empty()) {
+      planning_scene_.removeCollisionObjects(stale_objects);
+    }
+
     geometry_msgs::msg::Pose identity;
     identity.orientation.w = 1.0;
     geometry_msgs::msg::Pose ground = identity;
@@ -469,45 +350,11 @@ private:
     std::vector<moveit_msgs::msg::CollisionObject> objects{
       makeBox("ground", planning_frame_, ground, 2.0, 2.0, 0.02)};
 
-    bool received_truth = false;
-    if (use_simulation_scene_truth_) {
-      UdpSceneSnapshot receiver(scene_state_port_);
-      const auto poses = receiver.receive(1s);
-      const auto cube = poses.find("yellow_cube");
-      if (cube != poses.end()) {
-        objects.push_back(makeBox(
-          "yellow_cube", planning_frame_,
-          offsetPose(cube->second, {-0.000787, -0.000889, 0.025}),
-          0.05, 0.05, 0.05));
-        received_truth = true;
-      }
-      const auto bowl = poses.find("bowl");
-      if (bowl != poses.end()) {
-        objects.push_back(makeCylinder(
-          "bowl", planning_frame_, offsetPose(bowl->second, {-0.00023, -0.00005, 0.025}),
-          0.05, 0.06));
-      }
-      const auto zucchini = poses.find("zucchini");
-      if (zucchini != poses.end()) {
-        objects.push_back(makeBox(
-          "zucchini", planning_frame_,
-          offsetPose(zucchini->second, {0.00047, -0.00478, 0.01656}),
-          0.04, 0.15, 0.034));
-      }
-    }
-    if (!received_truth) {
-      geometry_msgs::msg::Pose target_pose = identity;
-      target_pose.position.x = target.x();
-      target_pose.position.y = target.y();
-      target_pose.position.z = target.z();
-      objects.push_back(makeBox("observe_target", planning_frame_, target_pose, 0.05, 0.05, 0.05));
-    }
-
     std::vector<moveit_msgs::msg::ObjectColor> colors;
     for (const auto& object : objects) {
       moveit_msgs::msg::ObjectColor object_color;
       object_color.id = object.id;
-      object_color.color = color(1.0F, 0.45F, 0.05F, object.id == "ground" ? 1.0F : 0.55F);
+      object_color.color = color(1.0F, 0.45F, 0.05F, 1.0F);
       colors.push_back(object_color);
     }
     if (!planning_scene_.applyCollisionObjects(objects, colors)) {
@@ -779,8 +626,6 @@ private:
   double camera_settle_s_{};
   double max_target_pixel_error_{};
   double stowed_tolerance_rad_{};
-  bool use_simulation_scene_truth_{};
-  int scene_state_port_{};
   double ground_surface_z_{};
 };
 }  // namespace d1_manipulation

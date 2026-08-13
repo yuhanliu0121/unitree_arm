@@ -32,6 +32,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from d1_manipulation.srv import DetectTarget
 from d1_manipulation.srv import EstimateCube
+from d1_manipulation.srv import VerifyHeldObject
 from d1_perception_adapter import (
     image_to_bgr,
     fit_ground_plane_ransac,
@@ -55,6 +56,10 @@ class DetectTargetServer(Node):
         ).value
         self._cube_service_name = self.declare_parameter(
             "cube_estimation_service_name", "/arm/perception/estimate_cube"
+        ).value
+        self._held_verify_service_name = self.declare_parameter(
+            "held_object_verification_service_name",
+            "/arm/perception/verify_held_object",
         ).value
         self._color_topic = self.declare_parameter(
             "color_topic", "/wrist_camera/color/image_raw"
@@ -115,6 +120,23 @@ class DetectTargetServer(Node):
         )
         self._cube_debug_directory = Path(
             self.declare_parameter("cube_debug_directory", "/tmp/d1_cube_debug_latest").value
+        )
+        self._held_verify_frames = int(
+            self.declare_parameter("held_verify_frames", 3).value
+        )
+        self._held_verify_roi_radius = int(
+            self.declare_parameter("held_verify_roi_radius_px", 140).value
+        )
+        self._held_verify_min_area = int(
+            self.declare_parameter("held_verify_min_area_px", 500).value
+        )
+        self._yellow_hsv_lower = np.asarray(
+            self.declare_parameter("yellow_hsv_lower", [18, 70, 60]).value,
+            dtype=np.uint8,
+        )
+        self._yellow_hsv_upper = np.asarray(
+            self.declare_parameter("yellow_hsv_upper", [40, 255, 255]).value,
+            dtype=np.uint8,
         )
         if not self._runtime_root.is_dir():
             raise RuntimeError(
@@ -184,6 +206,12 @@ class DetectTargetServer(Node):
             self._estimate_cube,
             callback_group=self._callback_group,
         )
+        self._held_verify_service = self.create_service(
+            VerifyHeldObject,
+            self._held_verify_service_name,
+            self._verify_held_object,
+            callback_group=self._callback_group,
+        )
         self.get_logger().info(
             "DetectTarget ready: service=%s cube_service=%s device=%s RGB=%s aligned_depth=%s"
             % (
@@ -213,6 +241,108 @@ class DetectTargetServer(Node):
         with self._condition:
             self._camera_info = message
             self._condition.notify_all()
+
+    def _wait_for_fresh_color(self) -> tuple[Image, CameraInfo]:
+        started = time.monotonic()
+        deadline = started + self._frame_timeout_s
+        with self._condition:
+            self._color_frames.clear()
+            while time.monotonic() < deadline:
+                if self._camera_info is not None:
+                    for arrival, color in reversed(self._color_frames):
+                        if arrival >= started:
+                            return color, self._camera_info
+                remaining = max(0.0, deadline - time.monotonic())
+                self._condition.wait(timeout=min(0.05, remaining))
+        raise TimeoutError("fresh wrist RGB frame is unavailable")
+
+    def _verify_held_object(self, request, response):
+        if not self._request_lock.acquire(blocking=False):
+            response.detail = "another perception request is already running"
+            return response
+        try:
+            if request.class_name != "yellow_cube":
+                raise ValueError(
+                    f"color verification is not configured for {request.class_name}"
+                )
+            areas: list[float] = []
+            for _ in range(self._held_verify_frames):
+                color_message, camera_info = self._wait_for_fresh_color()
+                color_bgr = image_to_bgr(
+                    bytes(color_message.data), color_message.height,
+                    color_message.width, color_message.step,
+                    color_message.encoding,
+                )
+                optical_frame = camera_info.header.frame_id
+                expected_camera = self._point_in_frame(
+                    request.expected_center, optical_frame
+                )
+                expected_pixel = project_plumb_bob(
+                    expected_camera, camera_info.k, camera_info.d
+                )
+                u, v = np.rint(expected_pixel).astype(int)
+                height, width = color_bgr.shape[:2]
+                if u < 0 or u >= width or v < 0 or v >= height:
+                    raise ValueError(
+                        "expected held-object centre projects outside RGB image"
+                    )
+                yy, xx = np.ogrid[:height, :width]
+                roi = (
+                    (xx - u) ** 2 + (yy - v) ** 2
+                    <= self._held_verify_roi_radius ** 2
+                )
+                hsv = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2HSV)
+                mask = cv2.inRange(
+                    hsv, self._yellow_hsv_lower, self._yellow_hsv_upper
+                )
+                mask[~roi] = 0
+                kernel = np.ones((5, 5), dtype=np.uint8)
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+                count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+                candidates = [float(stats[label, cv2.CC_STAT_AREA])
+                              for label in range(1, count)]
+                area = max(candidates, default=0.0)
+                areas.append(area)
+                debug = color_bgr.copy()
+                cv2.circle(debug, (u, v), self._held_verify_roi_radius,
+                           (255, 0, 255), 3)
+                cv2.drawMarker(debug, (u, v), (255, 0, 255),
+                               cv2.MARKER_CROSS, 24, 3)
+                cv2.putText(debug, f"yellow area={int(area)} px", (20, 32),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
+                            cv2.LINE_AA)
+                self._cube_debug_directory.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(
+                    str(self._cube_debug_directory /
+                        f"held_verify_{len(areas)}.png"), debug
+                )
+            response.success = True
+            response.mean_area_px = float(np.mean(areas))
+            response.held = all(
+                area >= self._held_verify_min_area for area in areas
+            )
+            response.detail = (
+                "yellow ROI areas="
+                + ",".join(str(int(area)) for area in areas)
+                + " px"
+            )
+            self.get_logger().info(
+                f"Held-object color verification: held={response.held} "
+                f"{response.detail}"
+            )
+            return response
+        except (TimeoutError, ValueError, TransformException) as exception:
+            response.detail = str(exception)
+            return response
+        except Exception as exception:
+            self.get_logger().error(
+                f"Held-object verification error: {exception}"
+            )
+            response.detail = str(exception)
+            return response
+        finally:
+            self._request_lock.release()
 
     def _wait_for_fresh_pair(self) -> tuple[Image, Image, CameraInfo]:
         started = time.monotonic()

@@ -10,7 +10,7 @@ rviz=false
 stage=compute
 
 function usage() {
-  print 'Usage: ./accept_visual_cube_grasp.zsh [--headless] [--rviz] [--stage compute|pregrasp|descend|lift]'
+  print 'Usage: ./accept_visual_cube_grasp.zsh [--headless] [--rviz] [--stage compute|pregrasp|descend|lift|carry]'
 }
 
 while (( $# > 0 )); do
@@ -23,7 +23,7 @@ while (( $# > 0 )); do
   esac
   shift
 done
-if [[ ${stage} != compute && ${stage} != pregrasp && ${stage} != descend && ${stage} != lift ]]; then
+if [[ ${stage} != compute && ${stage} != pregrasp && ${stage} != descend && ${stage} != lift && ${stage} != carry ]]; then
   print -u2 "Invalid stage: ${stage}"; usage >&2; exit 2
 fi
 

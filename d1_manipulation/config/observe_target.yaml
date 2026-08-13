@@ -26,10 +26,8 @@ d1_observe_target:
     stowed_tolerance_rad: 0.08
     stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
 
-    # Simulation-only planning-scene input. The formal Action remains a pure
-    # PointStamped interface; real perception will replace this provider.
-    use_simulation_scene_truth: true
-    scene_state_port: 15002
+    # Temporary nominal ground used by MoveIt until the perception-fitted
+    # plane is promoted into the planning scene.
     ground_surface_z_m: -0.225248769402
 
 d1_pick_object:
@@ -37,6 +35,7 @@ d1_pick_object:
     action_name: /arm/tasks/pick_object
     observe_action_name: /arm/debug/observe_target
     cube_estimation_service_name: /arm/perception/estimate_cube
+    held_object_verification_service_name: /arm/perception/verify_held_object
     planning_frame: base_link
     gravity_frame: world
     arm_group: arm
@@ -51,6 +50,7 @@ d1_pick_object:
     grasp_distance_max_m: -0.024
     grasp_distance_step_m: 0.002
     lift_distance_m: 0.10
+    carry_joint_positions: [0.0, -1.5, 1.5, 0.0, -0.6, 0.0]
     top_observation_distance_m: 0.35
     top_observation_distances_m: [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
     top_observation_roll_degrees: [0.0, 90.0, -90.0, 180.0, 45.0, -45.0, 135.0, -135.0]

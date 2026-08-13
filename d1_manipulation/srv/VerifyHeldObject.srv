@@ -1,0 +1,7 @@
+string class_name
+geometry_msgs/PointStamped expected_center
+---
+bool success
+bool held
+float64 mean_area_px
+string detail

@@ -30,6 +30,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/PickObject.action"
   "srv/DetectTarget.srv"
   "srv/EstimateCube.srv"
+  "srv/VerifyHeldObject.srv"
   DEPENDENCIES geometry_msgs
 )
 

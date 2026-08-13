@@ -47,9 +47,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=15002)
     parser.add_argument("--timeout", type=float, default=5.0)
-    parser.add_argument("--stage", choices=("compute", "pregrasp", "descend", "lift"), default="compute")
+    parser.add_argument("--stage", choices=("compute", "pregrasp", "descend", "lift", "carry"), default="compute")
     args = parser.parse_args()
-    stages = {"compute": 0, "pregrasp": 1, "descend": 2, "lift": 3}
+    stages = {"compute": 0, "pregrasp": 1, "descend": 2, "lift": 3, "carry": 4}
     target = receive_cube(args.port, args.timeout)
     initial_z = target[2]
     rclpy.init()
@@ -103,7 +103,7 @@ def main() -> int:
             f"yaw={result.grasp_yaw_degrees:.1f} deg "
             f"tilt={result.approach_tilt_degrees:.1f} deg"
         )
-        if args.stage == "lift":
+        if args.stage in ("lift", "carry"):
             final = receive_cube(args.port, args.timeout)
             rise = final[2] - initial_z
             if rise < 0.05:

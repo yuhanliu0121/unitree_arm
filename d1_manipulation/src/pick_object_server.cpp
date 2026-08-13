@@ -17,10 +17,13 @@
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
+#include <moveit_msgs/msg/collision_object.hpp>
+#include <moveit_msgs/msg/object_color.hpp>
 #include <moveit_msgs/srv/get_state_validity.hpp>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -30,6 +33,7 @@
 #include "d1_manipulation/action/observe_target.hpp"
 #include "d1_manipulation/action/pick_object.hpp"
 #include "d1_manipulation/srv/estimate_cube.hpp"
+#include "d1_manipulation/srv/verify_held_object.hpp"
 
 using namespace std::chrono_literals;
 
@@ -83,6 +87,9 @@ public:
     action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/tasks/pick_object"));
     observe_name_ = parameterOrDeclare(node_, "observe_action_name", std::string("/arm/debug/observe_target"));
     estimate_name_ = parameterOrDeclare(node_, "cube_estimation_service_name", std::string("/arm/perception/estimate_cube"));
+    verify_name_ = parameterOrDeclare(
+      node_, "held_object_verification_service_name",
+      std::string("/arm/perception/verify_held_object"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     link6_frame_ = parameterOrDeclare(node_, "link6_frame", std::string("Link6"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
@@ -102,6 +109,8 @@ public:
       throw std::invalid_argument("invalid signed cube pregrasp/grasp search parameters");
     }
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
+    carry_ = parameterOrDeclare(
+      node_, "carry_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, -0.6, 0});
     top_distances_ = parameterOrDeclare(node_, "top_observation_distances_m", std::vector<double>{0.35, 0.40, 0.45, 0.50, 0.55, 0.60});
     top_rolls_ = parameterOrDeclare(node_, "top_observation_roll_degrees", std::vector<double>{0, 90, -90, 180, 45, -45, 135, -135});
     camera_settle_ = parameterOrDeclare(node_, "camera_settle_s", 0.5);
@@ -125,6 +134,7 @@ public:
 
     observe_client_ = rclcpp_action::create_client<Observe>(node_, observe_name_);
     estimate_client_ = node_->create_client<srv::EstimateCube>(estimate_name_);
+    verify_client_ = node_->create_client<srv::VerifyHeldObject>(verify_name_);
     state_validity_client_ = node_->create_client<moveit_msgs::srv::GetStateValidity>(
       "/check_state_validity");
     gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
@@ -134,7 +144,7 @@ public:
       node_, action_name_,
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Pick::Goal> goal) {
         if (busy_.exchange(true) || goal->target.header.frame_id.empty() ||
-          goal->stop_after > Pick::Goal::GRASP_AND_LIFT)
+          goal->stop_after > Pick::Goal::GRASP_AND_CARRY)
         {
           busy_.store(false);
           return rclcpp_action::GoalResponse::REJECT;
@@ -445,7 +455,16 @@ private:
   bool removeTargetCollision()
   {
     const std::vector<std::string> target_ids{"yellow_cube", "observe_target"};
-    planning_scene_.removeCollisionObjects(target_ids);
+    const auto known = planning_scene_.getKnownObjectNames();
+    std::vector<std::string> present_targets;
+    for (const auto& id : target_ids) {
+      if (std::find(known.begin(), known.end(), id) != known.end()) {
+        present_targets.push_back(id);
+      }
+    }
+    if (!present_targets.empty()) {
+      planning_scene_.removeCollisionObjects(present_targets);
+    }
     const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (std::chrono::steady_clock::now() < deadline) {
       const auto names = planning_scene_.getKnownObjectNames();
@@ -469,6 +488,111 @@ private:
     }
     RCLCPP_ERROR(node_->get_logger(), "target collision remained in the MoveIt world after removal");
     return false;
+  }
+
+  bool applyEstimatedGround(const Eigen::Vector3d& raw_normal, double offset)
+  {
+    Eigen::Vector3d normal = raw_normal.normalized();
+    if (!normal.allFinite() || normal.norm() < 1e-6 || !std::isfinite(offset)) return false;
+
+    constexpr double ground_thickness = 0.02;
+    const Eigen::Vector3d point_on_surface = -offset * normal;
+    const Eigen::Vector3d centre = point_on_surface - 0.5 * ground_thickness * normal;
+    const Eigen::Quaterniond orientation = Eigen::Quaterniond::FromTwoVectors(
+      Eigen::Vector3d::UnitZ(), normal);
+
+    moveit_msgs::msg::CollisionObject ground;
+    ground.header.frame_id = planning_frame_;
+    ground.id = "ground";
+    shape_msgs::msg::SolidPrimitive box;
+    box.type = shape_msgs::msg::SolidPrimitive::BOX;
+    box.dimensions = {2.0, 2.0, ground_thickness};
+    ground.primitives.push_back(box);
+    geometry_msgs::msg::Pose pose;
+    pose.position.x = centre.x(); pose.position.y = centre.y(); pose.position.z = centre.z();
+    pose.orientation.x = orientation.x(); pose.orientation.y = orientation.y();
+    pose.orientation.z = orientation.z(); pose.orientation.w = orientation.w();
+    ground.primitive_poses.push_back(pose);
+    ground.operation = moveit_msgs::msg::CollisionObject::ADD;
+
+    moveit_msgs::msg::ObjectColor ground_color;
+    ground_color.id = ground.id;
+    ground_color.color = color(1.0F, 0.45F, 0.05F, 1.0F);
+    if (!planning_scene_.applyCollisionObjects({ground}, {ground_color})) return false;
+    std::this_thread::sleep_for(300ms);
+    return true;
+  }
+
+  geometry_msgs::msg::PointStamped attachEstimatedCube(
+    const Eigen::Vector3d& center, const Eigen::Vector3d& edge, const Eigen::Vector3d& up)
+  {
+    const Eigen::Isometry3d planning_from_tcp = lookup(planning_frame_, tcp_frame_);
+    const Eigen::Isometry3d tcp_from_planning = planning_from_tcp.inverse();
+    const Eigen::Vector3d x = (edge - edge.dot(up) * up).normalized();
+    const Eigen::Vector3d z = up.normalized();
+    const Eigen::Vector3d y = z.cross(x).normalized();
+    Eigen::Matrix3d planning_rotation;
+    planning_rotation.col(0) = x;
+    planning_rotation.col(1) = y;
+    planning_rotation.col(2) = z;
+    const Eigen::Quaterniond tcp_orientation(tcp_from_planning.linear() * planning_rotation);
+    const Eigen::Vector3d tcp_center = tcp_from_planning * center;
+
+    moveit_msgs::msg::AttachedCollisionObject attached;
+    attached.link_name = tcp_frame_;
+    attached.touch_links = {tcp_frame_, link6_frame_, "left_finger", "right_finger"};
+    attached.object.header.frame_id = tcp_frame_;
+    attached.object.id = "held_yellow_cube";
+    shape_msgs::msg::SolidPrimitive box;
+    box.type = shape_msgs::msg::SolidPrimitive::BOX;
+    box.dimensions = {cube_size_, cube_size_, cube_size_};
+    attached.object.primitives.push_back(box);
+    geometry_msgs::msg::Pose pose;
+    pose.position.x = tcp_center.x(); pose.position.y = tcp_center.y();
+    pose.position.z = tcp_center.z();
+    pose.orientation.x = tcp_orientation.x(); pose.orientation.y = tcp_orientation.y();
+    pose.orientation.z = tcp_orientation.z(); pose.orientation.w = tcp_orientation.w();
+    attached.object.primitive_poses.push_back(pose);
+    attached.object.operation = moveit_msgs::msg::CollisionObject::ADD;
+    if (!planning_scene_.applyAttachedCollisionObject(attached)) {
+      throw std::runtime_error("failed to attach perception-estimated cube to TCP");
+    }
+    std::this_thread::sleep_for(500ms);
+
+    geometry_msgs::msg::PointStamped expected;
+    expected.header.frame_id = tcp_frame_;
+    expected.header.stamp = node_->now();
+    expected.point.x = tcp_center.x(); expected.point.y = tcp_center.y();
+    expected.point.z = tcp_center.z();
+    return expected;
+  }
+
+  bool moveToCarry()
+  {
+    move_group_.setStartStateToCurrentState();
+    if (!move_group_.setJointValueTarget(carry_)) return false;
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    return move_group_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
+      move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+  }
+
+  bool verifyHeldCube(const geometry_msgs::msg::PointStamped& expected, std::string& detail)
+  {
+    if (!verify_client_->wait_for_service(5s)) {
+      detail = "held-object verification service unavailable";
+      return false;
+    }
+    auto request = std::make_shared<srv::VerifyHeldObject::Request>();
+    request->class_name = "yellow_cube";
+    request->expected_center = expected;
+    auto future = verify_client_->async_send_request(request);
+    if (future.wait_for(10s) != std::future_status::ready) {
+      detail = "held-object verification timed out";
+      return false;
+    }
+    const auto response = future.get();
+    detail = response->detail;
+    return response->success && response->held;
   }
 
   bool restoreTargetCollision(
@@ -548,6 +672,11 @@ private:
       }
       Eigen::Vector3d up(coarse->ground_normal.x, coarse->ground_normal.y, coarse->ground_normal.z);
       Eigen::Vector3d coarse_center(coarse->center.point.x, coarse->center.point.y, coarse->center.point.z);
+      if (!applyEstimatedGround(up, coarse->ground_offset)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "ESTIMATE_POSE",
+          "failed to apply perception-fitted ground to MoveIt");
+        return;
+      }
       feedback(handle, "MOVE_TOP_OBSERVE", 0.35F, "Moving RGB camera directly above coarse centre");
       if (!moveCameraTopDown(coarse_center, up.normalized())) {
         fail(handle, Pick::Result::FAILURE_THEORETICALLY_INFEASIBLE, "MOVE_TOP_OBSERVE", "top observation pose is not plannable"); return;
@@ -714,10 +843,31 @@ private:
       if (lift_trajectory.joint_trajectory.points.size() < 2 || !executeTrajectory(lift_trajectory)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "LIFT", "Cartesian lift failed"); return;
       }
+      if (goal->stop_after == Pick::Goal::GRASP_AND_LIFT) {
+        result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
+        result->detail = "yellow_cube visually estimated, grasped and lifted";
+        handle->succeed(result); busy_.store(false);
+        RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_LIFT");
+        return;
+      }
+      feedback(handle, "ATTACH_OBJECT", 0.96F, "Attaching perception-estimated cube to TCP");
+      const auto expected_held_center = attachEstimatedCube(center, edge, up);
+      feedback(handle, "CARRY", 0.98F, "Moving grasped cube to CARRY pose");
+      if (!moveToCarry()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "CARRY", "CARRY trajectory failed");
+        return;
+      }
+      feedback(handle, "VERIFY_GRASP", 0.99F, "Checking yellow object in wrist-camera ROI");
+      std::string verification_detail;
+      if (!verifyHeldCube(expected_held_center, verification_detail)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "VERIFY_GRASP", verification_detail);
+        return;
+      }
       result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
-      result->detail = "yellow_cube visually estimated, grasped and lifted";
+      result->detail = "yellow_cube grasped, carried and visually verified: " +
+        verification_detail;
       handle->succeed(result); busy_.store(false);
-      RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_LIFT");
+      RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_CARRY");
     } catch (const std::exception& error) {
       RCLCPP_ERROR(node_->get_logger(), "PickObject error: %s", error.what());
       fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "INTERNAL", error.what());
@@ -731,14 +881,16 @@ private:
   tf2_ros::TransformListener tf_listener_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
   rclcpp::Client<srv::EstimateCube>::SharedPtr estimate_client_;
+  rclcpp::Client<srv::VerifyHeldObject>::SharedPtr verify_client_;
   rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr state_validity_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Server<Pick>::SharedPtr server_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_publisher_;
   std::atomic<bool> busy_{false}, cancel_{false};
-  std::string action_name_, observe_name_, estimate_name_, planning_frame_;
+  std::string action_name_, observe_name_, estimate_name_, verify_name_, planning_frame_;
   std::string link6_frame_, tcp_frame_, camera_frame_;
   std::vector<double> stowed_;
+  std::vector<double> carry_;
   std::vector<double> top_distances_, top_rolls_;
   double cube_size_{}, pregrasp_distance_max_{}, pregrasp_distance_min_{};
   double pregrasp_distance_step_{}, grasp_distance_min_{}, grasp_distance_max_{};
