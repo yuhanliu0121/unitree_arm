@@ -6,7 +6,11 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .scene import MESH_UP_TO_Z_QUAT, OBJECT_NAMES
+from .scene import (
+    MESH_UP_TO_Z_QUAT,
+    OBJECT_NAMES,
+    TRASH_BIN_VISUAL_PREFIX,
+)
 
 
 @dataclass(frozen=True)
@@ -262,6 +266,31 @@ def physical_collision_specs(
     return tuple(specs)
 
 
+def trash_bin_visual_specs(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+) -> tuple[MarkerSpec, ...]:
+    """Describe the static open-top trash-bin render proxies for RViz."""
+    specs = []
+    for geom_id in range(model.ngeom):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+        if not name or not name.startswith(TRASH_BIN_VISUAL_PREFIX):
+            continue
+        for primitive in _primitive_spec(model, data, geom_id):
+            specs.append(
+                MarkerSpec(
+                    name=primitive.name,
+                    shape=primitive.shape,
+                    position=primitive.position,
+                    orientation_xyzw=primitive.orientation_xyzw,
+                    scale=primitive.scale,
+                    opaque=True,
+                    color_rgba=(0.16, 0.32, 0.42, 1.0),
+                )
+            )
+    return tuple(specs)
+
+
 class RosScenePublisher:
     """Publish MuJoCo visual and physical geometry as independent RViz layers."""
 
@@ -389,6 +418,11 @@ class RosScenePublisher:
                 marker.color.g = 0.85
                 marker.color.b = 1.0
                 marker.color.a = 1.0 if spec.opaque else 0.55
+            elif spec.color_rgba is not None:
+                marker.color.r = spec.color_rgba[0]
+                marker.color.g = spec.color_rgba[1]
+                marker.color.b = spec.color_rgba[2]
+                marker.color.a = spec.color_rgba[3]
             result.markers.append(marker)
         return result
 
@@ -430,7 +464,7 @@ class RosScenePublisher:
                     self._model,
                     self._data,
                     self._objects_root,
-                ),
+                ) + trash_bin_visual_specs(self._model, self._data),
                 "object_meshes",
                 False,
             )

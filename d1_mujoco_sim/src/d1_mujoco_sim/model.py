@@ -442,6 +442,7 @@ def _add_ground(
     spec: mujoco.MjSpec,
     texture_path: Path,
     source_square_size_m: float,
+    scene: dict | None,
 ) -> None:
     texture_path = Path(texture_path).resolve()
     if not texture_path.is_file():
@@ -471,11 +472,25 @@ def _add_ground(
         ],
     )
     material.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = texture_name
+    scene_config = scene or {}
+    region = scene_config.get("spawn_region", {})
+    base_box = scene_config.get("base_exclusion_box", {})
+    expansion = float(region.get("outer_expansion_m", 0.0))
+    inner_min_x = float(base_box.get("min_x_m", -1.5))
+    inner_max_x = float(base_box.get("max_x_m", 1.5))
+    inner_half_y = float(base_box.get("half_width_y_m", 1.5))
+    # Keep the whole forward workspace and the mobile base on the rendered
+    # ground patch. The plane remains physically infinite.
+    ground_center_x = (inner_min_x + inner_max_x) / 2.0
+    ground_half_x = max(
+        2.0, (inner_max_x - inner_min_x) / 2.0 + expansion + 0.5
+    )
+    ground_half_y = max(2.0, inner_half_y + expansion + 0.5)
     spec.worldbody.add_geom(
         name="ground",
         type=mujoco.mjtGeom.mjGEOM_PLANE,
-        size=[2.0, 2.0, 0.05],
-        pos=[0.0, 0.0, -0.001],
+        size=[ground_half_x, ground_half_y, 0.05],
+        pos=[ground_center_x, 0.0, -0.001],
         material=material_name,
         contype=1,
         conaffinity=1,
@@ -643,6 +658,7 @@ def build_model(
         spec,
         ground_texture_path or default_ground_texture(),
         float((scene or {}).get("ground_texture_square_size_m", 0.6)),
+        scene,
     )
     _add_skybox(spec)
     spec.worldbody.add_light(

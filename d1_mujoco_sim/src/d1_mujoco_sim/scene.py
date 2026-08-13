@@ -12,6 +12,8 @@ OBJECT_NAMES = ("yellow_cube", "bowl", "zucchini")
 OBJECT_VISUAL_GROUP = 2
 OBJECT_COLLISION_GROUP = 4
 OBJECT_COLLISION_PREFIX = "object_collision_"
+TRASH_BIN_VISUAL_PREFIX = "trash_bin_visual_"
+TRASH_BIN_COLLISION_PREFIX = "trash_bin_collision_"
 MESH_UP_TO_Z_QUAT = [math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0]
 
 
@@ -22,6 +24,12 @@ class SpawnPose:
     y: float
     yaw: float
     footprint_radius: float
+
+
+@dataclass(frozen=True)
+class SceneLayout:
+    objects: tuple[SpawnPose, ...]
+    trash_bin: SpawnPose
 
 
 _FOOTPRINT_RADIUS = {
@@ -35,11 +43,59 @@ def default_objects_root() -> Path:
     return Path(__file__).resolve().parents[3] / "objects"
 
 
-def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
-    """Deterministically place all objects without footprint overlap."""
+def _ring_bounds(scene: dict) -> tuple[float, float, float, float, float, float]:
+    inner = scene["base_exclusion_box"]
+    inner_min_x = float(inner["min_x_m"])
+    inner_max_x = float(inner["max_x_m"])
+    inner_half_y = float(inner["half_width_y_m"])
+    expansion = float(scene["spawn_region"]["outer_expansion_m"])
+    return (
+        inner_min_x,
+        inner_max_x,
+        -inner_half_y,
+        inner_half_y,
+        expansion,
+        float(scene["spawn_region"]["outline_width_m"]),
+    )
+
+
+def _fits_rectangular_ring(
+    x: float,
+    y: float,
+    radius: float,
+    bounds: tuple[float, float, float, float, float, float],
+) -> bool:
+    tolerance = 1e-9
+    inner_min_x, inner_max_x, inner_min_y, inner_max_y, expansion, _ = bounds
+    outer_min_x = inner_min_x - expansion
+    outer_max_x = inner_max_x + expansion
+    outer_min_y = inner_min_y - expansion
+    outer_max_y = inner_max_y + expansion
+    if not (
+        outer_min_x + radius - tolerance
+        <= x
+        <= outer_max_x - radius + tolerance
+        and outer_min_y + radius - tolerance
+        <= y
+        <= outer_max_y - radius + tolerance
+    ):
+        return False
+    # Only use the arm's forward half-plane: +X is forward, with azimuth
+    # spanning -90 to +90 degrees. Keep the entire footprint in front.
+    if x < radius - tolerance:
+        return False
+    # Distance from the circle centre to the inner rectangle. Requiring this
+    # to be at least the footprint radius keeps the full item in the ring.
+    dx = max(inner_min_x - x, 0.0, x - inner_max_x)
+    dy = max(inner_min_y - y, 0.0, y - inner_max_y)
+    return math.hypot(dx, dy) >= radius - tolerance
+
+
+def sample_scene_layout(scene: dict) -> SceneLayout:
+    """Jointly place three grasp objects and the bin in the Go2 ring."""
     if scene.get("placement_mode", "random") == "fixed":
         configured = scene["fixed_object_poses"]
-        return tuple(
+        objects = tuple(
             SpawnPose(
                 name=name,
                 x=float(configured[name]["x_m"]),
@@ -49,32 +105,74 @@ def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
             )
             for name in OBJECT_NAMES
         )
+        bin_config = scene["trash_bin"]
+        return SceneLayout(
+            objects=objects,
+            trash_bin=SpawnPose(
+                name="trash_bin",
+                x=float(bin_config["fixed_center_x_m"]),
+                y=float(bin_config["fixed_center_y_m"]),
+                yaw=0.0,
+                footprint_radius=float(bin_config["outer_radius_m"]),
+            ),
+        )
 
-    region = scene["spawn_region"]
-    depth = float(region["depth_x_m"])
-    width = float(region["width_y_m"])
+    bounds = _ring_bounds(scene)
+    inner_min_x, inner_max_x, inner_min_y, inner_max_y, expansion, _ = bounds
+    outer_min_x = inner_min_x - expansion
+    outer_max_x = inner_max_x + expansion
+    outer_min_y = inner_min_y - expansion
+    outer_max_y = inner_max_y + expansion
     gap = float(scene["object_gap_m"])
-    base_radius = float(scene["base_exclusion_radius_m"])
-    base_box = scene.get("base_exclusion_box")
     rng = np.random.default_rng(int(scene["random_seed"]))
 
-    # Largest-first rejection sampling is deterministic and avoids cases where
-    # small objects fragment the limited 0.3 m x 0.4 m workspace.
-    order = sorted(OBJECT_NAMES, key=_FOOTPRINT_RADIUS.get, reverse=True)
+    radii = dict(_FOOTPRINT_RADIUS)
+    radii["trash_bin"] = float(scene["trash_bin"]["outer_radius_m"])
+    # Largest-first sampling preserves the scarce full-width locations needed
+    # by the 30 cm-diameter bin.
+    order = sorted((*OBJECT_NAMES, "trash_bin"), key=radii.get, reverse=True)
     placed: list[SpawnPose] = []
     for name in order:
-        radius = _FOOTPRINT_RADIUS[name]
-        for _ in range(10_000):
-            x = float(rng.uniform(radius, depth - radius))
-            y = float(rng.uniform(-width / 2 + radius, width / 2 - radius))
+        radius = radii[name]
+        for _ in range(100_000):
+            if name == "trash_bin":
+                # The 30 cm ring width equals the 30 cm bin diameter. To keep
+                # the complete bin outside the Go2 box, its centre must lie on
+                # one of the two side-band centre lines; sample along that line.
+                y = float(
+                    rng.choice((-1.0, 1.0))
+                    * (inner_max_y + radius)
+                )
+                min_distance = float(
+                    scene["trash_bin"]["min_base_distance_m"]
+                )
+                max_distance = float(
+                    scene["trash_bin"]["max_base_distance_m"]
+                )
+                min_x = max(radius, math.sqrt(max(0.0, min_distance**2 - y**2)))
+                max_x = min(
+                    outer_max_x - radius,
+                    math.sqrt(max(0.0, max_distance**2 - y**2)),
+                )
+                if min_x > max_x:
+                    raise RuntimeError(
+                        "Trash-bin distance limits do not intersect the side ring"
+                    )
+                x = float(rng.uniform(min_x, max_x))
+            else:
+                x = float(rng.uniform(outer_min_x + radius, outer_max_x - radius))
+                y = float(rng.uniform(outer_min_y + radius, outer_max_y - radius))
             yaw = float(rng.uniform(-math.pi, math.pi))
-            if math.hypot(x, y) < base_radius + radius + gap:
+            if not _fits_rectangular_ring(x, y, radius, bounds):
                 continue
-            if base_box is not None:
-                min_x = float(base_box["min_x_m"]) - radius - gap
-                max_x = float(base_box["max_x_m"]) + radius + gap
-                half_y = float(base_box["half_width_y_m"]) + radius + gap
-                if min_x <= x <= max_x and abs(y) <= half_y:
+            if name == "trash_bin":
+                bin_config = scene["trash_bin"]
+                base_distance = math.hypot(x, y)
+                if not (
+                    float(bin_config["min_base_distance_m"])
+                    <= base_distance
+                    <= float(bin_config["max_base_distance_m"])
+                ):
                     continue
             if any(
                 math.hypot(x - other.x, y - other.y)
@@ -86,18 +184,33 @@ def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
             break
         else:
             raise RuntimeError(
-                f"Could not place {name} in the configured spawn region"
+                f"Could not place {name} in the configured rectangular ring"
             )
 
     by_name = {pose.name: pose for pose in placed}
-    return tuple(by_name[name] for name in OBJECT_NAMES)
+    return SceneLayout(
+        objects=tuple(by_name[name] for name in OBJECT_NAMES),
+        trash_bin=by_name["trash_bin"],
+    )
+
+
+def sample_spawn_poses(scene: dict) -> tuple[SpawnPose, ...]:
+    """Compatibility helper returning only grasp-object poses."""
+    return sample_scene_layout(scene).objects
 
 
 def _add_region_outline(spec: mujoco.MjSpec, scene: dict) -> None:
-    region = scene["spawn_region"]
-    depth = float(region["depth_x_m"])
-    width = float(region["width_y_m"])
-    line_width = float(region["outline_width_m"])
+    inner_min_x, inner_max_x, inner_min_y, inner_max_y, expansion, line_width = (
+        _ring_bounds(scene)
+    )
+    min_x = inner_min_x - expansion
+    max_x = inner_max_x + expansion
+    min_y = inner_min_y - expansion
+    max_y = inner_max_y + expansion
+    center_x = (min_x + max_x) / 2.0
+    center_y = (min_y + max_y) / 2.0
+    half_x = (max_x - min_x) / 2.0
+    half_y = (max_y - min_y) / 2.0
     rgba = [1.0, 1.0, 1.0, 1.0]
     common = {
         "type": mujoco.mjtGeom.mjGEOM_BOX,
@@ -108,21 +221,21 @@ def _add_region_outline(spec: mujoco.MjSpec, scene: dict) -> None:
     }
     spec.worldbody.add_geom(
         name="spawn_region_near",
-        pos=[0.0, 0.0, 0.0005],
-        size=[line_width / 2, width / 2, 0.001],
+        pos=[min_x, center_y, 0.0005],
+        size=[line_width / 2, half_y, 0.001],
         **common,
     )
     spec.worldbody.add_geom(
         name="spawn_region_far",
-        pos=[depth, 0.0, 0.0005],
-        size=[line_width / 2, width / 2, 0.001],
+        pos=[max_x, center_y, 0.0005],
+        size=[line_width / 2, half_y, 0.001],
         **common,
     )
-    for side, y in (("left", -width / 2), ("right", width / 2)):
+    for side, y in (("left", min_y), ("right", max_y)):
         spec.worldbody.add_geom(
             name=f"spawn_region_{side}",
-            pos=[depth / 2, y, 0.0005],
-            size=[depth / 2, line_width / 2, 0.001],
+            pos=[center_x, y, 0.0005],
+            size=[half_x, line_width / 2, 0.001],
             **common,
         )
 
@@ -190,6 +303,101 @@ def _collision_common(show_collisions: bool) -> dict:
         "group": OBJECT_COLLISION_GROUP,
         "rgba": _collision_rgba(show_collisions),
     }
+
+
+def _add_trash_bin(
+    spec: mujoco.MjSpec,
+    scene: dict,
+    pose: SpawnPose,
+    show_collisions: bool,
+) -> None:
+    """Add a static segmented open-top bin with separate render proxies."""
+    config = scene["trash_bin"]
+    center_x = pose.x
+    center_y = pose.y
+    outer_radius = float(config["outer_radius_m"])
+    height = float(config["height_m"])
+    wall_thickness = float(config["wall_thickness_m"])
+    bottom_thickness = float(config["bottom_thickness_m"])
+    segment_count = int(config["wall_segments"])
+    if not (
+        outer_radius > wall_thickness > 0.0
+        and height > bottom_thickness > 0.0
+        and segment_count >= 8
+    ):
+        raise ValueError("Invalid trash-bin dimensions")
+
+    wall_radius = outer_radius - wall_thickness / 2.0
+    tangent_half = wall_radius * math.tan(math.pi / segment_count) + 0.001
+    wall_half_height = (height - bottom_thickness) / 2.0
+    wall_z = bottom_thickness + wall_half_height
+    visual_rgba = [0.16, 0.32, 0.42, 1.0]
+    collision_rgba = _collision_rgba(show_collisions)
+    collision_common = {
+        "contype": 1,
+        "conaffinity": 1,
+        "condim": 4,
+        "friction": [0.8, 0.01, 0.001],
+        "group": OBJECT_COLLISION_GROUP,
+        "rgba": collision_rgba,
+    }
+    spec.worldbody.add_site(
+        name="trash_bin_bottom_center",
+        pos=[center_x, center_y, 0.0],
+        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        size=[0.001, 0.0, 0.0],
+        rgba=[1.0, 1.0, 1.0, 0.0],
+    )
+
+    spec.worldbody.add_geom(
+        name=f"{TRASH_BIN_VISUAL_PREFIX}bottom",
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        pos=[center_x, center_y, bottom_thickness / 2.0],
+        size=[outer_radius, bottom_thickness / 2.0, 0.0],
+        contype=0,
+        conaffinity=0,
+        group=OBJECT_VISUAL_GROUP,
+        rgba=visual_rgba,
+    )
+    spec.worldbody.add_geom(
+        name=f"{TRASH_BIN_COLLISION_PREFIX}bottom",
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        pos=[center_x, center_y, bottom_thickness / 2.0],
+        size=[outer_radius, bottom_thickness / 2.0, 0.0],
+        **collision_common,
+    )
+
+    for index in range(segment_count):
+        theta = 2.0 * math.pi * index / segment_count
+        cos_theta = math.cos(theta)
+        sin_theta = math.sin(theta)
+        position = [
+            center_x + wall_radius * cos_theta,
+            center_y + wall_radius * sin_theta,
+            wall_z,
+        ]
+        # Local x follows the tangent, local y points inward, and local z is up.
+        xyaxes = [-sin_theta, cos_theta, 0.0, -cos_theta, -sin_theta, 0.0]
+        size = [tangent_half, wall_thickness / 2.0, wall_half_height]
+        spec.worldbody.add_geom(
+            name=f"{TRASH_BIN_VISUAL_PREFIX}wall_{index:02d}",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            pos=position,
+            xyaxes=xyaxes,
+            size=size,
+            contype=0,
+            conaffinity=0,
+            group=OBJECT_VISUAL_GROUP,
+            rgba=visual_rgba,
+        )
+        spec.worldbody.add_geom(
+            name=f"{TRASH_BIN_COLLISION_PREFIX}wall_{index:02d}",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            pos=position,
+            xyaxes=xyaxes,
+            size=size,
+            **collision_common,
+        )
 
 
 def _add_cube_collision(body, show_collisions: bool, mass: float) -> None:
@@ -276,7 +484,9 @@ def add_object_scene(
 ) -> tuple[SpawnPose, ...]:
     objects_root = Path(objects_root).resolve()
     _add_region_outline(spec, scene)
-    poses = sample_spawn_poses(scene)
+    layout = sample_scene_layout(scene)
+    _add_trash_bin(spec, scene, layout.trash_bin, show_collisions)
+    poses = layout.objects
     masses = scene["objects"]
 
     for pose in poses:

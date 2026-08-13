@@ -12,7 +12,7 @@ import yaml
 
 from .dds_service import D1DdsService
 from .model import build_model, default_description_root
-from .scene import OBJECT_NAMES, default_objects_root
+from .scene import OBJECT_NAMES, default_objects_root, sample_scene_layout
 from .scene_state import SceneStateUdpPublisher
 from .simulator import D1Simulator
 
@@ -167,6 +167,10 @@ def main() -> None:
         object_positions.append(
             f"{name}=({position[0]:.3f},{position[1]:.3f})"
         )
+    trash_bin_pose = sample_scene_layout(config["scene"]).trash_bin
+    object_positions.append(
+        f"trash_bin=({trash_bin_pose.x:.3f},{trash_bin_pose.y:.3f})"
+    )
     logging.getLogger(__name__).info(
         "Object layout mode=%s seed=%s: %s",
         config["scene"].get("placement_mode", "random"),

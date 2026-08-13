@@ -28,6 +28,7 @@ find_package(visualization_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ObserveTarget.action"
   "action/PickObject.action"
+  "action/DropObject.action"
   "srv/DetectTarget.srv"
   "srv/EstimateCube.srv"
   "srv/VerifyHeldObject.srv"
@@ -82,12 +83,21 @@ ament_target_dependencies(pick_object_server
   trajectory_msgs
   visualization_msgs
 )
+add_executable(drop_object_server src/drop_object_server.cpp)
+target_compile_features(drop_object_server PRIVATE cxx_std_17)
+target_link_libraries(drop_object_server Eigen3::Eigen)
+ament_target_dependencies(drop_object_server
+  control_msgs geometry_msgs moveit_core moveit_msgs
+  moveit_ros_planning_interface rclcpp rclcpp_action shape_msgs
+  tf2_eigen tf2_ros trajectory_msgs visualization_msgs
+)
 rosidl_get_typesupport_target(cpp_typesupport_target
   ${PROJECT_NAME} rosidl_typesupport_cpp)
 target_link_libraries(observe_target_server "${cpp_typesupport_target}")
 target_link_libraries(pick_object_server "${cpp_typesupport_target}")
+target_link_libraries(drop_object_server "${cpp_typesupport_target}")
 
-install(TARGETS observation_geometry observe_target_server pick_object_server
+install(TARGETS observation_geometry observe_target_server pick_object_server drop_object_server
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -105,6 +115,10 @@ install(PROGRAMS scripts/observe_seed_cube.py
 install(PROGRAMS scripts/pick_seed_cube.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME pick_seed_cube
+)
+install(PROGRAMS scripts/drop_seed_bin.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME drop_seed_bin
 )
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 

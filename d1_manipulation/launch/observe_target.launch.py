@@ -70,6 +70,12 @@ def generate_launch_description():
             ),
             Node(
                 package="d1_manipulation",
+                executable="drop_object_server",
+                output="screen",
+                parameters=[moveit_config.to_dict(), str(observe_config)],
+            ),
+            Node(
+                package="d1_manipulation",
                 executable="detect_target_server",
                 output="screen",
                 parameters=[

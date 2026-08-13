@@ -91,6 +91,17 @@ def scene_state_payload(model: mujoco.MjModel, data: mujoco.MjData) -> str:
         )
         lines.append(_pose_line(name, position, quaternion))
 
+    trash_bin_pose = _site_pose(model, data, "trash_bin_bottom_center")
+    if trash_bin_pose is not None:
+        lines.append(
+            _pose_line(
+                "trash_bin",
+                *_pose_in_body_frame(
+                    model, data, "base_link", *trash_bin_pose
+                ),
+            )
+        )
+
     # These diagnostics share the same compact pose-shaped record so the
     # simulation bridge stays dependency-free. They make the physical grasp
     # independently verifiable instead of trusting MoveIt's attached object.

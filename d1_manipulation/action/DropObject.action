@@ -1,0 +1,19 @@
+geometry_msgs/PointStamped target
+---
+uint8 FAILURE_NONE=0
+uint8 FAILURE_INCOMPLETE_INFORMATION=1
+uint8 FAILURE_THEORETICALLY_INFEASIBLE=2
+uint8 FAILURE_EXECUTION_ERROR=3
+uint8 FAILURE_REPOSITION_REQUIRED=4
+bool success
+uint8 failure_category
+string failed_state
+string detail
+bool returned_to_stowed
+geometry_msgs/PoseStamped release_pose
+float64 height_offset_m
+float64 release_yaw_degrees
+---
+string current_state
+float32 progress
+string detail

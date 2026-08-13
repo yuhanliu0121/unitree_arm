@@ -133,8 +133,8 @@ scene:
   # d1-mujoco-sim --fixed-layout selects these poses explicitly.
   fixed_object_poses:
     yellow_cube: {x_m: 0.28, y_m: -0.24, yaw_deg: 0.0}
-    bowl: {x_m: 0.50, y_m: 0.28, yaw_deg: 0.0}
-    zucchini: {x_m: 0.10, y_m: 0.30, yaw_deg: 90.0}
+    bowl: {x_m: 0.53, y_m: -0.409, yaw_deg: 0.0}
+    zucchini: {x_m: 0.488, y_m: -0.001, yaw_deg: 90.0}
   # Task-level damping copied from the ATEC Task E object configuration to
   # suppress residual sliding that is not representative of the real gripper.
   object_linear_damping: 2.0
@@ -142,19 +142,29 @@ scene:
   # Provisional physical side length of the black calibration square in the
   # source floor photo. Change this after measuring it in the real scene.
   ground_texture_square_size_m: 0.6
-  object_gap_m: 0.008
-  base_exclusion_radius_m: 0.06
-  # Keep random objects out of the fixed-pose Go2 platform box without moving
-  # or resizing the visible white workspace rectangle.
+  # Minimum clearance between the outer footprints of any two scene items.
+  object_gap_m: 0.20
+  # XY projection of the fixed-pose Go2 mesh; this is the inner ring boundary.
   base_exclusion_box:
     min_x_m: -0.421484
     max_x_m: 0.331958
     half_width_y_m: 0.169127
   spawn_region:
-    # Base centre is the midpoint of the x=0 edge; +x points inward.
-    depth_x_m: 0.6
-    width_y_m: 0.8
+    # Rectangular ring around the Go2 XY bounding box.
+    outer_expansion_m: 0.30
     outline_width_m: 0.003
+  trash_bin:
+    # Deterministic acceptance pose; random mode samples it with the objects.
+    fixed_center_x_m: 0.195
+    fixed_center_y_m: 0.319
+    # Recommended Go2 navigation envelope for gravity-aligned D1 release.
+    min_base_distance_m: 0.35
+    max_base_distance_m: 0.45
+    outer_radius_m: 0.15
+    height_m: 0.10
+    wall_thickness_m: 0.01
+    bottom_thickness_m: 0.01
+    wall_segments: 24
   objects:
     yellow_cube:
       mass_kg: 0.08

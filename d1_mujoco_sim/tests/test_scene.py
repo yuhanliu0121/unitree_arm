@@ -10,8 +10,12 @@ import yaml
 from d1_mujoco_sim.model import build_model
 from d1_mujoco_sim.scene import (
     OBJECT_COLLISION_GROUP,
+    OBJECT_COLLISION_PREFIX,
     OBJECT_NAMES,
     OBJECT_VISUAL_GROUP,
+    TRASH_BIN_COLLISION_PREFIX,
+    TRASH_BIN_VISUAL_PREFIX,
+    sample_scene_layout,
     sample_spawn_poses,
 )
 from d1_mujoco_sim.simulator import D1Simulator
@@ -48,30 +52,51 @@ def test_seed_zero_layout_is_deterministic_and_nonoverlapping() -> None:
     assert first == second
     assert tuple(pose.name for pose in first) == OBJECT_NAMES
 
-    region = CONFIG["scene"]["spawn_region"]
-    depth = region["depth_x_m"]
-    half_width = region["width_y_m"] / 2
+    expansion = CONFIG["scene"]["spawn_region"]["outer_expansion_m"]
     gap = CONFIG["scene"]["object_gap_m"]
-    base_radius = CONFIG["scene"]["base_exclusion_radius_m"]
     base_box = CONFIG["scene"]["base_exclusion_box"]
-    for index, pose in enumerate(first):
-        assert pose.footprint_radius <= pose.x <= depth - pose.footprint_radius
+    layout = sample_scene_layout(CONFIG["scene"])
+    poses = (*layout.objects, layout.trash_bin)
+    trash_bin_config = CONFIG["scene"]["trash_bin"]
+    trash_bin_distance = math.hypot(
+        layout.trash_bin.x,
+        layout.trash_bin.y,
+    )
+    assert (
+        trash_bin_config["min_base_distance_m"]
+        <= trash_bin_distance
+        <= trash_bin_config["max_base_distance_m"]
+    )
+    outer_min_x = base_box["min_x_m"] - expansion
+    outer_max_x = base_box["max_x_m"] + expansion
+    outer_min_y = -base_box["half_width_y_m"] - expansion
+    outer_max_y = base_box["half_width_y_m"] + expansion
+    tolerance = 1e-9
+    for index, pose in enumerate(poses):
+        radius = pose.footprint_radius
+        assert pose.x >= radius - tolerance
         assert (
-            -half_width + pose.footprint_radius
-            <= pose.y
-            <= half_width - pose.footprint_radius
-        )
-        assert math.hypot(pose.x, pose.y) >= (
-            base_radius + pose.footprint_radius + gap
-        )
-        assert not (
-            base_box["min_x_m"] - pose.footprint_radius - gap
+            outer_min_x + radius - tolerance
             <= pose.x
-            <= base_box["max_x_m"] + pose.footprint_radius + gap
-            and abs(pose.y)
-            <= base_box["half_width_y_m"] + pose.footprint_radius + gap
+            <= outer_max_x - radius + tolerance
         )
-        for other in first[index + 1 :]:
+        assert (
+            outer_min_y + radius - tolerance
+            <= pose.y
+            <= outer_max_y - radius + tolerance
+        )
+        dx = max(
+            base_box["min_x_m"] - pose.x,
+            0.0,
+            pose.x - base_box["max_x_m"],
+        )
+        dy = max(
+            -base_box["half_width_y_m"] - pose.y,
+            0.0,
+            pose.y - base_box["half_width_y_m"],
+        )
+        assert math.hypot(dx, dy) >= radius - tolerance
+        for other in poses[index + 1 :]:
             assert math.hypot(pose.x - other.x, pose.y - other.y) >= (
                 pose.footprint_radius + other.footprint_radius + gap
             )
@@ -145,7 +170,11 @@ def test_scene_imports_pbr_visuals_and_dynamic_collision(
     object_collision_ids = [
         geom_id
         for geom_id in range(scene_model.ngeom)
-        if scene_model.geom_group[geom_id] == OBJECT_COLLISION_GROUP
+        if (
+            mujoco.mj_id2name(
+                scene_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+            ) or ""
+        ).startswith(OBJECT_COLLISION_PREFIX)
     ]
     assert len(object_collision_ids) == 15  # Cube, zucchini and 13-part bowl.
     for geom_id in object_collision_ids:
@@ -217,10 +246,10 @@ def test_white_outline_matches_configured_region(
     scene_model: mujoco.MjModel,
 ) -> None:
     expected = {
-        "spawn_region_near": ([0.0, 0.0], [0.0015, 0.4]),
-        "spawn_region_far": ([0.6, 0.0], [0.0015, 0.4]),
-        "spawn_region_left": ([0.3, -0.4], [0.3, 0.0015]),
-        "spawn_region_right": ([0.3, 0.4], [0.3, 0.0015]),
+        "spawn_region_near": ([-0.721484, 0.0], [0.0015, 0.469127]),
+        "spawn_region_far": ([0.631958, 0.0], [0.0015, 0.469127]),
+        "spawn_region_left": ([-0.044763, -0.469127], [0.676721, 0.0015]),
+        "spawn_region_right": ([-0.044763, 0.469127], [0.676721, 0.0015]),
     }
     for name, (position, size) in expected.items():
         geom_id = mujoco.mj_name2id(
@@ -231,6 +260,52 @@ def test_white_outline_matches_configured_region(
         np.testing.assert_allclose(scene_model.geom_size[geom_id, :2], size)
         np.testing.assert_allclose(scene_model.geom_rgba[geom_id], [1, 1, 1, 1])
         assert scene_model.geom_contype[geom_id] == 0
+
+
+def test_static_trash_bin_is_open_and_uses_sampled_ring_pose(
+    scene_model: mujoco.MjModel,
+) -> None:
+    config = CONFIG["scene"]["trash_bin"]
+    segment_count = config["wall_segments"]
+    visual_ids = []
+    collision_ids = []
+    for geom_id in range(scene_model.ngeom):
+        name = mujoco.mj_id2name(
+            scene_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+        ) or ""
+        if name.startswith(TRASH_BIN_VISUAL_PREFIX):
+            visual_ids.append(geom_id)
+        if name.startswith(TRASH_BIN_COLLISION_PREFIX):
+            collision_ids.append(geom_id)
+
+    assert len(visual_ids) == segment_count + 1
+    assert len(collision_ids) == segment_count + 1
+    assert all(scene_model.geom_contype[index] == 0 for index in visual_ids)
+    assert all(scene_model.geom_contype[index] == 1 for index in collision_ids)
+    assert all(
+        scene_model.geom_group[index] == OBJECT_COLLISION_GROUP
+        for index in collision_ids
+    )
+    bottom_id = mujoco.mj_name2id(
+        scene_model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        f"{TRASH_BIN_COLLISION_PREFIX}bottom",
+    )
+    np.testing.assert_allclose(
+        scene_model.geom_pos[bottom_id, :2],
+        [
+            sample_scene_layout(CONFIG["scene"]).trash_bin.x,
+            sample_scene_layout(CONFIG["scene"]).trash_bin.y,
+        ],
+    )
+    # Only a bottom and segmented side walls exist; there is no lid geom.
+    assert not any(
+        "top" in (
+            mujoco.mj_id2name(scene_model, mujoco.mjtObj.mjOBJ_GEOM, index)
+            or ""
+        )
+        for index in (*visual_ids, *collision_ids)
+    )
 
 
 def test_objects_settle_on_ground_without_interobject_contact(
@@ -261,6 +336,7 @@ def test_scene_state_payload_contains_planning_frame_poses(
     assert lines[0].startswith("D1SCENE 1 ")
     names = [line.split()[0] for line in lines[1:]]
     assert names[:len(OBJECT_NAMES)] == list(OBJECT_NAMES)
+    assert "trash_bin" in names
     assert {
         "debug_tcp_link",
         "debug_left_finger",

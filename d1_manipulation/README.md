@@ -95,3 +95,32 @@ MoveIt collision checking, executes the configured CARRY joint pose, and then
 checks three fresh wrist RGB frames. Yellow HSV connected components are
 measured only inside an ROI projected from the expected held-object position;
 MuJoCo object truth is not used by this verification.
+
+## Gravity-aligned object release
+
+The external release Action is `/arm/tasks/drop_object`. Its stamped target is
+the trash-bin bottom centre estimated by Go2. The server requires the arm to be
+in CARRY with an attached MoveIt object and requires the bin centre to be
+0.35--0.45 m horizontally from `base_link`.
+
+The server adds the open bin side walls to MoveIt, fixes `tcp_link` +Z along
+gravity, and searches the configured candidates in strict order. Height
+offsets relative to the `base_link` gravity height are `0, -25, -50, +25,
++50 mm`; each height uses yaw offsets `0, +15, -15, ..., +90, -90 deg` from
+the projected CARRY TCP x-axis. The first release pose with a complete plan is
+executed. The server confirms that the gripper reached its fully open target,
+detaches the held object from MoveIt's gripper model, holds the physical gripper
+fully open for 0.5 seconds, and then plans directly to STOWED.
+
+Run the deterministic physical acceptance with:
+
+```zsh
+./accept_cube_pick_drop.zsh --headless
+./accept_cube_pick_drop.zsh --rviz
+```
+
+The acceptance performs the complete visual cube pick and CARRY sequence,
+sends the simulated bin truth only as the Action input, and verifies from three
+fresh MuJoCo truth frames that the released cube is stationary inside the bin.
+Normal `d1-mujoco-sim` startup remains seeded-random; the acceptance command
+selects the separate fixed layout for reproducibility.

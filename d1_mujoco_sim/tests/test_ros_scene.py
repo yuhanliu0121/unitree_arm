@@ -11,6 +11,7 @@ from d1_mujoco_sim.ros_scene import (
     mobile_base_transform_specs,
     object_mesh_specs,
     physical_collision_specs,
+    trash_bin_visual_specs,
 )
 from d1_mujoco_sim.simulator import D1Simulator
 
@@ -140,6 +141,7 @@ def test_physical_collision_markers_come_from_active_mujoco_geoms(
     ground = by_name["ground"]
     assert ground.shape == "box"
     assert ground.scale == (4.0, 4.0, 0.002)
+    np.testing.assert_allclose(ground.position, [-0.044763, 0.0, -0.001])
     assert ground.opaque
 
     zucchini = by_name["object_collision_zucchini"]
@@ -162,6 +164,17 @@ def test_physical_collision_markers_come_from_active_mujoco_geoms(
     assert mount.shape == camera.shape == "box"
     np.testing.assert_allclose(mount.scale, [0.130145850286, 0.080071964063, 0.034361989941])
     np.testing.assert_allclose(camera.scale, [0.0899313762, 0.0257728751, 0.02533514892])
+
+
+def test_trash_bin_visual_markers_are_static_open_container(
+    model_and_data: tuple[mujoco.MjModel, mujoco.MjData],
+) -> None:
+    model, data = model_and_data
+    specs = trash_bin_visual_specs(model, data)
+    assert len(specs) == CONFIG["scene"]["trash_bin"]["wall_segments"] + 1
+    assert specs[0].name == "trash_bin_visual_bottom"
+    assert all(spec.opaque for spec in specs)
+    assert all(spec.color_rgba == (0.16, 0.32, 0.42, 1.0) for spec in specs)
 
 
 def test_rviz_layer_defaults_keep_meshes_on_and_collisions_off() -> None:
