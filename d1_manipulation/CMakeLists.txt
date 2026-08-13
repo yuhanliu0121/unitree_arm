@@ -65,8 +65,14 @@ ament_target_dependencies(observe_target_server
   visualization_msgs
 )
 
-add_executable(pick_object_server src/pick_object_server.cpp)
+add_executable(pick_object_server
+  src/pick_object_server.cpp
+  src/yellow_cube_pick_strategy.cpp
+)
 target_compile_features(pick_object_server PRIVATE cxx_std_17)
+target_include_directories(pick_object_server PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 target_link_libraries(pick_object_server Eigen3::Eigen)
 ament_target_dependencies(pick_object_server
   control_msgs

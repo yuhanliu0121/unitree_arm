@@ -77,6 +77,15 @@ seed-0 simulation scene, run one of:
 ./accept_visual_cube_grasp.zsh --rviz --stage carry
 ```
 
+`pick_object_server` is split into a category-independent task orchestrator
+and registered object strategies. The orchestrator owns observation,
+classification, staged execution, failure recovery, CARRY transition and
+verification dispatch. `YellowCubePickStrategy` owns cube perception,
+top-view refinement, pregrasp/grasp search, gripper settings, lift parameters,
+debug geometry and attached collision geometry. A detected class without a
+registered strategy is rejected at `SELECT_STRATEGY`; bowl and zucchini are
+intentionally not implemented by the cube strategy.
+
 The pipeline performs an oblique RGB-D observation, gravity-constrained ground
 RANSAC, a strict top-down RGB observation, metric top-contour projection,
 minimum-area square fitting, ordered symmetric grasp planning, and the selected

@@ -34,6 +34,7 @@ d1_pick_object:
   ros__parameters:
     action_name: /arm/tasks/pick_object
     observe_action_name: /arm/debug/observe_target
+    target_detection_service_name: /arm/perception/detect_target
     cube_estimation_service_name: /arm/perception/estimate_cube
     held_object_verification_service_name: /arm/perception/verify_held_object
     planning_frame: base_link
@@ -76,7 +77,6 @@ d1_drop_object:
     gravity_frame: world
     arm_group: arm
     tcp_frame: tcp_link
-    attached_object_id: held_yellow_cube
     carry_joint_positions: [0.0, -1.5, 1.5, 0.0, -0.6, 0.0]
     stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
     carry_tolerance_rad: 0.08

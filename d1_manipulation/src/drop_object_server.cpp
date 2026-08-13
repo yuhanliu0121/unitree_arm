@@ -69,7 +69,6 @@ public:
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
-    attached_id_ = parameterOrDeclare(node_, "attached_object_id", std::string("held_yellow_cube"));
     carry_ = parameterOrDeclare(node_, "carry_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, -0.6, 0});
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
     carry_tolerance_ = parameterOrDeclare(node_, "carry_tolerance_rad", 0.08);
@@ -215,10 +214,20 @@ private:
     return planning_scene_.applyCollisionObject(object);
   }
 
-  bool detachHeldObject()
+  std::vector<std::string> heldObjectIds()
   {
-    auto objects = planning_scene_.getAttachedObjects({attached_id_});
-    if (objects.empty()) return false;
+    std::vector<std::string> ids;
+    for (const auto& [id, object] : planning_scene_.getAttachedObjects()) {
+      (void)object;
+      if (id.rfind("held/", 0) == 0) ids.push_back(id);
+    }
+    return ids;
+  }
+
+  bool detachHeldObject(const std::string& id)
+  {
+    auto objects = planning_scene_.getAttachedObjects({id});
+    if (objects.size() != 1) return false;
     auto attached = objects.begin()->second;
     attached.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
     return planning_scene_.applyAttachedCollisionObject(attached);
@@ -232,9 +241,12 @@ private:
         fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
           "CHECK_PRECONDITIONS", "arm is not in CARRY pose"); return;
       }
-      if (planning_scene_.getAttachedObjects({attached_id_}).empty()) {
+      const auto held_ids = heldObjectIds();
+      if (held_ids.size() != 1) {
         fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
-          "CHECK_PRECONDITIONS", "no held object is attached in MoveIt"); return;
+          "CHECK_PRECONDITIONS",
+          held_ids.empty() ? "no held object is attached in MoveIt" :
+          "multiple held objects are attached in MoveIt"); return;
       }
       const Eigen::Vector3d bottom = pointInPlanningFrame(handle->get_goal()->target);
       const Eigen::Vector3d up = gravityUp();
@@ -298,7 +310,7 @@ private:
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "RELEASE", "gripper did not reach its fully open target"); return;
       }
-      if (!detachHeldObject()) {
+      if (!detachHeldObject(held_ids.front())) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "RELEASE", "failed to detach held object from MoveIt"); return;
       }
@@ -332,7 +344,7 @@ private:
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Server<Drop>::SharedPtr server_;
   std::atomic<bool> busy_{false}, cancel_{false};
-  std::string action_name_, planning_frame_, gravity_frame_, tcp_frame_, attached_id_;
+  std::string action_name_, planning_frame_, gravity_frame_, tcp_frame_;
   std::vector<double> carry_, stowed_, height_offsets_, yaw_offsets_;
   double carry_tolerance_{}, stowed_tolerance_{}, min_distance_{}, max_distance_;
   double bin_radius_{}, bin_height_{}, bin_wall_{};

@@ -15,11 +15,9 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
-#include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <moveit_msgs/msg/object_color.hpp>
-#include <moveit_msgs/srv/get_state_validity.hpp>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -27,12 +25,11 @@
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
-#include <visualization_msgs/msg/marker.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "d1_manipulation/action/observe_target.hpp"
 #include "d1_manipulation/action/pick_object.hpp"
-#include "d1_manipulation/srv/estimate_cube.hpp"
+#include "d1_manipulation/pick_strategy.hpp"
+#include "d1_manipulation/srv/detect_target.hpp"
 #include "d1_manipulation/srv/verify_held_object.hpp"
 
 using namespace std::chrono_literals;
@@ -71,7 +68,7 @@ std_msgs::msg::ColorRGBA color(float r, float g, float b, float a = 1.0F)
 }
 }  // namespace
 
-class PickObjectServer
+class PickObjectServer : public PickStrategyRuntime
 {
 public:
   using Pick = action::PickObject;
@@ -86,7 +83,8 @@ public:
   {
     action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/tasks/pick_object"));
     observe_name_ = parameterOrDeclare(node_, "observe_action_name", std::string("/arm/debug/observe_target"));
-    estimate_name_ = parameterOrDeclare(node_, "cube_estimation_service_name", std::string("/arm/perception/estimate_cube"));
+    detect_name_ = parameterOrDeclare(
+      node_, "target_detection_service_name", std::string("/arm/perception/detect_target"));
     verify_name_ = parameterOrDeclare(
       node_, "held_object_verification_service_name",
       std::string("/arm/perception/verify_held_object"));
@@ -94,21 +92,6 @@ public:
     link6_frame_ = parameterOrDeclare(node_, "link6_frame", std::string("Link6"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
     camera_frame_ = parameterOrDeclare(node_, "color_optical_frame", std::string("wrist_camera_color_optical_frame"));
-    cube_size_ = parameterOrDeclare(node_, "cube_size_m", 0.05);
-    pregrasp_distance_max_ = parameterOrDeclare(node_, "pregrasp_distance_max_m", 0.080);
-    pregrasp_distance_min_ = parameterOrDeclare(node_, "pregrasp_distance_min_m", 0.015);
-    pregrasp_distance_step_ = parameterOrDeclare(node_, "pregrasp_distance_step_m", 0.005);
-    grasp_distance_min_ = parameterOrDeclare(node_, "grasp_distance_min_m", -0.040);
-    grasp_distance_max_ = parameterOrDeclare(node_, "grasp_distance_max_m", -0.024);
-    grasp_distance_step_ = parameterOrDeclare(node_, "grasp_distance_step_m", 0.002);
-    if (cube_size_ <= 0.0 || pregrasp_distance_min_ < 0.0 ||
-      pregrasp_distance_max_ < pregrasp_distance_min_ || pregrasp_distance_step_ <= 0.0 ||
-      grasp_distance_min_ > grasp_distance_max_ || grasp_distance_max_ >= 0.0 ||
-      grasp_distance_step_ <= 0.0)
-    {
-      throw std::invalid_argument("invalid signed cube pregrasp/grasp search parameters");
-    }
-    lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     carry_ = parameterOrDeclare(
       node_, "carry_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, -0.6, 0});
     top_distances_ = parameterOrDeclare(node_, "top_observation_distances_m", std::vector<double>{0.35, 0.40, 0.45, 0.50, 0.55, 0.60});
@@ -116,9 +99,6 @@ public:
     camera_settle_ = parameterOrDeclare(node_, "camera_settle_s", 0.5);
     cartesian_step_ = parameterOrDeclare(node_, "cartesian_step_m", 0.005);
     minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.95);
-    gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
-    gripper_closed_ = parameterOrDeclare(node_, "gripper_closed_m", 0.0);
-    grasp_settle_ = parameterOrDeclare(node_, "grasp_settle_s", 0.5);
     stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
 
@@ -133,20 +113,18 @@ public:
     move_group_.setGoalOrientationTolerance(parameterOrDeclare(node_, "orientation_tolerance_rad", 0.03));
 
     observe_client_ = rclcpp_action::create_client<Observe>(node_, observe_name_);
-    estimate_client_ = node_->create_client<srv::EstimateCube>(estimate_name_);
+    detect_client_ = node_->create_client<srv::DetectTarget>(detect_name_);
     verify_client_ = node_->create_client<srv::VerifyHeldObject>(verify_name_);
-    state_validity_client_ = node_->create_client<moveit_msgs::srv::GetStateValidity>(
-      "/check_state_validity");
     gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
-    marker_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      "/arm/debug/cube_grasp_markers", rclcpp::QoS(1).transient_local().reliable());
+    strategies_.emplace(
+      "yellow_cube", makeYellowCubePickStrategy(node_, *this));
     server_ = rclcpp_action::create_server<Pick>(
       node_, action_name_,
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Pick::Goal> goal) {
-        if (busy_.exchange(true) || goal->target.header.frame_id.empty() ||
-          goal->stop_after > Pick::Goal::GRASP_AND_CARRY)
-        {
-          busy_.store(false);
+        if (goal->target.header.frame_id.empty() ||
+          goal->stop_after > Pick::Goal::GRASP_AND_CARRY) return rclcpp_action::GoalResponse::REJECT;
+        bool expected = false;
+        if (!busy_.compare_exchange_strong(expected, true)) {
           return rclcpp_action::GoalResponse::REJECT;
         }
         cancel_.store(false);
@@ -163,14 +141,6 @@ public:
   }
 
 private:
-  std::vector<double> descendingValues(double first, double last, double step) const
-  {
-    std::vector<double> values;
-    if (step <= 0.0 || first < last) return values;
-    for (double value = first; value >= last - 1e-9; value -= step) values.push_back(value);
-    return values;
-  }
-
   void feedback(const std::shared_ptr<PickHandle>& handle, const std::string& state,
     float progress, const std::string& detail)
   {
@@ -211,18 +181,22 @@ private:
     busy_.store(false);
   }
 
-  srv::EstimateCube::Response::SharedPtr estimate(uint8_t stage,
-    const geometry_msgs::msg::PointStamped& hint, const Eigen::Vector3d& normal = Eigen::Vector3d::Zero(),
-    double offset = 0.0)
+  std::string detectClass(const geometry_msgs::msg::PointStamped& hint, std::string& detail)
   {
-    if (!estimate_client_->wait_for_service(5s)) throw std::runtime_error("EstimateCube service unavailable");
-    auto request = std::make_shared<srv::EstimateCube::Request>();
-    request->stage = stage; request->target_hint = hint;
-    request->ground_normal.x = normal.x(); request->ground_normal.y = normal.y(); request->ground_normal.z = normal.z();
-    request->ground_offset = offset;
-    auto future = estimate_client_->async_send_request(request);
-    if (future.wait_for(15s) != std::future_status::ready) throw std::runtime_error("EstimateCube timed out");
-    return future.get();
+    if (!detect_client_->wait_for_service(5s)) {
+      detail = "target detection service unavailable";
+      return {};
+    }
+    auto request = std::make_shared<srv::DetectTarget::Request>();
+    request->target_hint = hint;
+    auto future = detect_client_->async_send_request(request);
+    if (future.wait_for(15s) != std::future_status::ready) {
+      detail = "target detection timed out";
+      return {};
+    }
+    const auto response = future.get();
+    detail = response->detail;
+    return response->success ? response->class_name : std::string{};
   }
 
   bool observe(const geometry_msgs::msg::PointStamped& target)
@@ -236,12 +210,26 @@ private:
       result.get().code == rclcpp_action::ResultCode::SUCCEEDED && result.get().result->success;
   }
 
-  Eigen::Isometry3d lookup(const std::string& target, const std::string& source)
+public:
+  moveit::planning_interface::MoveGroupInterface& moveGroup() override { return move_group_; }
+  moveit::planning_interface::PlanningSceneInterface& planningScene() override
+  {
+    return planning_scene_;
+  }
+  const std::string& planningFrame() const override { return planning_frame_; }
+  const std::string& tcpFrame() const override { return tcp_frame_; }
+  const std::string& link6Frame() const override { return link6_frame_; }
+  double cartesianStep() const override { return cartesian_step_; }
+  double minimumCartesianFraction() const override { return minimum_fraction_; }
+
+  Eigen::Isometry3d lookup(
+    const std::string& target, const std::string& source) override
   {
     return tf2::transformToEigen(tf_buffer_.lookupTransform(target, source, tf2::TimePointZero, 3s));
   }
 
-  bool moveCameraTopDown(const Eigen::Vector3d& target, const Eigen::Vector3d& up)
+  bool moveCameraTopDown(
+    const Eigen::Vector3d& target, const Eigen::Vector3d& up) override
   {
     Eigen::Vector3d camera_z = -up;
     Eigen::Vector3d reference = Eigen::Vector3d::UnitX() - Eigen::Vector3d::UnitX().dot(camera_z) * camera_z;
@@ -275,6 +263,8 @@ private:
     return false;
   }
 
+private:
+
   bool commandGripper(double position)
   {
     if (!gripper_client_->wait_for_action_server(5s)) return false;
@@ -284,29 +274,6 @@ private:
     auto result = gripper_client_->async_get_result(sent.get());
     return result.wait_for(8s) == std::future_status::ready &&
       result.get().code == rclcpp_action::ResultCode::SUCCEEDED;
-  }
-
-  bool executeCartesian(const geometry_msgs::msg::Pose& pose)
-  {
-    move_group_.setStartStateToCurrentState();
-    moveit_msgs::msg::RobotTrajectory message;
-    const double fraction = move_group_.computeCartesianPath({pose}, cartesian_step_, 0.0, message, true);
-    if (fraction < minimum_fraction_) {
-      RCLCPP_ERROR(
-        node_->get_logger(), "Cartesian path fraction %.3f is below %.3f",
-        fraction, minimum_fraction_);
-      diagnoseCartesianCollision(pose);
-      return false;
-    }
-    auto state = move_group_.getCurrentState(2.0);
-    if (!state) return false;
-    robot_trajectory::RobotTrajectory trajectory(move_group_.getRobotModel(), "arm");
-    trajectory.setRobotTrajectoryMsg(*state, message);
-    trajectory_processing::IterativeParabolicTimeParameterization timing;
-    if (!timing.computeTimeStamps(trajectory, 0.15, 0.15)) return false;
-    trajectory.getRobotTrajectoryMsg(message);
-    moveit::planning_interface::MoveGroupInterface::Plan plan; plan.trajectory_ = message;
-    return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
   }
 
   bool executeTrajectory(moveit_msgs::msg::RobotTrajectory message)
@@ -333,7 +300,8 @@ private:
   }
 
   moveit_msgs::msg::RobotTrajectory reverseLiftTrajectory(
-    const moveit_msgs::msg::RobotTrajectory& descent, const Eigen::Vector3d& up)
+    const moveit_msgs::msg::RobotTrajectory& descent, const Eigen::Vector3d& up,
+    double lift_distance)
   {
     moveit_msgs::msg::RobotTrajectory lift;
     lift.joint_trajectory.header = descent.joint_trajectory.header;
@@ -360,7 +328,7 @@ private:
       lift.joint_trajectory.points.push_back(std::move(point));
       set_positions(*iterator);
       const double height = (state->getGlobalLinkTransform(tcp_frame_).translation() - start).dot(up);
-      if (height >= lift_distance_ - 1e-4) break;
+      if (height >= lift_distance - 1e-4) break;
     }
     return lift;
   }
@@ -368,7 +336,7 @@ private:
   double computeCartesianFromPlanEnd(
     const moveit::planning_interface::MoveGroupInterface::Plan& plan,
     const geometry_msgs::msg::Pose& target, bool avoid_collisions,
-    moveit_msgs::msg::RobotTrajectory& trajectory)
+    moveit_msgs::msg::RobotTrajectory& trajectory) override
   {
     auto current = move_group_.getCurrentState(2.0);
     if (!current) return 0.0;
@@ -382,79 +350,8 @@ private:
     return fraction;
   }
 
-  double cartesianFractionFromPlanEnd(
-    const moveit::planning_interface::MoveGroupInterface::Plan& plan,
-    const geometry_msgs::msg::Pose& target)
+  bool removeTargetCollision(const std::vector<std::string>& target_ids) override
   {
-    moveit_msgs::msg::RobotTrajectory validation;
-    // The grasped object is intentionally contacted, so this pre-check only
-    // verifies that the selected IK branch remains continuous through the
-    // complete vertical descent. Collision checking remains enabled during
-    // the real descent after the target collision object is removed.
-    const double fraction = computeCartesianFromPlanEnd(plan, target, false, validation);
-    return fraction;
-  }
-
-  void diagnoseCartesianCollision(const geometry_msgs::msg::Pose& pose)
-  {
-    if (!state_validity_client_->wait_for_service(2s)) {
-      RCLCPP_ERROR(node_->get_logger(), "State-validity service unavailable for Cartesian diagnosis");
-      return;
-    }
-
-    // Recompute the same straight path without collision rejection, then ask
-    // MoveIt's planning scene for the first state that becomes invalid.
-    move_group_.setStartStateToCurrentState();
-    moveit_msgs::msg::RobotTrajectory unchecked;
-    const double fraction = move_group_.computeCartesianPath(
-      {pose}, cartesian_step_, 0.0, unchecked, false);
-    if (fraction < minimum_fraction_ || unchecked.joint_trajectory.points.empty()) {
-      RCLCPP_ERROR(
-        node_->get_logger(),
-        "Unchecked Cartesian path also stopped at %.3f; failure is IK/joint continuity, not collision",
-        fraction);
-      return;
-    }
-
-    auto state = move_group_.getCurrentState(2.0);
-    if (!state) return;
-    const auto& names = unchecked.joint_trajectory.joint_names;
-    for (std::size_t index = 0; index < unchecked.joint_trajectory.points.size(); ++index) {
-      const auto& positions = unchecked.joint_trajectory.points[index].positions;
-      for (std::size_t joint = 0; joint < std::min(names.size(), positions.size()); ++joint) {
-        state->setVariablePosition(names[joint], positions[joint]);
-      }
-      state->update();
-      auto request = std::make_shared<moveit_msgs::srv::GetStateValidity::Request>();
-      moveit::core::robotStateToRobotStateMsg(*state, request->robot_state);
-      request->group_name = "arm";
-      auto response_future = state_validity_client_->async_send_request(request);
-      if (response_future.wait_for(2s) != std::future_status::ready) {
-        RCLCPP_ERROR(node_->get_logger(), "State-validity request timed out");
-        return;
-      }
-      const auto response = response_future.get();
-      if (!response->valid) {
-        if (response->contacts.empty()) {
-          RCLCPP_ERROR(
-            node_->get_logger(), "Cartesian state %zu/%zu is invalid without reported contacts",
-            index + 1, unchecked.joint_trajectory.points.size());
-        }
-        for (const auto& contact : response->contacts) {
-          RCLCPP_ERROR(
-            node_->get_logger(), "Cartesian collision at state %zu/%zu: %s <-> %s, depth=%.6f m",
-            index + 1, unchecked.joint_trajectory.points.size(), contact.contact_body_1.c_str(),
-            contact.contact_body_2.c_str(), contact.depth);
-        }
-        return;
-      }
-    }
-    RCLCPP_ERROR(node_->get_logger(), "Unchecked Cartesian states are all valid; planning-scene race suspected");
-  }
-
-  bool removeTargetCollision()
-  {
-    const std::vector<std::string> target_ids{"yellow_cube", "observe_target"};
     const auto known = planning_scene_.getKnownObjectNames();
     std::vector<std::string> present_targets;
     for (const auto& id : target_ids) {
@@ -490,7 +387,8 @@ private:
     return false;
   }
 
-  bool applyEstimatedGround(const Eigen::Vector3d& raw_normal, double offset)
+  bool applyEstimatedGround(
+    const Eigen::Vector3d& raw_normal, double offset) override
   {
     Eigen::Vector3d normal = raw_normal.normalized();
     if (!normal.allFinite() || normal.norm() < 1e-6 || !std::isfinite(offset)) return false;
@@ -523,48 +421,16 @@ private:
     return true;
   }
 
-  geometry_msgs::msg::PointStamped attachEstimatedCube(
-    const Eigen::Vector3d& center, const Eigen::Vector3d& edge, const Eigen::Vector3d& up)
+  bool attachEstimatedObject(
+    PickStrategy& strategy, const PreparedPick& pick,
+    geometry_msgs::msg::PointStamped& expected)
   {
-    const Eigen::Isometry3d planning_from_tcp = lookup(planning_frame_, tcp_frame_);
-    const Eigen::Isometry3d tcp_from_planning = planning_from_tcp.inverse();
-    const Eigen::Vector3d x = (edge - edge.dot(up) * up).normalized();
-    const Eigen::Vector3d z = up.normalized();
-    const Eigen::Vector3d y = z.cross(x).normalized();
-    Eigen::Matrix3d planning_rotation;
-    planning_rotation.col(0) = x;
-    planning_rotation.col(1) = y;
-    planning_rotation.col(2) = z;
-    const Eigen::Quaterniond tcp_orientation(tcp_from_planning.linear() * planning_rotation);
-    const Eigen::Vector3d tcp_center = tcp_from_planning * center;
-
-    moveit_msgs::msg::AttachedCollisionObject attached;
-    attached.link_name = tcp_frame_;
-    attached.touch_links = {tcp_frame_, link6_frame_, "left_finger", "right_finger"};
-    attached.object.header.frame_id = tcp_frame_;
-    attached.object.id = "held_yellow_cube";
-    shape_msgs::msg::SolidPrimitive box;
-    box.type = shape_msgs::msg::SolidPrimitive::BOX;
-    box.dimensions = {cube_size_, cube_size_, cube_size_};
-    attached.object.primitives.push_back(box);
-    geometry_msgs::msg::Pose pose;
-    pose.position.x = tcp_center.x(); pose.position.y = tcp_center.y();
-    pose.position.z = tcp_center.z();
-    pose.orientation.x = tcp_orientation.x(); pose.orientation.y = tcp_orientation.y();
-    pose.orientation.z = tcp_orientation.z(); pose.orientation.w = tcp_orientation.w();
-    attached.object.primitive_poses.push_back(pose);
-    attached.object.operation = moveit_msgs::msg::CollisionObject::ADD;
+    const auto attached = strategy.makeAttachedObject(pick, expected);
     if (!planning_scene_.applyAttachedCollisionObject(attached)) {
-      throw std::runtime_error("failed to attach perception-estimated cube to TCP");
+      return false;
     }
     std::this_thread::sleep_for(500ms);
-
-    geometry_msgs::msg::PointStamped expected;
-    expected.header.frame_id = tcp_frame_;
-    expected.header.stamp = node_->now();
-    expected.point.x = tcp_center.x(); expected.point.y = tcp_center.y();
-    expected.point.z = tcp_center.z();
-    return expected;
+    return true;
   }
 
   bool moveToCarry()
@@ -576,14 +442,15 @@ private:
       move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
   }
 
-  bool verifyHeldCube(const geometry_msgs::msg::PointStamped& expected, std::string& detail)
+  bool verifyHeldObject(const std::string& class_name,
+    const geometry_msgs::msg::PointStamped& expected, std::string& detail)
   {
     if (!verify_client_->wait_for_service(5s)) {
       detail = "held-object verification service unavailable";
       return false;
     }
     auto request = std::make_shared<srv::VerifyHeldObject::Request>();
-    request->class_name = "yellow_cube";
+    request->class_name = class_name;
     request->expected_center = expected;
     auto future = verify_client_->async_send_request(request);
     if (future.wait_for(10s) != std::future_status::ready) {
@@ -596,7 +463,7 @@ private:
   }
 
   bool restoreTargetCollision(
-    const std::map<std::string, moveit_msgs::msg::CollisionObject>& target_objects)
+    const std::map<std::string, moveit_msgs::msg::CollisionObject>& target_objects) override
   {
     std::vector<moveit_msgs::msg::CollisionObject> restore;
     for (const auto& entry : target_objects) restore.push_back(entry.second);
@@ -618,44 +485,6 @@ private:
     return false;
   }
 
-  void publishMarkers(const srv::EstimateCube::Response& estimate,
-    const geometry_msgs::msg::Pose& grasp, const geometry_msgs::msg::Pose& pregrasp)
-  {
-    visualization_msgs::msg::MarkerArray array;
-    visualization_msgs::msg::Marker clear; clear.action = visualization_msgs::msg::Marker::DELETEALL;
-    array.markers.push_back(clear);
-    visualization_msgs::msg::Marker plane;
-    plane.header.frame_id = planning_frame_; plane.ns = "ground_plane"; plane.id = 0;
-    plane.type = visualization_msgs::msg::Marker::CUBE; plane.action = visualization_msgs::msg::Marker::ADD;
-    Eigen::Vector3d normal(estimate.ground_normal.x, estimate.ground_normal.y, estimate.ground_normal.z);
-    Eigen::Quaterniond plane_q = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitZ(), normal);
-    plane.pose.orientation.x = plane_q.x(); plane.pose.orientation.y = plane_q.y();
-    plane.pose.orientation.z = plane_q.z(); plane.pose.orientation.w = plane_q.w();
-    Eigen::Vector3d on_plane = -estimate.ground_offset * normal;
-    plane.pose.position.x = on_plane.x(); plane.pose.position.y = on_plane.y(); plane.pose.position.z = on_plane.z();
-    plane.scale.x = 0.8; plane.scale.y = 0.6; plane.scale.z = 0.003; plane.color = color(0.3F, 0.7F, 1.0F, 0.25F);
-    array.markers.push_back(plane);
-    int id = 1;
-    for (const auto& value : {std::make_pair(std::string("cube_center"), grasp), std::make_pair(std::string("pregrasp"), pregrasp)}) {
-      visualization_msgs::msg::Marker axes;
-      axes.header.frame_id = planning_frame_; axes.ns = value.first; axes.id = id++;
-      axes.type = visualization_msgs::msg::Marker::ARROW; axes.action = visualization_msgs::msg::Marker::ADD;
-      axes.pose = value.second; axes.scale.x = 0.10; axes.scale.y = 0.015; axes.scale.z = 0.02;
-      axes.color = value.first == "cube_center" ? color(1, 0, 1) : color(0, 1, 1);
-      array.markers.push_back(axes);
-    }
-    visualization_msgs::msg::Marker polygon;
-    polygon.header.frame_id = planning_frame_; polygon.ns = "fitted_top_square"; polygon.id = id++;
-    polygon.type = visualization_msgs::msg::Marker::LINE_STRIP; polygon.action = visualization_msgs::msg::Marker::ADD;
-    polygon.scale.x = 0.006; polygon.color = color(1, 1, 0);
-    for (const auto& point : estimate.top_polygon.polygon.points) {
-      geometry_msgs::msg::Point p; p.x = point.x; p.y = point.y; p.z = point.z; polygon.points.push_back(p);
-    }
-    if (!polygon.points.empty()) polygon.points.push_back(polygon.points.front());
-    array.markers.push_back(polygon);
-    marker_publisher_->publish(array);
-  }
-
   void execute(const std::shared_ptr<PickHandle>& handle)
   {
     try {
@@ -664,207 +493,117 @@ private:
       if (!observe(goal->target)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_OBSERVE", "oblique observation failed"); return;
       }
-      if (cancel_.load()) { fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "OBSERVING", "canceled", true); return; }
-      feedback(handle, "ESTIMATE_COARSE", 0.20F, "Fitting ground and coarse cube centre");
-      const auto coarse = estimate(srv::EstimateCube::Request::COARSE, goal->target);
-      if (!coarse->success) {
-        fail(handle, Pick::Result::FAILURE_INCOMPLETE_INFORMATION, "ESTIMATE_POSE", coarse->detail); return;
-      }
-      Eigen::Vector3d up(coarse->ground_normal.x, coarse->ground_normal.y, coarse->ground_normal.z);
-      Eigen::Vector3d coarse_center(coarse->center.point.x, coarse->center.point.y, coarse->center.point.z);
-      if (!applyEstimatedGround(up, coarse->ground_offset)) {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "ESTIMATE_POSE",
-          "failed to apply perception-fitted ground to MoveIt");
+      if (cancel_.load()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "OBSERVING", "canceled", true);
         return;
       }
-      feedback(handle, "MOVE_TOP_OBSERVE", 0.35F, "Moving RGB camera directly above coarse centre");
-      if (!moveCameraTopDown(coarse_center, up.normalized())) {
-        fail(handle, Pick::Result::FAILURE_THEORETICALLY_INFEASIBLE, "MOVE_TOP_OBSERVE", "top observation pose is not plannable"); return;
+      feedback(handle, "CLASSIFY_TARGET", 0.15F, "Selecting object-specific grasp strategy");
+      std::string detection_detail;
+      const std::string class_name = detectClass(goal->target, detection_detail);
+      if (class_name.empty()) {
+        fail(handle, Pick::Result::FAILURE_INCOMPLETE_INFORMATION,
+          "CLASSIFY_TARGET", detection_detail);
+        return;
       }
-      geometry_msgs::msg::PointStamped fine_hint = coarse->center;
-      feedback(handle, "ESTIMATE_FINE", 0.50F, "Projecting mask contour onto known cube top plane");
-      const auto fine = estimate(srv::EstimateCube::Request::FINE, fine_hint, up.normalized(), coarse->ground_offset);
-      if (!fine->success) {
-        fail(handle, Pick::Result::FAILURE_INCOMPLETE_INFORMATION, "ESTIMATE_POSE", fine->detail); return;
+      const auto strategy_entry = strategies_.find(class_name);
+      if (strategy_entry == strategies_.end()) {
+        fail(handle, Pick::Result::FAILURE_THEORETICALLY_INFEASIBLE,
+          "SELECT_STRATEGY", "no grasp strategy is registered for " + class_name);
+        return;
       }
-      Eigen::Vector3d center(fine->center.point.x, fine->center.point.y, fine->center.point.z);
-      Eigen::Vector3d edge(fine->edge_direction.x, fine->edge_direction.y, fine->edge_direction.z);
-      up.normalize(); edge = (edge - edge.dot(up) * up).normalized();
+      PickStrategy& strategy = *strategy_entry->second;
+      PreparedPick prepared;
+      StrategyFailure strategy_failure;
+      feedback(handle, "PREPARE_GRASP", 0.20F, "Running " + class_name + " grasp strategy");
+      if (!strategy.prepare(goal->target, prepared, strategy_failure)) {
+        fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
+        return;
+      }
 
-      geometry_msgs::msg::Pose grasp, pregrasp;
-      moveit::planning_interface::MoveGroupInterface::Plan plan;
-      bool found = false;
-      double selected_pregrasp_distance = 0.0;
-      double selected_grasp_distance = 0.0;
-      double selected_yaw_degrees = 0.0;
-      double selected_tilt_degrees = 0.0;
-      Eigen::Matrix3d selected_rotation = Eigen::Matrix3d::Identity();
-      const Eigen::Vector3d top_center = center + 0.5 * cube_size_ * up;
-      const auto target_objects = planning_scene_.getObjects({"yellow_cube", "observe_target"});
-      const auto pregrasp_distances = descendingValues(
-        pregrasp_distance_max_, pregrasp_distance_min_, pregrasp_distance_step_);
-      std::vector<double> grasp_distances;
-      for (double value = grasp_distance_min_;
-        value <= grasp_distance_max_ + 1e-9; value += grasp_distance_step_)
-      {
-        grasp_distances.push_back(value);
-      }
-      for (const double pregrasp_distance : pregrasp_distances) {
-        for (int quarter_turn : {0, 1, -1, 2}) {
-          const Eigen::Vector3d x = Eigen::AngleAxisd(quarter_turn * M_PI_2, up) * edge;
-          const Eigen::Vector3d z = -up;
-          const Eigen::Vector3d y = z.cross(x).normalized();
-          Eigen::Matrix3d vertical_rotation;
-          vertical_rotation.col(0) = x; vertical_rotation.col(1) = y; vertical_rotation.col(2) = z;
-          // Exact vertical alignment puts Joint4 almost at zero and makes the
-          // numerical IK branch unstable. Two degrees is visually negligible
-          // while keeping the wrist away from that singular configuration.
-          for (const double tilt_deg : {2.0, -2.0, 4.0, -4.0}) {
-            Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-            transform.linear() = vertical_rotation *
-              Eigen::AngleAxisd(tilt_deg * M_PI / 180.0, Eigen::Vector3d::UnitX());
-            transform.translation() = top_center + pregrasp_distance * up;
-            pregrasp = poseMessage(transform);
-            move_group_.setEndEffectorLink(tcp_frame_);
-            move_group_.setStartStateToCurrentState();
-            if (!move_group_.setJointValueTarget(pregrasp, tcp_frame_)) continue;
-            if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
-            if (!removeTargetCollision()) {
-              fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "PLAN_PREGRASP",
-                "target collision removal did not reach the planning scene");
-              return;
-            }
-            for (const double grasp_distance : grasp_distances) {
-              transform.translation() = top_center + grasp_distance * up;
-              const auto candidate_grasp = poseMessage(transform);
-              moveit_msgs::msg::RobotTrajectory candidate_descent;
-              const double descent_fraction = computeCartesianFromPlanEnd(
-                plan, candidate_grasp, true, candidate_descent);
-              if (descent_fraction < minimum_fraction_) continue;
-              grasp = candidate_grasp;
-              selected_pregrasp_distance = pregrasp_distance;
-              selected_grasp_distance = grasp_distance;
-              selected_yaw_degrees = std::atan2(x.y(), x.x()) * 180.0 / M_PI;
-              selected_tilt_degrees = tilt_deg;
-              selected_rotation = transform.rotation();
-              found = true;
-              break;
-            }
-            if (!restoreTargetCollision(target_objects)) {
-              fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "PLAN_PREGRASP",
-                "target collision restoration did not reach the planning scene");
-              return;
-            }
-            if (found) break;
-          }
-          if (found) break;
-        }
-        if (found) break;
-      }
-      if (!found) {
-        fail(handle, Pick::Result::FAILURE_REPOSITION_REQUIRED, "PLAN_PREGRASP",
-          "no pregrasp in +80..+15 mm has a feasible downstream grasp; reposition Go2");
-        return;
-      }
-      RCLCPP_INFO(
-        node_->get_logger(),
-        "Selected pregrasp: distance=%+.0f mm provisional_grasp=%+.0f mm yaw=%.1f deg tilt=%.1f deg",
-        1000.0 * selected_pregrasp_distance, 1000.0 * selected_grasp_distance,
-        selected_yaw_degrees, selected_tilt_degrees);
-      publishMarkers(*fine, grasp, pregrasp);
       auto result = std::make_shared<Pick::Result>();
-      result->class_name = "yellow_cube"; result->estimated_center = fine->center;
-      result->grasp_pose.header.frame_id = planning_frame_; result->grasp_pose.pose = grasp;
-      result->pregrasp_pose.header.frame_id = planning_frame_; result->pregrasp_pose.pose = pregrasp;
-      result->pregrasp_distance_m = selected_pregrasp_distance;
-      result->grasp_distance_m = selected_grasp_distance;
-      result->grasp_yaw_degrees = selected_yaw_degrees;
-      result->approach_tilt_degrees = selected_tilt_degrees;
+      result->class_name = prepared.class_name;
+      result->estimated_center = prepared.estimated_center;
+      result->grasp_pose.header.frame_id = planning_frame_;
+      result->grasp_pose.pose = prepared.grasp_pose;
+      result->pregrasp_pose.header.frame_id = planning_frame_;
+      result->pregrasp_pose.pose = prepared.pregrasp_pose;
+      result->pregrasp_distance_m = prepared.pregrasp_distance_m;
+      result->grasp_distance_m = prepared.grasp_distance_m;
+      result->grasp_yaw_degrees = prepared.grasp_yaw_degrees;
+      result->approach_tilt_degrees = prepared.approach_tilt_degrees;
       result->grasp_pose.header.stamp = result->pregrasp_pose.header.stamp = node_->now();
       if (goal->stop_after == Pick::Goal::COMPUTE_ONLY) {
-        result->success = true; result->detail = "cube grasp pose computed and visualized";
+        result->success = true;
+        result->detail = prepared.class_name + " grasp pose computed and visualized";
         handle->succeed(result); busy_.store(false); return;
       }
       feedback(handle, "MOVE_PREGRASP", 0.65F, "Executing selected pregrasp plan");
-      if (!commandGripper(gripper_open_) || move_group_.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+      if (!commandGripper(prepared.gripper_open_m) ||
+        move_group_.execute(prepared.pregrasp_plan) != moveit::core::MoveItErrorCode::SUCCESS)
+      {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "pregrasp execution failed"); return;
       }
       if (goal->stop_after == Pick::Goal::MOVE_PREGRASP) {
         result->success = true; result->detail = "pregrasp pose reached"; handle->succeed(result); busy_.store(false); return;
       }
-      if (!removeTargetCollision()) {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND",
-          "target collision removal did not reach the planning scene");
+      if (!strategy.confirmDescent(prepared, strategy_failure)) {
+        fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
         return;
       }
-      moveit_msgs::msg::RobotTrajectory descent_trajectory;
-      bool grasp_found = false;
-      for (const double grasp_distance : grasp_distances) {
-        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-        transform.linear() = selected_rotation;
-        transform.translation() = top_center + grasp_distance * up;
-        const auto candidate_grasp = poseMessage(transform);
-        move_group_.setStartStateToCurrentState();
-        moveit_msgs::msg::RobotTrajectory candidate_descent;
-        const double fraction = move_group_.computeCartesianPath(
-          {candidate_grasp}, cartesian_step_, 0.0, candidate_descent, true);
-        if (fraction < minimum_fraction_) continue;
-        grasp = candidate_grasp;
-        selected_grasp_distance = grasp_distance;
-        descent_trajectory = std::move(candidate_descent);
-        grasp_found = true;
-        break;
-      }
-      if (!grasp_found) {
-        fail(handle, Pick::Result::FAILURE_REPOSITION_REQUIRED, "DESCEND",
-          "no grasp in -40..-24 mm is reachable from the actual pregrasp; reposition Go2");
-        return;
-      }
-      result->grasp_pose.pose = grasp;
+      result->grasp_pose.pose = prepared.grasp_pose;
       result->grasp_pose.header.stamp = node_->now();
-      result->grasp_distance_m = selected_grasp_distance;
+      result->grasp_distance_m = prepared.grasp_distance_m;
       RCLCPP_INFO(
         node_->get_logger(), "Confirmed grasp from live pregrasp: distance=%+.0f mm",
-        1000.0 * selected_grasp_distance);
-      feedback(handle, "DESCEND", 0.78F, "Descending along fitted ground normal");
-      if (!executeTrajectory(descent_trajectory)) {
+        1000.0 * prepared.grasp_distance_m);
+      feedback(handle, "DESCEND", 0.78F, "Executing strategy approach trajectory");
+      if (!executeTrajectory(prepared.descent_trajectory)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND", "Cartesian descent failed"); return;
       }
       if (goal->stop_after == Pick::Goal::DESCEND) {
         result->success = true; result->detail = "grasp pose reached with gripper open"; handle->succeed(result); busy_.store(false); return;
       }
       feedback(handle, "GRASP", 0.88F, "Closing gripper");
-      if (!commandGripper(gripper_closed_)) {
+      if (!commandGripper(prepared.gripper_closed_m)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "GRASP", "gripper close failed"); return;
       }
-      std::this_thread::sleep_for(std::chrono::duration<double>(grasp_settle_));
-      feedback(handle, "LIFT", 0.95F, "Lifting along fitted ground normal");
-      auto lift_trajectory = reverseLiftTrajectory(descent_trajectory, up);
+      std::this_thread::sleep_for(std::chrono::duration<double>(prepared.grasp_settle_s));
+      feedback(handle, "LIFT", 0.95F, "Reversing the strategy approach trajectory");
+      auto lift_trajectory = reverseLiftTrajectory(
+        prepared.descent_trajectory, prepared.lift_direction, prepared.lift_distance_m);
       if (lift_trajectory.joint_trajectory.points.size() < 2 || !executeTrajectory(lift_trajectory)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "LIFT", "Cartesian lift failed"); return;
       }
       if (goal->stop_after == Pick::Goal::GRASP_AND_LIFT) {
         result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
-        result->detail = "yellow_cube visually estimated, grasped and lifted";
+        result->detail = prepared.class_name + " visually estimated, grasped and lifted";
         handle->succeed(result); busy_.store(false);
         RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_LIFT");
         return;
       }
-      feedback(handle, "ATTACH_OBJECT", 0.96F, "Attaching perception-estimated cube to TCP");
-      const auto expected_held_center = attachEstimatedCube(center, edge, up);
-      feedback(handle, "CARRY", 0.98F, "Moving grasped cube to CARRY pose");
+      feedback(handle, "ATTACH_OBJECT", 0.96F,
+        "Attaching perception-estimated " + prepared.class_name + " to TCP");
+      geometry_msgs::msg::PointStamped expected_held_center;
+      if (!attachEstimatedObject(strategy, prepared, expected_held_center)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "ATTACH_OBJECT",
+          "failed to attach perception-estimated object to TCP");
+        return;
+      }
+      feedback(handle, "CARRY", 0.98F,
+        "Moving grasped " + prepared.class_name + " to CARRY pose");
       if (!moveToCarry()) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "CARRY", "CARRY trajectory failed");
         return;
       }
-      feedback(handle, "VERIFY_GRASP", 0.99F, "Checking yellow object in wrist-camera ROI");
+      feedback(handle, "VERIFY_GRASP", 0.99F,
+        "Checking " + prepared.class_name + " in wrist-camera ROI");
       std::string verification_detail;
-      if (!verifyHeldCube(expected_held_center, verification_detail)) {
+      if (!verifyHeldObject(prepared.class_name, expected_held_center, verification_detail)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "VERIFY_GRASP", verification_detail);
         return;
       }
       result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
-      result->detail = "yellow_cube grasped, carried and visually verified: " +
+      result->detail = prepared.class_name + " grasped, carried and visually verified: " +
         verification_detail;
       handle->succeed(result); busy_.store(false);
       RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_CARRY");
@@ -880,23 +619,19 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
-  rclcpp::Client<srv::EstimateCube>::SharedPtr estimate_client_;
+  rclcpp::Client<srv::DetectTarget>::SharedPtr detect_client_;
   rclcpp::Client<srv::VerifyHeldObject>::SharedPtr verify_client_;
-  rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr state_validity_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Server<Pick>::SharedPtr server_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_publisher_;
+  std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> busy_{false}, cancel_{false};
-  std::string action_name_, observe_name_, estimate_name_, verify_name_, planning_frame_;
+  std::string action_name_, observe_name_, detect_name_, verify_name_, planning_frame_;
   std::string link6_frame_, tcp_frame_, camera_frame_;
   std::vector<double> stowed_;
   std::vector<double> carry_;
   std::vector<double> top_distances_, top_rolls_;
-  double cube_size_{}, pregrasp_distance_max_{}, pregrasp_distance_min_{};
-  double pregrasp_distance_step_{}, grasp_distance_min_{}, grasp_distance_max_{};
-  double grasp_distance_step_{}, lift_distance_{}, camera_settle_{};
-  double cartesian_step_{}, minimum_fraction_{}, gripper_open_{}, gripper_closed_{};
-  double grasp_settle_{}, stowed_tolerance_{};
+  double camera_settle_{};
+  double cartesian_step_{}, minimum_fraction_{}, stowed_tolerance_{};
 };
 }  // namespace d1_manipulation
 
