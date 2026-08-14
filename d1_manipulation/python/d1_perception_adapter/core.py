@@ -208,6 +208,85 @@ def undistorted_rays(pixels: np.ndarray, intrinsic: Sequence[float], distortion:
     return rays / np.linalg.norm(rays, axis=1, keepdims=True)
 
 
+def fit_zucchini_axis_on_plane(
+    mask: np.ndarray,
+    camera_origin: Sequence[float],
+    camera_rotation: np.ndarray,
+    intrinsic: Sequence[float],
+    distortion: Sequence[float],
+    plane_normal: Sequence[float],
+    plane_offset: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
+    """Fit a robust middle-segment axis and metric footprint on a known plane."""
+    import cv2
+
+    binary = np.asarray(mask, dtype=np.uint8)
+    if binary.ndim != 2 or int(binary.sum()) < 20:
+        raise ValueError("zucchini mask is too small")
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
+    if count < 2:
+        raise ValueError("zucchini mask has no connected component")
+    label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    component = np.asarray(labels == label, dtype=np.uint8)
+    rows, columns = np.nonzero(component)
+    pixels = np.column_stack((columns, rows)).astype(np.float64)
+    pixel_center = centroids[label]
+    covariance = np.cov(pixels - pixel_center, rowvar=False)
+    values, vectors = np.linalg.eigh(covariance)
+    global_axis = vectors[:, int(np.argmax(values))]
+    skeleton = np.zeros_like(component)
+    working = component.copy()
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    while cv2.countNonZero(working):
+        eroded = cv2.erode(working, kernel)
+        skeleton |= working & ~cv2.dilate(eroded, kernel)
+        working = eroded
+    skeleton_rows, skeleton_columns = np.nonzero(skeleton)
+    skeleton_pixels = np.column_stack((skeleton_columns, skeleton_rows)).astype(np.float64)
+    if len(skeleton_pixels) < 8:
+        skeleton_pixels = pixels
+    global_projection = (skeleton_pixels - pixel_center) @ global_axis
+    half_window = max(6.0, 0.20 * float(np.ptp(global_projection)))
+    middle = skeleton_pixels[np.abs(global_projection) <= half_window]
+    if len(middle) < 20:
+        middle = pixels
+    middle_center = middle.mean(axis=0)
+    middle_covariance = np.cov(middle - middle_center, rowvar=False)
+    values, vectors = np.linalg.eigh(middle_covariance)
+    local_axis_px = vectors[:, int(np.argmax(values))]
+    if local_axis_px.dot(global_axis) < 0.0:
+        local_axis_px = -local_axis_px
+
+    all_rays = undistorted_rays(pixels, intrinsic, distortion) @ np.asarray(camera_rotation).T
+    all_points = intersect_rays_with_plane(
+        camera_origin, all_rays, plane_normal, plane_offset
+    )
+    center_ray = undistorted_rays([middle_center], intrinsic, distortion) @ np.asarray(camera_rotation).T
+    center = intersect_rays_with_plane(
+        camera_origin, center_ray, plane_normal, plane_offset
+    )[0]
+    sample_pixels = np.vstack((middle_center - 12.0 * local_axis_px,
+                               middle_center + 12.0 * local_axis_px))
+    sample_rays = undistorted_rays(sample_pixels, intrinsic, distortion) @ np.asarray(camera_rotation).T
+    sample_points = intersect_rays_with_plane(
+        camera_origin, sample_rays, plane_normal, plane_offset
+    )
+    axis = sample_points[1] - sample_points[0]
+    normal = np.asarray(plane_normal, dtype=np.float64)
+    normal /= np.linalg.norm(normal)
+    axis -= axis.dot(normal) * normal
+    axis /= np.linalg.norm(axis)
+    relative = all_points - center
+    along = relative @ axis
+    perpendicular = np.cross(normal, axis)
+    across = relative @ perpendicular
+    length = float(np.quantile(along, 0.98) - np.quantile(along, 0.02))
+    width = float(np.quantile(across, 0.98) - np.quantile(across, 0.02))
+    segment_half = 0.18 * length
+    segment = np.vstack((center - segment_half * axis, center + segment_half * axis))
+    return center, axis, segment, length, width
+
+
 def fit_ground_plane_ransac(
     points: np.ndarray,
     up: Sequence[float],

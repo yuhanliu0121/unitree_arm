@@ -93,7 +93,7 @@ public:
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
     camera_frame_ = parameterOrDeclare(node_, "color_optical_frame", std::string("wrist_camera_color_optical_frame"));
     carry_ = parameterOrDeclare(
-      node_, "carry_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, -0.6, 0});
+      node_, "carry_joint_positions", std::vector<double>{0, -1.54, 1.546, 0, -0.6, 1.57});
     top_distances_ = parameterOrDeclare(node_, "top_observation_distances_m", std::vector<double>{0.35, 0.40, 0.45, 0.50, 0.55, 0.60});
     top_rolls_ = parameterOrDeclare(node_, "top_observation_roll_degrees", std::vector<double>{0, 90, -90, 180, 45, -45, 135, -135});
     camera_settle_ = parameterOrDeclare(node_, "camera_settle_s", 0.5);
@@ -118,6 +118,10 @@ public:
     gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
     strategies_.emplace(
       "yellow_cube", makeYellowCubePickStrategy(node_, *this));
+    strategies_.emplace(
+      "zucchini", makeZucchiniPickStrategy(node_, *this));
+    strategies_.emplace(
+      "bowl", makeBowlPickStrategy(node_, *this));
     server_ = rclcpp_action::create_server<Pick>(
       node_, action_name_,
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Pick::Goal> goal) {

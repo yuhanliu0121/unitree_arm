@@ -31,6 +31,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/DropObject.action"
   "srv/DetectTarget.srv"
   "srv/EstimateCube.srv"
+  "srv/EstimateBowl.srv"
+  "srv/EstimateZucchini.srv"
   "srv/VerifyHeldObject.srv"
   DEPENDENCIES geometry_msgs
 )
@@ -68,6 +70,8 @@ ament_target_dependencies(observe_target_server
 add_executable(pick_object_server
   src/pick_object_server.cpp
   src/yellow_cube_pick_strategy.cpp
+  src/bowl_pick_strategy.cpp
+  src/zucchini_pick_strategy.cpp
 )
 target_compile_features(pick_object_server PRIVATE cxx_std_17)
 target_include_directories(pick_object_server PRIVATE
@@ -121,6 +125,14 @@ install(PROGRAMS scripts/observe_seed_cube.py
 install(PROGRAMS scripts/pick_seed_cube.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME pick_seed_cube
+)
+install(PROGRAMS scripts/pick_seed_zucchini.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pick_seed_zucchini
+)
+install(PROGRAMS scripts/pick_seed_bowl.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pick_seed_bowl
 )
 install(PROGRAMS scripts/drop_seed_bin.py
   DESTINATION lib/${PROJECT_NAME}

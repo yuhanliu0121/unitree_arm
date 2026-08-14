@@ -32,11 +32,14 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from d1_manipulation.srv import DetectTarget
 from d1_manipulation.srv import EstimateCube
+from d1_manipulation.srv import EstimateBowl
+from d1_manipulation.srv import EstimateZucchini
 from d1_manipulation.srv import VerifyHeldObject
 from d1_perception_adapter import (
     image_to_bgr,
     fit_ground_plane_ransac,
     fit_square_on_plane,
+    fit_zucchini_axis_on_plane,
     intersect_rays_with_plane,
     match_target_detection,
     project_plumb_bob,
@@ -56,6 +59,12 @@ class DetectTargetServer(Node):
         ).value
         self._cube_service_name = self.declare_parameter(
             "cube_estimation_service_name", "/arm/perception/estimate_cube"
+        ).value
+        self._zucchini_service_name = self.declare_parameter(
+            "zucchini_estimation_service_name", "/arm/perception/estimate_zucchini"
+        ).value
+        self._bowl_service_name = self.declare_parameter(
+            "bowl_estimation_service_name", "/arm/perception/estimate_bowl"
         ).value
         self._held_verify_service_name = self.declare_parameter(
             "held_object_verification_service_name",
@@ -103,6 +112,12 @@ class DetectTargetServer(Node):
         self._cube_debug_topic = self.declare_parameter(
             "cube_debug_overlay_topic", "/arm/perception/debug/cube_geometry"
         ).value
+        self._zucchini_debug_topic = self.declare_parameter(
+            "zucchini_debug_overlay_topic", "/arm/perception/debug/zucchini_geometry"
+        ).value
+        self._bowl_debug_topic = self.declare_parameter(
+            "bowl_debug_overlay_topic", "/arm/perception/debug/bowl_geometry"
+        ).value
         self._ground_distance = float(
             self.declare_parameter("ground_ransac_distance_m", 0.008).value
         )
@@ -121,6 +136,17 @@ class DetectTargetServer(Node):
         self._cube_debug_directory = Path(
             self.declare_parameter("cube_debug_directory", "/tmp/d1_cube_debug_latest").value
         )
+        self._zucchini_coarse_height = float(
+            self.declare_parameter("zucchini_coarse_plane_height_m", 0.010).value
+        )
+        self._zucchini_center_height = float(
+            self.declare_parameter("zucchini_center_height_m", 0.01656).value
+        )
+        self._zucchini_debug_directory = Path(
+            self.declare_parameter(
+                "zucchini_debug_directory", "/tmp/d1_zucchini_debug_latest"
+            ).value
+        )
         self._held_verify_frames = int(
             self.declare_parameter("held_verify_frames", 3).value
         )
@@ -137,6 +163,17 @@ class DetectTargetServer(Node):
         self._yellow_hsv_upper = np.asarray(
             self.declare_parameter("yellow_hsv_upper", [40, 255, 255]).value,
             dtype=np.uint8,
+        )
+        self._green_hsv_lower = np.asarray(
+            self.declare_parameter("green_hsv_lower", [35, 45, 25]).value,
+            dtype=np.uint8,
+        )
+        self._green_hsv_upper = np.asarray(
+            self.declare_parameter("green_hsv_upper", [95, 255, 255]).value,
+            dtype=np.uint8,
+        )
+        self._held_verify_green_min_area = int(
+            self.declare_parameter("held_verify_green_min_area_px", 500).value
         )
         if not self._runtime_root.is_dir():
             raise RuntimeError(
@@ -194,6 +231,12 @@ class DetectTargetServer(Node):
         self._cube_debug_publisher = self.create_publisher(
             Image, self._cube_debug_topic, debug_qos
         )
+        self._zucchini_debug_publisher = self.create_publisher(
+            Image, self._zucchini_debug_topic, debug_qos
+        )
+        self._bowl_debug_publisher = self.create_publisher(
+            Image, self._bowl_debug_topic, debug_qos
+        )
         self._service = self.create_service(
             DetectTarget,
             self._service_name,
@@ -204,6 +247,18 @@ class DetectTargetServer(Node):
             EstimateCube,
             self._cube_service_name,
             self._estimate_cube,
+            callback_group=self._callback_group,
+        )
+        self._zucchini_service = self.create_service(
+            EstimateZucchini,
+            self._zucchini_service_name,
+            self._estimate_zucchini,
+            callback_group=self._callback_group,
+        )
+        self._bowl_service = self.create_service(
+            EstimateBowl,
+            self._bowl_service_name,
+            self._estimate_bowl,
             callback_group=self._callback_group,
         )
         self._held_verify_service = self.create_service(
@@ -261,7 +316,29 @@ class DetectTargetServer(Node):
             response.detail = "another perception request is already running"
             return response
         try:
-            if request.class_name != "yellow_cube":
+            if request.class_name == "bowl":
+                # Deliberate development-stage bypass.  Bowl carry verification
+                # needs a separate RGB/depth design and must not be confused
+                # with the color verifier used by the other two objects.
+                response.success = True
+                response.held = True
+                response.mean_area_px = 0.0
+                response.detail = "bowl carry verification temporarily bypassed"
+                self.get_logger().warning(response.detail)
+                return response
+            if request.class_name == "yellow_cube":
+                lower = self._yellow_hsv_lower
+                upper = self._yellow_hsv_upper
+                minimum_area = self._held_verify_min_area
+                label = "yellow"
+                debug_directory = self._cube_debug_directory
+            elif request.class_name == "zucchini":
+                lower = self._green_hsv_lower
+                upper = self._green_hsv_upper
+                minimum_area = self._held_verify_green_min_area
+                label = "green"
+                debug_directory = self._zucchini_debug_directory
+            else:
                 raise ValueError(
                     f"color verification is not configured for {request.class_name}"
                 )
@@ -280,11 +357,20 @@ class DetectTargetServer(Node):
                 expected_pixel = project_plumb_bob(
                     expected_camera, camera_info.k, camera_info.d
                 )
-                u, v = np.rint(expected_pixel).astype(int)
+                projected_u, projected_v = np.rint(expected_pixel).astype(int)
                 height, width = color_bgr.shape[:2]
-                if u < 0 or u >= width or v < 0 or v >= height:
-                    raise ValueError(
-                        "expected held-object centre projects outside RGB image"
+                # A held object's centre can sit just beyond the image border
+                # while part of the object remains visible.  Keep the ROI tied
+                # to the expected geometry by clamping it to the nearest border;
+                # the color-area test below still fails if no object pixels are
+                # actually visible.
+                u = int(np.clip(projected_u, 0, width - 1))
+                v = int(np.clip(projected_v, 0, height - 1))
+                projection_note = ""
+                if u != projected_u or v != projected_v:
+                    projection_note = (
+                        f" projected_center=({projected_u},{projected_v})"
+                        f" clamped_roi=({u},{v});"
                     )
                 yy, xx = np.ogrid[:height, :width]
                 roi = (
@@ -293,7 +379,7 @@ class DetectTargetServer(Node):
                 )
                 hsv = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2HSV)
                 mask = cv2.inRange(
-                    hsv, self._yellow_hsv_lower, self._yellow_hsv_upper
+                    hsv, lower, upper
                 )
                 mask[~roi] = 0
                 kernel = np.ones((5, 5), dtype=np.uint8)
@@ -309,21 +395,21 @@ class DetectTargetServer(Node):
                            (255, 0, 255), 3)
                 cv2.drawMarker(debug, (u, v), (255, 0, 255),
                                cv2.MARKER_CROSS, 24, 3)
-                cv2.putText(debug, f"yellow area={int(area)} px", (20, 32),
+                cv2.putText(debug, f"{label} area={int(area)} px", (20, 32),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
                             cv2.LINE_AA)
-                self._cube_debug_directory.mkdir(parents=True, exist_ok=True)
+                debug_directory.mkdir(parents=True, exist_ok=True)
                 cv2.imwrite(
-                    str(self._cube_debug_directory /
+                    str(debug_directory /
                         f"held_verify_{len(areas)}.png"), debug
                 )
             response.success = True
             response.mean_area_px = float(np.mean(areas))
             response.held = all(
-                area >= self._held_verify_min_area for area in areas
+                area >= minimum_area for area in areas
             )
             response.detail = (
-                "yellow ROI areas="
+                projection_note + f" {label} ROI areas="
                 + ",".join(str(int(area)) for area in areas)
                 + " px"
             )
@@ -623,6 +709,337 @@ class DetectTargetServer(Node):
         except Exception as exception:
             self.get_logger().error(f"EstimateCube internal error: {exception}")
             return self._cube_fail(response, EstimateCube.Response.FAILURE_INTERNAL, str(exception))
+        finally:
+            self._request_lock.release()
+
+    def _bowl_fail(self, response, reason: int, detail: str):
+        response.success = False
+        response.failure_reason = reason
+        response.detail = detail
+        self.get_logger().warning(detail)
+        return response
+
+    def _estimate_bowl(self, request, response):
+        if not self._request_lock.acquire(blocking=False):
+            return self._bowl_fail(
+                response, EstimateBowl.Response.FAILURE_INTERNAL,
+                "another perception request is already running",
+            )
+        try:
+            (color_message, color_bgr, depth_m, camera_info,
+             optical_frame, detections) = self._runtime_frame()
+            match = self._match(
+                request.target_hint, optical_frame, camera_info, detections
+            )
+            detection = match.detection
+            if detection.class_name != "bowl":
+                raise LookupError(
+                    f"matched object is {detection.class_name}, not bowl"
+                )
+            planning_transform = self._lookup_transform(
+                self._planning_frame, optical_frame
+            )
+            rotation, camera_origin = self._transform_arrays(planning_transform)
+
+            if request.stage == EstimateBowl.Request.COARSE:
+                world_transform = self._lookup_transform(
+                    self._planning_frame, self._gravity_frame
+                )
+                world_rotation, _ = self._transform_arrays(world_transform)
+                gravity_up = world_rotation[:, 2]
+                rows, columns = np.nonzero(
+                    np.isfinite(depth_m) & (depth_m > 0.0)
+                )
+                if len(columns) > self._ground_max_points:
+                    rng = np.random.default_rng(0)
+                    indices = rng.choice(
+                        len(columns), self._ground_max_points, replace=False
+                    )
+                    rows, columns = rows[indices], columns[indices]
+                pixels = np.column_stack((columns, rows))
+                rays_camera = undistorted_rays(
+                    pixels, camera_info.k, camera_info.d
+                )
+                points_camera = rays_camera * (
+                    depth_m[rows, columns] / rays_camera[:, 2]
+                )[:, None]
+                points_planning = points_camera @ rotation.T + camera_origin
+                normal, offset, _ = fit_ground_plane_ransac(
+                    points_planning, gravity_up, self._ground_distance,
+                    self._ground_normal_tolerance, self._ground_iterations, 0,
+                )
+                stage_name = "coarse"
+            elif request.stage == EstimateBowl.Request.FINE:
+                normal = np.asarray([
+                    request.ground_normal.x, request.ground_normal.y,
+                    request.ground_normal.z,
+                ], dtype=np.float64)
+                if not np.isfinite(normal).all() or np.linalg.norm(normal) < 0.9:
+                    raise ValueError("fine estimate requires a valid ground normal")
+                normal /= np.linalg.norm(normal)
+                offset = float(request.ground_offset)
+                stage_name = "fine"
+            else:
+                raise ValueError(
+                    f"unsupported bowl estimation stage {request.stage}"
+                )
+
+            binary = np.asarray(detection.mask, dtype=np.uint8)
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+            if count < 2:
+                raise ValueError("bowl mask has no connected component")
+            label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            component = np.asarray(labels == label, dtype=np.uint8)
+            moments = cv2.moments(component)
+            if moments["m00"] < 20.0:
+                raise ValueError("bowl mask is too small")
+            center_pixel = np.array([[
+                moments["m10"] / moments["m00"],
+                moments["m01"] / moments["m00"],
+            ]])
+            center_ray = undistorted_rays(
+                center_pixel, camera_info.k, camera_info.d
+            ) @ rotation.T
+            bottom_center = intersect_rays_with_plane(
+                camera_origin, center_ray, normal, offset
+            )[0]
+
+            response.success = True
+            response.failure_reason = EstimateBowl.Response.FAILURE_NONE
+            response.detail = (
+                f"{stage_name} bowl mask centroid ray intersected with fitted ground"
+            )
+            response.class_name = detection.class_name
+            response.confidence = float(detection.confidence)
+            self._set_point(
+                response.bottom_center, self._planning_frame,
+                color_message.header.stamp, bottom_center,
+            )
+            response.ground_normal.x, response.ground_normal.y, \
+                response.ground_normal.z = map(float, normal)
+            response.ground_offset = float(offset)
+
+            debug = color_bgr.copy()
+            contours, _ = cv2.findContours(
+                component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+            )
+            cv2.drawContours(debug, contours, -1, (255, 0, 255), 2)
+            pixel = tuple(np.rint(center_pixel[0]).astype(int))
+            cv2.drawMarker(
+                debug, pixel, (255, 0, 255), cv2.MARKER_CROSS, 28, 3
+            )
+            cv2.putText(
+                debug, f"bowl bottom centre ({stage_name})", (20, 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
+                cv2.LINE_AA,
+            )
+            self._bowl_debug_publisher.publish(
+                self._to_ros_image(debug, color_message.header)
+            )
+            self._publish_overlay(
+                color_bgr, detections, detection, color_message.header
+            )
+            self.get_logger().info(
+                "Bowl %s estimate: bottom=(%.3f, %.3f, %.3f)"
+                % (stage_name, *bottom_center)
+            )
+            return response
+        except LookupError as exception:
+            return self._bowl_fail(
+                response, EstimateBowl.Response.FAILURE_NO_MATCHING_DETECTION,
+                str(exception),
+            )
+        except (TimeoutError, ValueError, TransformException) as exception:
+            return self._bowl_fail(
+                response, EstimateBowl.Response.FAILURE_INCOMPLETE_INFORMATION,
+                str(exception),
+            )
+        except Exception as exception:
+            self.get_logger().error(f"EstimateBowl internal error: {exception}")
+            return self._bowl_fail(
+                response, EstimateBowl.Response.FAILURE_INTERNAL, str(exception)
+            )
+        finally:
+            self._request_lock.release()
+
+    def _zucchini_fail(self, response, reason: int, detail: str):
+        response.success = False
+        response.failure_reason = reason
+        response.detail = detail
+        self.get_logger().warning(detail)
+        return response
+
+    def _estimate_zucchini(self, request, response):
+        if not self._request_lock.acquire(blocking=False):
+            return self._zucchini_fail(
+                response, EstimateZucchini.Response.FAILURE_INTERNAL,
+                "another perception request is already running",
+            )
+        try:
+            (color_message, color_bgr, depth_m, camera_info,
+             optical_frame, detections) = self._runtime_frame()
+            match = self._match(request.target_hint, optical_frame, camera_info, detections)
+            detection = match.detection
+            if detection.class_name != "zucchini":
+                raise LookupError(
+                    f"matched object is {detection.class_name}, not zucchini"
+                )
+            planning_transform = self._lookup_transform(
+                self._planning_frame, optical_frame
+            )
+            rotation, camera_origin = self._transform_arrays(planning_transform)
+
+            if request.stage == EstimateZucchini.Request.COARSE:
+                world_transform = self._lookup_transform(
+                    self._planning_frame, self._gravity_frame
+                )
+                world_rotation, _ = self._transform_arrays(world_transform)
+                gravity_up = world_rotation[:, 2]
+                rows, columns = np.nonzero(np.isfinite(depth_m) & (depth_m > 0.0))
+                if len(columns) > self._ground_max_points:
+                    rng = np.random.default_rng(0)
+                    indices = rng.choice(
+                        len(columns), self._ground_max_points, replace=False
+                    )
+                    rows, columns = rows[indices], columns[indices]
+                pixels = np.column_stack((columns, rows))
+                rays_camera = undistorted_rays(
+                    pixels, camera_info.k, camera_info.d
+                )
+                points_camera = rays_camera * (
+                    depth_m[rows, columns] / rays_camera[:, 2]
+                )[:, None]
+                points_planning = points_camera @ rotation.T + camera_origin
+                normal, offset, _ = fit_ground_plane_ransac(
+                    points_planning, gravity_up, self._ground_distance,
+                    self._ground_normal_tolerance, self._ground_iterations, 0,
+                )
+                mask_y, mask_x = np.nonzero(detection.mask)
+                center_pixel = np.array([[np.median(mask_x), np.median(mask_y)]])
+                center_ray = undistorted_rays(
+                    center_pixel, camera_info.k, camera_info.d
+                ) @ rotation.T
+                center = intersect_rays_with_plane(
+                    camera_origin, center_ray, normal,
+                    offset - self._zucchini_coarse_height,
+                )[0]
+                axis = np.zeros(3)
+                segment = np.empty((0, 3))
+                length = 0.0
+                width = 0.0
+                detail = (
+                    "ground fitted and mask-centre ray intersected with "
+                    "ground+10mm plane"
+                )
+                debug = color_bgr.copy()
+            elif request.stage == EstimateZucchini.Request.FINE:
+                normal = np.asarray([
+                    request.ground_normal.x, request.ground_normal.y,
+                    request.ground_normal.z,
+                ], dtype=np.float64)
+                if not np.isfinite(normal).all() or np.linalg.norm(normal) < 0.9:
+                    raise ValueError("fine estimate requires a valid ground normal")
+                normal /= np.linalg.norm(normal)
+                offset = float(request.ground_offset)
+                center_plane_offset = offset - self._zucchini_center_height
+                center, axis, segment, length, width = fit_zucchini_axis_on_plane(
+                    detection.mask, camera_origin, rotation,
+                    camera_info.k, camera_info.d, normal, center_plane_offset,
+                )
+                detail = (
+                    "zucchini middle skeleton fitted and projected to known "
+                    "centre-height plane"
+                )
+                debug = color_bgr.copy()
+                contours, _ = cv2.findContours(
+                    detection.mask.astype(np.uint8), cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_NONE,
+                )
+                cv2.drawContours(debug, contours, -1, (255, 0, 255), 2)
+                cv2.putText(
+                    debug, "zucchini local middle axis", (20, 32),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
+                    cv2.LINE_AA,
+                )
+                self._zucchini_debug_publisher.publish(
+                    self._to_ros_image(debug, color_message.header)
+                )
+            else:
+                raise ValueError(
+                    f"unsupported zucchini estimation stage {request.stage}"
+                )
+
+            response.success = True
+            response.failure_reason = EstimateZucchini.Response.FAILURE_NONE
+            response.detail = detail
+            response.class_name = detection.class_name
+            response.confidence = float(detection.confidence)
+            self._set_point(
+                response.center, self._planning_frame,
+                color_message.header.stamp, center,
+            )
+            response.ground_normal.x, response.ground_normal.y, response.ground_normal.z = map(
+                float, normal
+            )
+            response.ground_offset = float(offset)
+            response.axis_direction.x, response.axis_direction.y, response.axis_direction.z = map(
+                float, axis
+            )
+            response.visible_length_m = float(length)
+            response.visible_width_m = float(width)
+            response.axis_segment.header = response.center.header
+            for endpoint in segment:
+                point = Point32()
+                point.x, point.y, point.z = map(float, endpoint)
+                response.axis_segment.polygon.points.append(point)
+            self._publish_overlay(
+                color_bgr, detections, detection, color_message.header
+            )
+            self._zucchini_debug_directory.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(
+                str(self._zucchini_debug_directory /
+                    ("coarse.png" if request.stage == 0 else "fine.png")),
+                debug,
+            )
+            geometry = {
+                "stage": "coarse" if request.stage == 0 else "fine",
+                "class_name": detection.class_name,
+                "confidence": float(detection.confidence),
+                "center_base_m": center.tolist(),
+                "ground_normal_base": normal.tolist(),
+                "ground_offset_m": float(offset),
+                "axis_direction_base": axis.tolist(),
+                "visible_length_m": float(length),
+                "visible_width_m": float(width),
+                "axis_segment_base_m": segment.tolist(),
+            }
+            (self._zucchini_debug_directory /
+             ("coarse.json" if request.stage == 0 else "fine.json")).write_text(
+                json.dumps(geometry, indent=2), encoding="utf-8"
+            )
+            self.get_logger().info(
+                "Zucchini %s estimate: center=(%.3f, %.3f, %.3f) "
+                "axis=(%.3f, %.3f, %.3f) size=(%.3f, %.3f)"
+                % ("coarse" if request.stage == 0 else "fine", *center,
+                   *axis, length, width)
+            )
+            return response
+        except LookupError as exception:
+            return self._zucchini_fail(
+                response, EstimateZucchini.Response.FAILURE_NO_MATCHING_DETECTION,
+                str(exception),
+            )
+        except (TimeoutError, ValueError, TransformException) as exception:
+            return self._zucchini_fail(
+                response, EstimateZucchini.Response.FAILURE_GEOMETRY,
+                str(exception),
+            )
+        except Exception as exception:
+            self.get_logger().error(f"Zucchini estimation error: {exception}")
+            return self._zucchini_fail(
+                response, EstimateZucchini.Response.FAILURE_INTERNAL,
+                str(exception),
+            )
         finally:
             self._request_lock.release()
 

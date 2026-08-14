@@ -69,7 +69,8 @@ public:
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
-    carry_ = parameterOrDeclare(node_, "carry_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, -0.6, 0});
+    carry_ = parameterOrDeclare(
+      node_, "carry_joint_positions", std::vector<double>{0, -1.54, 1.546, 0, -0.6, 1.57});
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
     carry_tolerance_ = parameterOrDeclare(node_, "carry_tolerance_rad", 0.08);
     stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
@@ -224,13 +225,30 @@ private:
     return ids;
   }
 
-  bool detachHeldObject(const std::string& id)
+  bool detachAndForgetHeldObject(const std::string& id)
   {
     auto objects = planning_scene_.getAttachedObjects({id});
     if (objects.size() != 1) return false;
     auto attached = objects.begin()->second;
     attached.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
-    return planning_scene_.applyAttachedCollisionObject(attached);
+    if (!planning_scene_.applyAttachedCollisionObject(attached)) return false;
+
+    // Detaching normally returns the collision object to MoveIt's world at
+    // the release pose. The real object is subsequently simulated by MuJoCo
+    // (and will fall into the bin), so that frozen world copy would be a ghost
+    // obstacle. Remove it from the planning scene once it is detached.
+    std::this_thread::sleep_for(100ms);
+    planning_scene_.removeCollisionObjects({id});
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      const bool still_attached = !planning_scene_.getAttachedObjects({id}).empty();
+      const auto known = planning_scene_.getKnownObjectNames();
+      const bool still_in_world = std::find(known.begin(), known.end(), id) != known.end();
+      if (!still_attached && !still_in_world) return true;
+      if (!still_attached && still_in_world) planning_scene_.removeCollisionObjects({id});
+      std::this_thread::sleep_for(50ms);
+    }
+    return false;
   }
 
   void execute(const std::shared_ptr<Handle>& handle)
@@ -310,9 +328,9 @@ private:
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "RELEASE", "gripper did not reach its fully open target"); return;
       }
-      if (!detachHeldObject(held_ids.front())) {
+      if (!detachAndForgetHeldObject(held_ids.front())) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
-          "RELEASE", "failed to detach held object from MoveIt"); return;
+          "RELEASE", "failed to detach and remove held object from MoveIt"); return;
       }
       feedback(handle, "RELEASE_HOLD", 0.80F, "Holding gripper fully open");
       std::this_thread::sleep_for(std::chrono::duration<double>(gripper_open_hold_));

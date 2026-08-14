@@ -127,14 +127,17 @@ gripper:
   travel_m: 0.03
 
 scene:
-  placement_mode: random
+  # Development starts from explicit, repeatable poses. Use
+  # d1-mujoco-sim --random-layout [--seed N] to exercise random placement.
+  placement_mode: fixed
   random_seed: 0
-  # Deterministic acceptance layout. Normal simulation remains seeded-random;
-  # d1-mujoco-sim --fixed-layout selects these poses explicitly.
+  # Deterministic development layout near the Go2, with each item in a
+  # different viewing sector. Objects are kept outside the Go2 silhouette so
+  # the wrist camera can see them from an oblique observation pose.
   fixed_object_poses:
     yellow_cube: {x_m: 0.28, y_m: -0.24, yaw_deg: 0.0}
-    bowl: {x_m: 0.53, y_m: -0.409, yaw_deg: 0.0}
-    zucchini: {x_m: 0.488, y_m: -0.001, yaw_deg: 90.0}
+    bowl: {x_m: 0.20, y_m: -0.32, yaw_deg: 0.0}
+    zucchini: {x_m: 0.42, y_m: 0.08, yaw_deg: 0.0}
   # Task-level damping copied from the ATEC Task E object configuration to
   # suppress residual sliding that is not representative of the real gripper.
   object_linear_damping: 2.0

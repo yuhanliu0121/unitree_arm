@@ -14,7 +14,7 @@ from rclpy.action import ActionClient
 from d1_manipulation.action import DropObject
 
 
-def receive_records(sock: socket.socket, timeout_s: float):
+def receive_records(sock: socket.socket, timeout_s: float, object_name: str):
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         sock.settimeout(max(0.01, deadline - time.monotonic()))
@@ -24,9 +24,9 @@ def receive_records(sock: socket.socket, timeout_s: float):
             fields = line.split()
             if len(fields) == 8:
                 records[fields[0]] = tuple(float(value) for value in fields[1:4])
-        if "trash_bin" in records and "yellow_cube" in records:
+        if "trash_bin" in records and object_name in records:
             return records
-    raise TimeoutError("trash-bin/cube scene truth unavailable")
+    raise TimeoutError(f"trash-bin/{object_name} scene truth unavailable")
 
 
 def discard_queued_packets(sock: socket.socket) -> int:
@@ -50,13 +50,19 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--bin-inner-radius", type=float, default=0.14)
     parser.add_argument("--bin-height", type=float, default=0.10)
+    parser.add_argument(
+        "--object", choices=("yellow_cube", "zucchini", "bowl"), default="yellow_cube"
+    )
     args = parser.parse_args()
+    footprint_radius = {
+        "yellow_cube": 0.036, "zucchini": 0.078, "bowl": 0.060,
+    }[args.object]
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", args.port))
     try:
-        initial = receive_records(sock, args.timeout)
+        initial = receive_records(sock, args.timeout, args.object)
         target = initial["trash_bin"]
         print(
             "TRASH BIN TARGET: "
@@ -108,24 +114,29 @@ def main() -> int:
         print(f"DISCARDED STALE SCENE FRAMES: {discarded}")
         samples = []
         for _ in range(3):
-            records = receive_records(sock, args.timeout)
-            samples.append(records["yellow_cube"])
+            records = receive_records(sock, args.timeout, args.object)
+            samples.append(records[args.object])
             time.sleep(0.15)
-        for cube in samples:
-            radial = math.hypot(cube[0] - target[0], cube[1] - target[1])
-            relative_height = cube[2] - target[2]
-            if radial > args.bin_inner_radius - 0.036:
-                print(f"DROP FAILED: cube radial position {radial:.3f} m is outside bin")
+        for object_position in samples:
+            radial = math.hypot(
+                object_position[0] - target[0], object_position[1] - target[1]
+            )
+            relative_height = object_position[2] - target[2]
+            if radial > args.bin_inner_radius - footprint_radius:
+                print(
+                    f"DROP FAILED: {args.object} radial position "
+                    f"{radial:.3f} m is outside bin"
+                )
                 return 1
             if not 0.0 <= relative_height < args.bin_height:
                 print(
-                    "DROP FAILED: cube centre height relative to bin bottom is "
+                    f"DROP FAILED: {args.object} centre height relative to bin bottom is "
                     f"{relative_height:.3f} m"
                 )
                 return 1
         displacement = math.dist(samples[0], samples[-1])
         print(
-            "FINAL CUBE SAMPLES: "
+            f"FINAL {args.object.upper()} SAMPLES: "
             + " ".join(
                 f"({sample[0]:.3f},{sample[1]:.3f},{sample[2]:.3f})"
                 for sample in samples
@@ -135,7 +146,7 @@ def main() -> int:
             print(f"DROP FAILED: cube still moving by {displacement:.3f} m")
             return 1
         print(
-            "DROP SUCCEEDED: cube is stable inside bin "
+            f"DROP SUCCEEDED: {args.object} is stable inside bin "
             f"at ({samples[-1][0]:.3f},{samples[-1][1]:.3f},{samples[-1][2]:.3f})"
         )
         return 0

@@ -96,4 +96,12 @@ std::unique_ptr<PickStrategy> makeYellowCubePickStrategy(
   const rclcpp::Node::SharedPtr& node,
   PickStrategyRuntime& runtime);
 
+std::unique_ptr<PickStrategy> makeZucchiniPickStrategy(
+  const rclcpp::Node::SharedPtr& node,
+  PickStrategyRuntime& runtime);
+
+std::unique_ptr<PickStrategy> makeBowlPickStrategy(
+  const rclcpp::Node::SharedPtr& node,
+  PickStrategyRuntime& runtime);
+
 }  // namespace d1_manipulation

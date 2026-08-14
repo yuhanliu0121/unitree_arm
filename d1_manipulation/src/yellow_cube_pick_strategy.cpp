@@ -265,11 +265,18 @@ public:
       plan.estimated_center.point.x,
       plan.estimated_center.point.y,
       plan.estimated_center.point.z);
-    const Eigen::Isometry3d tcp_from_planning =
-      runtime_.lookup(runtime_.planningFrame(), runtime_.tcpFrame()).inverse();
-    const Eigen::Vector3d tcp_center = tcp_from_planning * center;
-    const Eigen::Quaterniond tcp_orientation(
-      tcp_from_planning.linear() * state->object_rotation);
+    Eigen::Isometry3d world_from_tcp_grasp = Eigen::Isometry3d::Identity();
+    world_from_tcp_grasp.linear() = state->grasp_rotation;
+    world_from_tcp_grasp.translation() = Eigen::Vector3d(
+      plan.grasp_pose.position.x, plan.grasp_pose.position.y,
+      plan.grasp_pose.position.z);
+    Eigen::Isometry3d world_from_object = Eigen::Isometry3d::Identity();
+    world_from_object.linear() = state->object_rotation;
+    world_from_object.translation() = center;
+    const Eigen::Isometry3d tcp_from_object =
+      world_from_tcp_grasp.inverse() * world_from_object;
+    const Eigen::Vector3d tcp_center = tcp_from_object.translation();
+    const Eigen::Quaterniond tcp_orientation(tcp_from_object.rotation());
 
     moveit_msgs::msg::AttachedCollisionObject attached;
     attached.link_name = runtime_.tcpFrame();

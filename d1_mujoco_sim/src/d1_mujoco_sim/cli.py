@@ -66,10 +66,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override the configured object placement seed",
     )
-    parser.add_argument(
+    layout_group = parser.add_mutually_exclusive_group()
+    layout_group.add_argument(
         "--fixed-layout",
         action="store_true",
-        help="Use the configured fixed object poses instead of seeded random placement",
+        help="Use the configured fixed object poses (the development default)",
+    )
+    layout_group.add_argument(
+        "--random-layout",
+        action="store_true",
+        help="Randomly place the objects and bin, using --seed when provided",
     )
     parser.add_argument(
         "--headless",
@@ -136,6 +142,8 @@ def main() -> None:
         config["scene"]["random_seed"] = args.seed
     if args.fixed_layout:
         config["scene"]["placement_mode"] = "fixed"
+    elif args.random_layout:
+        config["scene"]["placement_mode"] = "random"
     if args.initial_arm_pose is not None:
         initial_angles_deg = list(
             config["simulation"]["initial_sdk_angles_deg"]

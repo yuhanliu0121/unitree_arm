@@ -46,18 +46,20 @@ def scene_model() -> mujoco.MjModel:
     )
 
 
-def test_seed_zero_layout_is_deterministic_and_nonoverlapping() -> None:
-    first = sample_spawn_poses(CONFIG["scene"])
-    second = sample_spawn_poses(CONFIG["scene"])
+def test_seed_zero_random_layout_is_deterministic_and_nonoverlapping() -> None:
+    random_scene = deepcopy(CONFIG["scene"])
+    random_scene["placement_mode"] = "random"
+    first = sample_spawn_poses(random_scene)
+    second = sample_spawn_poses(random_scene)
     assert first == second
     assert tuple(pose.name for pose in first) == OBJECT_NAMES
 
-    expansion = CONFIG["scene"]["spawn_region"]["outer_expansion_m"]
-    gap = CONFIG["scene"]["object_gap_m"]
-    base_box = CONFIG["scene"]["base_exclusion_box"]
-    layout = sample_scene_layout(CONFIG["scene"])
+    expansion = random_scene["spawn_region"]["outer_expansion_m"]
+    gap = random_scene["object_gap_m"]
+    base_box = random_scene["base_exclusion_box"]
+    layout = sample_scene_layout(random_scene)
     poses = (*layout.objects, layout.trash_bin)
-    trash_bin_config = CONFIG["scene"]["trash_bin"]
+    trash_bin_config = random_scene["trash_bin"]
     trash_bin_distance = math.hypot(
         layout.trash_bin.x,
         layout.trash_bin.y,
@@ -104,8 +106,11 @@ def test_seed_zero_layout_is_deterministic_and_nonoverlapping() -> None:
 
 def test_seed_override_changes_layout() -> None:
     changed = deepcopy(CONFIG["scene"])
+    changed["placement_mode"] = "random"
     changed["random_seed"] = 1
-    assert sample_spawn_poses(changed) != sample_spawn_poses(CONFIG["scene"])
+    baseline = deepcopy(changed)
+    baseline["random_seed"] = 0
+    assert sample_spawn_poses(changed) != sample_spawn_poses(baseline)
 
 
 def test_fixed_layout_overrides_seed_without_removing_random_capability() -> None:
@@ -118,6 +123,20 @@ def test_fixed_layout_overrides_seed_without_removing_random_capability() -> Non
     cube = next(pose for pose in first if pose.name == "yellow_cube")
     assert cube.x == pytest.approx(0.28)
     assert cube.y == pytest.approx(-0.24)
+    bowl = next(pose for pose in first if pose.name == "bowl")
+    assert bowl.x == pytest.approx(0.20)
+    assert bowl.y == pytest.approx(-0.32)
+    zucchini = next(pose for pose in first if pose.name == "zucchini")
+    assert zucchini.x == pytest.approx(0.42)
+    assert zucchini.y == pytest.approx(0.08)
+
+    layout = sample_scene_layout(fixed)
+    poses = (*layout.objects, layout.trash_bin)
+    for index, pose in enumerate(poses):
+        for other in poses[index + 1 :]:
+            assert math.hypot(pose.x - other.x, pose.y - other.y) >= (
+                pose.footprint_radius + other.footprint_radius
+            )
 
     random_scene = deepcopy(fixed)
     random_scene["placement_mode"] = "random"

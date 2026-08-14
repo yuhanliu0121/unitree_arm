@@ -6,19 +6,35 @@ workspace=${0:A:h}
 conda_bin=/home/tony/miniconda3/bin/conda
 headless=false
 rviz=false
+object=cube
 
 function usage() {
-  print 'Usage: ./accept_cube_pick_drop.zsh [--headless] [--rviz]'
+  print 'Usage: ./accept_cube_pick_drop.zsh [--headless] [--rviz] [--object cube|zucchini|bowl]'
 }
 while (( $# > 0 )); do
   case "$1" in
     --headless) headless=true ;;
     --rviz) rviz=true ;;
+    --object) shift; object=${1:-} ;;
     -h|--help) usage; exit 0 ;;
     *) print -u2 "Unknown option: $1"; usage >&2; exit 2 ;;
   esac
   shift
 done
+if [[ ${object} != cube && ${object} != zucchini && ${object} != bowl ]]; then
+  print -u2 "Invalid object: ${object}"; usage >&2; exit 2
+fi
+
+if [[ ${object} == bowl ]]; then
+  class_name=bowl
+  pick_client=pick_seed_bowl
+elif [[ ${object} == zucchini ]]; then
+  class_name=zucchini
+  pick_client=pick_seed_zucchini
+else
+  class_name=yellow_cube
+  pick_client=pick_seed_cube
+fi
 
 source /opt/ros/humble/setup.zsh
 source ${workspace}/install/setup.zsh
@@ -77,12 +93,12 @@ done
 [[ ${ready} == true ]] || { print -u2 'Stack readiness timeout'; tail -n 140 ${stack_log} >&2; exit 1; }
 
 if [[ ${rviz} == true && -t 0 ]]; then
-  print -n 'Scene ready. Press Enter to pick the cube and move to CARRY...'
+  print -n "Scene ready. Press Enter to pick ${class_name} and move to CARRY..."
   IFS= read -r reply
 fi
-print '[3/4] Picking yellow cube into CARRY...'
+print "[3/4] Picking ${class_name} into CARRY..."
 set +e
-ros2 run d1_manipulation pick_seed_cube --stage carry 2>&1 | tee ${pick_log}
+ros2 run d1_manipulation ${pick_client} --stage carry 2>&1 | tee ${pick_log}
 pick_status=${pipestatus[1]}
 set -e
 if (( pick_status != 0 )) || ! grep -q 'PICK STAGE SUCCEEDED' ${pick_log}; then
@@ -96,9 +112,9 @@ if [[ ${rviz} == true && -t 0 ]]; then
   print -n 'CARRY reached. Inspect it, then press Enter to release into the bin...'
   IFS= read -r reply
 fi
-print '[4/4] Releasing cube into the acceptance trash bin...'
+print "[4/4] Releasing ${class_name} into the acceptance trash bin..."
 set +e
-ros2 run d1_manipulation drop_seed_bin 2>&1 | tee ${drop_log}
+ros2 run d1_manipulation drop_seed_bin --object ${class_name} 2>&1 | tee ${drop_log}
 drop_status=${pipestatus[1]}
 set -e
 if (( drop_status != 0 )) || ! grep -q 'DROP SUCCEEDED' ${drop_log}; then
@@ -109,7 +125,7 @@ if (( drop_status != 0 )) || ! grep -q 'DROP SUCCEEDED' ${drop_log}; then
 fi
 
 print
-print 'ACCEPTANCE PASSED: cube picked, carried, released into bin, and arm stowed.'
+print "ACCEPTANCE PASSED: ${class_name} picked, carried, released into bin, and arm stowed."
 print "Logs: ${run_dir}"
 if [[ ${rviz} == true && -t 0 ]]; then
   print -n 'Inspect the final scene, then press Enter to close...'

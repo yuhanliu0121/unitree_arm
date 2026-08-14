@@ -1,5 +1,13 @@
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
+trajectory_execution:
+  # MuJoCo/ros2_control can finish a few control cycles after the nominal
+  # time-parameterized duration. Keep path tolerances active while allowing
+  # enough wall-clock margin for that scheduling jitter.
+  allowed_execution_duration_scaling: 1.5
+  allowed_goal_duration_margin: 2.0
+  allowed_start_tolerance: 0.01
+
 moveit_simple_controller_manager:
   controller_names:
     - arm_controller

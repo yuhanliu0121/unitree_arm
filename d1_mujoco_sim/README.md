@@ -125,7 +125,7 @@ replaced by camera perception above the manipulation layer.
 Override the deterministic placement seed with:
 
 ```bash
-d1-mujoco-sim --seed 1
+d1-mujoco-sim --random-layout --seed 1
 ```
 
 Viewer geometry groups are: environment/outline `0`, arm/Go2 visuals `1`,

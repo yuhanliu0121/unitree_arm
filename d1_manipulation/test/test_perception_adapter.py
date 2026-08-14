@@ -14,6 +14,7 @@ from d1_perception_adapter import (  # noqa: E402
     image_to_bgr,
     fit_ground_plane_ransac,
     fit_square_on_plane,
+    fit_zucchini_axis_on_plane,
     intersect_rays_with_plane,
     match_target_detection,
     project_plumb_bob,
@@ -116,3 +117,27 @@ def test_ray_plane_intersection_and_metric_square_fit() -> None:
 def test_undistorted_ray_at_principal_point_is_optical_z() -> None:
     ray = undistorted_rays([[640, 360]], [900, 0, 640, 0, 900, 360, 0, 0, 1], [0, 0, 0, 0, 0])
     np.testing.assert_allclose(ray[0], [0, 0, 1], atol=1e-12)
+
+
+def test_zucchini_middle_axis_fit_ignores_curved_ends() -> None:
+    import cv2
+
+    mask = np.zeros((480, 848), dtype=np.uint8)
+    points = np.array(
+        [[300, 215], [390, 225], [500, 270], [535, 295],
+         [520, 315], [405, 265], [300, 250]], dtype=np.int32
+    )
+    cv2.fillPoly(mask, [points], 1)
+    center, axis, segment, length, width = fit_zucchini_axis_on_plane(
+        mask,
+        [0.0, 0.0, 1.0],
+        np.diag([1.0, -1.0, -1.0]),
+        [600.0, 0.0, 424.0, 0.0, 600.0, 240.0, 0.0, 0.0, 1.0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 1],
+        0.0,
+    )
+    assert center.shape == (3,)
+    assert segment.shape == (2, 3)
+    assert abs(axis[0]) > 0.85
+    assert length > width > 0.0
