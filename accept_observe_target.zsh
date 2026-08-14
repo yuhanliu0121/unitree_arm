@@ -111,7 +111,7 @@ sim_pid=$!
 
 print '[2/3] Starting ros2_control, MoveIt, and ObserveTarget...'
 setsid ${conda_bin} run --no-capture-output -n trash_collection \
-  ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} \
+  ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} gripper_profile:=simulation \
   >${stack_log} 2>&1 &
 stack_pid=$!
 

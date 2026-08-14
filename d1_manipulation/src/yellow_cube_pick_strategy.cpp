@@ -76,11 +76,15 @@ public:
     grasp_max_ = parameterOrDeclare(node_, "grasp_distance_max_m", -0.024);
     grasp_step_ = parameterOrDeclare(node_, "grasp_distance_step_m", 0.002);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
-    gripper_closed_ = parameterOrDeclare(node_, "gripper_closed_m", 0.0);
+    gripper_closed_ = parameterOrDeclare(node_, "cube_gripper_closed_m", 0.0216666667);
+    gripper_held_threshold_ = parameterOrDeclare(
+      node_, "cube_gripper_held_threshold_m", 0.0225);
     grasp_settle_ = parameterOrDeclare(node_, "grasp_settle_s", 0.5);
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     if (cube_size_ <= 0.0 || pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ ||
-      pregrasp_step_ <= 0.0 || grasp_min_ > grasp_max_ || grasp_max_ >= 0.0 || grasp_step_ <= 0.0)
+      pregrasp_step_ <= 0.0 || grasp_min_ > grasp_max_ || grasp_max_ >= 0.0 ||
+      grasp_step_ <= 0.0 || gripper_closed_ < 0.0 ||
+      gripper_held_threshold_ <= gripper_closed_ || gripper_held_threshold_ > gripper_open_)
     {
       throw std::invalid_argument("invalid signed cube pregrasp/grasp search parameters");
     }
@@ -204,6 +208,7 @@ public:
     output.approach_tilt_degrees = selected_tilt;
     output.gripper_open_m = gripper_open_;
     output.gripper_closed_m = gripper_closed_;
+    output.gripper_held_threshold_m = gripper_held_threshold_;
     output.grasp_settle_s = grasp_settle_;
     output.lift_distance_m = lift_distance_;
     auto state = std::make_shared<YellowCubeState>();
@@ -389,7 +394,8 @@ private:
   std::string estimate_name_;
   double cube_size_{}, pregrasp_max_{}, pregrasp_min_{}, pregrasp_step_{};
   double grasp_min_{}, grasp_max_{}, grasp_step_{};
-  double gripper_open_{}, gripper_closed_{}, grasp_settle_{}, lift_distance_{};
+  double gripper_open_{}, gripper_closed_{}, gripper_held_threshold_{};
+  double grasp_settle_{}, lift_distance_{};
 };
 
 std::unique_ptr<PickStrategy> makeYellowCubePickStrategy(

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -34,7 +34,10 @@ def build_moveit_config():
     return config
 
 
-def generate_launch_description():
+def _launch_setup(context):
+    profile = LaunchConfiguration("gripper_profile").perform(context)
+    if profile not in {"simulation", "real"}:
+        raise RuntimeError(f"unsupported gripper_profile: {profile}")
     moveit_config = build_moveit_config()
     move_group_launch = Path(
         get_package_share_directory("d1_moveit_config")
@@ -45,36 +48,39 @@ def generate_launch_description():
     perception_config = Path(
         get_package_share_directory("d1_manipulation")
     ) / "config" / "perception_adapter.yaml"
+    gripper_config = Path(
+        get_package_share_directory("d1_manipulation")
+    ) / "config" / f"gripper_{profile}.yaml"
     workspace_root = Path(get_package_prefix("d1_manipulation")).parents[1]
 
-    return LaunchDescription(
-        [
-            DeclareLaunchArgument("launch_rviz", default_value="true"),
-            IncludeLaunchDescription(
+    return [
+        IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(str(move_group_launch)),
                 launch_arguments={
                     "launch_rviz": LaunchConfiguration("launch_rviz")
                 }.items(),
-            ),
-            Node(
+        ),
+        Node(
                 package="d1_manipulation",
                 executable="observe_target_server",
                 output="screen",
                 parameters=[moveit_config.to_dict(), str(observe_config)],
-            ),
-            Node(
+        ),
+        Node(
                 package="d1_manipulation",
                 executable="pick_object_server",
                 output="screen",
-                parameters=[moveit_config.to_dict(), str(observe_config)],
-            ),
-            Node(
+                parameters=[
+                    moveit_config.to_dict(), str(observe_config), str(gripper_config)
+                ],
+        ),
+        Node(
                 package="d1_manipulation",
                 executable="drop_object_server",
                 output="screen",
                 parameters=[moveit_config.to_dict(), str(observe_config)],
-            ),
-            Node(
+        ),
+        Node(
                 package="d1_manipulation",
                 executable="detect_target_server",
                 output="screen",
@@ -86,6 +92,19 @@ def generate_launch_description():
                         )
                     },
                 ],
+        ),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("launch_rviz", default_value="true"),
+            DeclareLaunchArgument(
+                "gripper_profile",
+                choices=["simulation", "real"],
+                description="Backend-specific gripper targets and retention thresholds",
             ),
+            OpaqueFunction(function=_launch_setup),
         ]
     )

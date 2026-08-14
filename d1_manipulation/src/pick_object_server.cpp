@@ -3,11 +3,14 @@
 #include <chrono>
 #include <cmath>
 #include <future>
+#include <iomanip>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -21,6 +24,7 @@
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
@@ -30,7 +34,6 @@
 #include "d1_manipulation/action/pick_object.hpp"
 #include "d1_manipulation/pick_strategy.hpp"
 #include "d1_manipulation/srv/detect_target.hpp"
-#include "d1_manipulation/srv/verify_held_object.hpp"
 
 using namespace std::chrono_literals;
 
@@ -85,9 +88,6 @@ public:
     observe_name_ = parameterOrDeclare(node_, "observe_action_name", std::string("/arm/debug/observe_target"));
     detect_name_ = parameterOrDeclare(
       node_, "target_detection_service_name", std::string("/arm/perception/detect_target"));
-    verify_name_ = parameterOrDeclare(
-      node_, "held_object_verification_service_name",
-      std::string("/arm/perception/verify_held_object"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     link6_frame_ = parameterOrDeclare(node_, "link6_frame", std::string("Link6"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
@@ -101,6 +101,23 @@ public:
     minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.95);
     stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
+    gripper_verify_settle_ = parameterOrDeclare(node_, "gripper_verify_settle_s", 0.5);
+    gripper_verify_sample_ = parameterOrDeclare(node_, "gripper_verify_sample_s", 1.0);
+    gripper_verify_min_samples_ = parameterOrDeclare(node_, "gripper_verify_min_samples", 5);
+    gripper_verify_min_pass_ratio_ = parameterOrDeclare(
+      node_, "gripper_verify_min_pass_ratio", 0.8);
+    gripper_safe_closed_angle_deg_ = parameterOrDeclare(
+      node_, "gripper_safe_closed_angle_deg", -30.0);
+    gripper_safe_open_angle_deg_ = parameterOrDeclare(
+      node_, "gripper_safe_open_angle_deg", 60.0);
+    gripper_travel_m_ = parameterOrDeclare(node_, "gripper_travel_m", 0.03);
+    if (gripper_verify_settle_ < 0.0 || gripper_verify_sample_ <= 0.0 ||
+      gripper_verify_min_samples_ <= 0 || gripper_verify_min_pass_ratio_ <= 0.0 ||
+      gripper_verify_min_pass_ratio_ > 1.0 || gripper_travel_m_ <= 0.0 ||
+      gripper_safe_open_angle_deg_ <= gripper_safe_closed_angle_deg_)
+    {
+      throw std::invalid_argument("invalid gripper verification parameters");
+    }
 
     move_group_.setEndEffectorLink(tcp_frame_);
     move_group_.setPoseReferenceFrame(planning_frame_);
@@ -114,8 +131,24 @@ public:
 
     observe_client_ = rclcpp_action::create_client<Observe>(node_, observe_name_);
     detect_client_ = node_->create_client<srv::DetectTarget>(detect_name_);
-    verify_client_ = node_->create_client<srv::VerifyHeldObject>(verify_name_);
     gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
+    joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
+      "/joint_states", rclcpp::SensorDataQoS(),
+      [this](const sensor_msgs::msg::JointState::SharedPtr message) {
+        const auto entry = std::find(message->name.begin(), message->name.end(), "Joint6");
+        if (entry == message->name.end()) return;
+        const auto index = static_cast<std::size_t>(std::distance(message->name.begin(), entry));
+        if (index >= message->position.size() || !std::isfinite(message->position[index])) return;
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(gripper_samples_mutex_);
+        gripper_samples_.emplace_back(now, message->position[index]);
+        const auto oldest = now - 10s;
+        gripper_samples_.erase(
+          std::remove_if(
+            gripper_samples_.begin(), gripper_samples_.end(),
+            [oldest](const auto& sample) {return sample.first < oldest;}),
+          gripper_samples_.end());
+      });
     strategies_.emplace(
       "yellow_cube", makeYellowCubePickStrategy(node_, *this));
     strategies_.emplace(
@@ -446,24 +479,54 @@ private:
       move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
   }
 
-  bool verifyHeldObject(const std::string& class_name,
-    const geometry_msgs::msg::PointStamped& expected, std::string& detail)
+  double gripperPositionToDegrees(double position_m) const
   {
-    if (!verify_client_->wait_for_service(5s)) {
-      detail = "held-object verification service unavailable";
+    return gripper_safe_closed_angle_deg_ +
+      position_m / gripper_travel_m_ *
+      (gripper_safe_open_angle_deg_ - gripper_safe_closed_angle_deg_);
+  }
+
+  bool verifyHeldObject(const PreparedPick& pick, std::string& detail)
+  {
+    std::this_thread::sleep_for(std::chrono::duration<double>(gripper_verify_settle_));
+    const auto window_start = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::duration<double>(gripper_verify_sample_));
+
+    std::vector<double> positions;
+    {
+      std::lock_guard<std::mutex> lock(gripper_samples_mutex_);
+      for (const auto& sample : gripper_samples_) {
+        if (sample.first >= window_start) positions.push_back(sample.second);
+      }
+    }
+    if (positions.size() < static_cast<std::size_t>(gripper_verify_min_samples_)) {
+      detail = "insufficient fresh Joint6 feedback samples: " +
+        std::to_string(positions.size()) + "/" +
+        std::to_string(gripper_verify_min_samples_);
       return false;
     }
-    auto request = std::make_shared<srv::VerifyHeldObject::Request>();
-    request->class_name = class_name;
-    request->expected_center = expected;
-    auto future = verify_client_->async_send_request(request);
-    if (future.wait_for(10s) != std::future_status::ready) {
-      detail = "held-object verification timed out";
-      return false;
-    }
-    const auto response = future.get();
-    detail = response->detail;
-    return response->success && response->held;
+
+    std::sort(positions.begin(), positions.end());
+    const std::size_t middle = positions.size() / 2;
+    const double median = positions.size() % 2 == 0
+      ? 0.5 * (positions[middle - 1] + positions[middle]) : positions[middle];
+    const auto passing = static_cast<std::size_t>(std::count_if(
+      positions.begin(), positions.end(), [&pick](double value) {
+        return value > pick.gripper_held_threshold_m;
+      }));
+    const double pass_ratio = static_cast<double>(passing) /
+      static_cast<double>(positions.size());
+    const bool held = median > pick.gripper_held_threshold_m &&
+      pass_ratio >= gripper_verify_min_pass_ratio_;
+
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(2)
+           << "Joint6 mechanical retention: held=" << std::boolalpha << held
+           << " median=" << gripperPositionToDegrees(median) << " deg"
+           << " threshold=" << gripperPositionToDegrees(pick.gripper_held_threshold_m)
+           << " deg pass=" << passing << "/" << positions.size();
+    detail = stream.str();
+    return held;
   }
 
   bool restoreTargetCollision(
@@ -600,14 +663,15 @@ private:
         return;
       }
       feedback(handle, "VERIFY_GRASP", 0.99F,
-        "Checking " + prepared.class_name + " in wrist-camera ROI");
+        "Checking retained Joint6 opening for " + prepared.class_name);
       std::string verification_detail;
-      if (!verifyHeldObject(prepared.class_name, expected_held_center, verification_detail)) {
+      if (!verifyHeldObject(prepared, verification_detail)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "VERIFY_GRASP", verification_detail);
         return;
       }
+      RCLCPP_INFO(node_->get_logger(), "%s", verification_detail.c_str());
       result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
-      result->detail = prepared.class_name + " grasped, carried and visually verified: " +
+      result->detail = prepared.class_name + " grasped, carried and mechanically verified: " +
         verification_detail;
       handle->succeed(result); busy_.store(false);
       RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_CARRY");
@@ -624,18 +688,25 @@ private:
   tf2_ros::TransformListener tf_listener_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
   rclcpp::Client<srv::DetectTarget>::SharedPtr detect_client_;
-  rclcpp::Client<srv::VerifyHeldObject>::SharedPtr verify_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
   rclcpp_action::Server<Pick>::SharedPtr server_;
   std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> busy_{false}, cancel_{false};
-  std::string action_name_, observe_name_, detect_name_, verify_name_, planning_frame_;
+  std::string action_name_, observe_name_, detect_name_, planning_frame_;
   std::string link6_frame_, tcp_frame_, camera_frame_;
   std::vector<double> stowed_;
   std::vector<double> carry_;
   std::vector<double> top_distances_, top_rolls_;
   double camera_settle_{};
   double cartesian_step_{}, minimum_fraction_{}, stowed_tolerance_{};
+  double gripper_verify_settle_{}, gripper_verify_sample_{};
+  double gripper_verify_min_pass_ratio_{};
+  double gripper_safe_closed_angle_deg_{}, gripper_safe_open_angle_deg_{};
+  double gripper_travel_m_{};
+  int gripper_verify_min_samples_{};
+  std::mutex gripper_samples_mutex_;
+  std::vector<std::pair<std::chrono::steady_clock::time_point, double>> gripper_samples_;
 };
 }  // namespace d1_manipulation
 

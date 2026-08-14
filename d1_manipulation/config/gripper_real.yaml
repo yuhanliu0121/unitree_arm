@@ -1,0 +1,10 @@
+d1_pick_object:
+  ros__parameters:
+    # Physical D1 calibration. The hardware bridge maps SDK J6=-30..+60 deg
+    # linearly onto ROS Joint6=0.00..0.03 m.
+    cube_gripper_closed_m: 0.0216666667       # +35 deg
+    cube_gripper_held_threshold_m: 0.0225     # +37.5 deg
+    zucchini_gripper_closed_m: 0.01           #   0 deg
+    zucchini_gripper_held_threshold_m: 0.011  #  +3 deg
+    bowl_gripper_closed_m: 0.0                # -30 deg
+    bowl_gripper_held_threshold_m: 0.0006666667  # -28 deg

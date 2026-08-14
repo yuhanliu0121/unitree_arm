@@ -61,8 +61,14 @@ d1_pick_object:
     cartesian_step_m: 0.005
     minimum_cartesian_fraction: 0.95
     gripper_open_m: 0.03
-    gripper_closed_m: 0.0
     grasp_settle_s: 0.5
+    gripper_verify_settle_s: 0.5
+    gripper_verify_sample_s: 1.0
+    gripper_verify_min_samples: 5
+    gripper_verify_min_pass_ratio: 0.8
+    gripper_safe_closed_angle_deg: -30.0
+    gripper_safe_open_angle_deg: 60.0
+    gripper_travel_m: 0.03
     zucchini_length_m: 0.15
     zucchini_width_m: 0.040
     zucchini_height_m: 0.03312

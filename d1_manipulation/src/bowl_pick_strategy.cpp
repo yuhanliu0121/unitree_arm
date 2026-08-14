@@ -83,11 +83,15 @@ public:
     radius_ = parameterOrDeclare(node_, "bowl_radius_m", 0.058);
     height_ = parameterOrDeclare(node_, "bowl_height_m", 0.05001143);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
-    gripper_closed_ = parameterOrDeclare(node_, "gripper_closed_m", 0.0);
+    gripper_closed_ = parameterOrDeclare(node_, "bowl_gripper_closed_m", 0.0);
+    gripper_held_threshold_ = parameterOrDeclare(
+      node_, "bowl_gripper_held_threshold_m", 0.0006666667);
     grasp_settle_ = parameterOrDeclare(node_, "grasp_settle_s", 0.5);
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     if (pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ ||
-      pregrasp_step_ <= 0.0 || radius_ <= 0.0 || height_ <= 0.0)
+      pregrasp_step_ <= 0.0 || radius_ <= 0.0 || height_ <= 0.0 ||
+      gripper_closed_ < 0.0 || gripper_held_threshold_ <= gripper_closed_ ||
+      gripper_held_threshold_ > gripper_open_)
     {
       throw std::invalid_argument("invalid bowl geometry or pregrasp search parameters");
     }
@@ -218,6 +222,7 @@ public:
     output.grasp_yaw_degrees = selected_azimuth;
     output.approach_tilt_degrees = 0.0;
     output.gripper_open_m = gripper_open_; output.gripper_closed_m = gripper_closed_;
+    output.gripper_held_threshold_m = gripper_held_threshold_;
     output.grasp_settle_s = grasp_settle_; output.lift_distance_m = lift_distance_;
     auto state = std::make_shared<BowlState>();
     state->bottom_center = bottom; state->world_from_model = world_from_model;
@@ -404,7 +409,8 @@ private:
   std::string estimate_name_;
   double pregrasp_max_{}, pregrasp_min_{}, pregrasp_step_{};
   double radius_{}, height_{};
-  double gripper_open_{}, gripper_closed_{}, grasp_settle_{}, lift_distance_{};
+  double gripper_open_{}, gripper_closed_{}, gripper_held_threshold_{};
+  double grasp_settle_{}, lift_distance_{};
 };
 
 std::unique_ptr<PickStrategy> makeBowlPickStrategy(

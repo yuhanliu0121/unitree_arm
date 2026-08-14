@@ -86,6 +86,7 @@ ament_target_dependencies(pick_object_server
   moveit_ros_planning_interface
   rclcpp
   rclcpp_action
+  sensor_msgs
   shape_msgs
   tf2_eigen
   tf2_geometry_msgs
@@ -146,6 +147,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_observation_geometry test/test_observation_geometry.cpp)
   target_link_libraries(test_observation_geometry observation_geometry Eigen3::Eigen)
   ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
+  ament_add_pytest_test(test_gripper_profiles test/test_gripper_profiles.py)
 endif()
 
 ament_export_dependencies(rosidl_default_runtime)

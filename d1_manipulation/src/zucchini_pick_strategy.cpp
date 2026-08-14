@@ -131,12 +131,15 @@ public:
     tcp_ground_clearance_ = parameterOrDeclare(
       node_, "zucchini_tcp_ground_clearance_m", 0.015);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
-    gripper_closed_ = parameterOrDeclare(node_, "gripper_closed_m", 0.0);
+    gripper_closed_ = parameterOrDeclare(node_, "zucchini_gripper_closed_m", 0.01);
+    gripper_held_threshold_ = parameterOrDeclare(
+      node_, "zucchini_gripper_held_threshold_m", 0.011);
     grasp_settle_ = parameterOrDeclare(node_, "grasp_settle_s", 0.5);
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     if (length_ <= 0.0 || width_ <= 0.0 || height_ <= 0.0 ||
       pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ || pregrasp_step_ <= 0.0 ||
-      tcp_ground_clearance_ < 0.0)
+      tcp_ground_clearance_ < 0.0 || gripper_closed_ < 0.0 ||
+      gripper_held_threshold_ <= gripper_closed_ || gripper_held_threshold_ > gripper_open_)
     {
       throw std::invalid_argument("invalid zucchini geometry or grasp search parameters");
     }
@@ -277,6 +280,7 @@ public:
     output.grasp_yaw_degrees = selected_yaw;
     output.approach_tilt_degrees = selected_tilt;
     output.gripper_open_m = gripper_open_; output.gripper_closed_m = gripper_closed_;
+    output.gripper_held_threshold_m = gripper_held_threshold_;
     output.grasp_settle_s = grasp_settle_; output.lift_distance_m = lift_distance_;
     auto state = std::make_shared<ZucchiniState>();
     state->grasp_point = grasp_point; state->grasp_rotation = selected_rotation;
@@ -434,7 +438,8 @@ private:
   double length_{}, width_{}, height_{};
   double pregrasp_max_{}, pregrasp_min_{}, pregrasp_step_{};
   double tcp_ground_clearance_{};
-  double gripper_open_{}, gripper_closed_{}, grasp_settle_{}, lift_distance_{};
+  double gripper_open_{}, gripper_closed_{}, gripper_held_threshold_{};
+  double grasp_settle_{}, lift_distance_{};
 };
 
 std::unique_ptr<PickStrategy> makeZucchiniPickStrategy(

@@ -46,6 +46,7 @@ struct PreparedPick
   double approach_tilt_degrees{0.0};
   double gripper_open_m{0.03};
   double gripper_closed_m{0.0};
+  double gripper_held_threshold_m{0.0};
   double grasp_settle_s{0.5};
   double lift_distance_m{0.10};
 

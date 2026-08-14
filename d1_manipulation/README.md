@@ -99,11 +99,23 @@ scene, and RViz retains the independent object-mesh visualization. A grasped
 object will be added from perception as an attached collision object rather
 than copied from simulation truth.
 
-The `carry` stage attaches the visually estimated 50 mm cube to `tcp_link` for
+The `carry` stage attaches the perception-estimated object to `tcp_link` for
 MoveIt collision checking, executes the configured CARRY joint pose, and then
-checks three fresh wrist RGB frames. Yellow HSV connected components are
-measured only inside an ROI projected from the expected held-object position;
-MuJoCo object truth is not used by this verification.
+checks a fresh window of `Joint6` feedback. Its median position and the ratio
+of samples above the selected object's retention threshold determine whether
+the object still blocks the fingers from closing. MuJoCo object truth and
+wrist-camera appearance are not used by this verification.
+
+Gripper targets and retention thresholds are backend calibration, selected by
+the required launch profile. Simulation acceptance commands `-30 deg` for all
+objects and uses simulation thresholds; physical D1 operation uses the measured
+object-specific targets (`cube=35`, `zucchini=0`, `bowl=-30 deg`) and matching
+thresholds (`37.5`, `3`, `-28 deg`):
+
+```zsh
+ros2 launch d1_manipulation observe_target.launch.py gripper_profile:=simulation
+ros2 launch d1_manipulation observe_target.launch.py gripper_profile:=real
+```
 
 ## Gravity-aligned object release
 
