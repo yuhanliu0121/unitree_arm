@@ -1,0 +1,13 @@
+cube_sweet_zone:
+  frame_id: base_link
+  xy_step_m: 0.050000
+  yaw_samples_degrees: [0, 10, 20, 30, 40, 50, 60, 70, 80]
+  conservative_xy_point_count: 101
+  physically_validated_xy:
+    - [0.280000, -0.240000]
+  recommended_target_xy: [0.050000, -0.350000]
+  recommended_robustness_radius_m: 0.111803
+  equal_maximum_candidates_xy:
+    - [0.050000, -0.350000]
+    - [0.100000, -0.350000]
+    - [-0.050000, 0.350000]

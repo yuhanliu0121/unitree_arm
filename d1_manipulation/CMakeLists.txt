@@ -108,9 +108,12 @@ target_link_libraries(observe_target_server "${cpp_typesupport_target}")
 target_link_libraries(pick_object_server "${cpp_typesupport_target}")
 target_link_libraries(drop_object_server "${cpp_typesupport_target}")
 
-install(TARGETS observation_geometry observe_target_server pick_object_server drop_object_server
+install(TARGETS observation_geometry
+  EXPORT export_observation_geometry
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+)
+install(TARGETS observe_target_server pick_object_server drop_object_server
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)
@@ -153,4 +156,5 @@ endif()
 ament_export_dependencies(rosidl_default_runtime)
 ament_export_include_directories(include)
 ament_export_libraries(observation_geometry)
+ament_export_targets(export_observation_geometry HAS_LIBRARY_TARGET)
 ament_package()
