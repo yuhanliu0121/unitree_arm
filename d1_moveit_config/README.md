@@ -10,7 +10,7 @@ Start the MuJoCo service first, then launch the ROS control and planning stack:
 ```bash
 source /opt/ros/humble/setup.zsh
 source /home/tony/Project/unitree_arm/dev/install/setup.zsh
-ros2 launch d1_moveit_config move_group.launch.py
+ros2 launch d1_moveit_config move_group.launch.py backend:=simulation
 ```
 
 Run the fixed-cube grasp after all controllers and `move_group` are ready:

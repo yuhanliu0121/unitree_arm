@@ -17,6 +17,7 @@
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>controller_manager</exec_depend>
+  <exec_depend>d1_constrained_description</exec_depend>
   <exec_depend>gripper_controllers</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>

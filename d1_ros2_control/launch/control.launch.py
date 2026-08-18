@@ -11,21 +11,16 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-
-JOINT_LIMITS = [
-    (-2.785545486183, 2.809980095711),
-    (-1.541125729511, 1.619665545851),
-    (-1.619665545851, 1.546361717267),
-    (-2.623229865747, 2.654645792283),
-    (-1.610938899591, 1.848303677862),
-    (-2.764601535159, 2.778564169175),
-    (0.0, 0.03),
-]
+from d1_constrained_description import (
+    apply_joint_limit_overrides,
+    joint_limits_from_urdf,
+    load_joint_limit_overrides,
+)
 
 
-def make_control_block(command_port: str, feedback_port: str) -> str:
+def make_control_block(command_port: str, feedback_port: str, joint_limits) -> str:
     joints = []
-    for index, (lower, upper) in enumerate(JOINT_LIMITS):
+    for index, (lower, upper) in enumerate(joint_limits):
         joints.append(
             f"""
     <joint name="Joint{index}">
@@ -57,6 +52,9 @@ def make_control_block(command_port: str, feedback_port: str) -> str:
 
 
 def launch_setup(context):
+    backend = LaunchConfiguration("backend").perform(context)
+    if backend not in {"simulation", "real"}:
+        raise RuntimeError(f"unsupported backend: {backend}")
     control_share = Path(get_package_share_directory("d1_ros2_control"))
     control_prefix = Path(get_package_prefix("d1_ros2_control"))
     description_share = Path(
@@ -65,9 +63,27 @@ def launch_setup(context):
     robot_description = (
         description_share / "urdf" / "d1_description.urdf"
     ).read_text(encoding="utf-8")
+    requested_arm_serial = LaunchConfiguration("arm_serial").perform(context).strip()
+    arm_serial = requested_arm_serial if backend == "real" else ""
+    if requested_arm_serial and backend != "real":
+        print("D1 hardware profile: ignored arm_serial for simulation backend")
+    profile_path = description_share / "config" / "hardware_profiles.yaml"
+    overrides = load_joint_limit_overrides(profile_path, arm_serial)
+    if arm_serial and not overrides:
+        print(
+            f"D1 hardware profile: serial {arm_serial!r} has no profile; "
+            "using the base URDF unchanged"
+        )
+    elif overrides:
+        print(f"D1 hardware profile: applying explicit serial {arm_serial}")
+    robot_description = apply_joint_limit_overrides(robot_description, overrides)
+    joint_limits = joint_limits_from_urdf(
+        robot_description, [f"Joint{index}" for index in range(7)]
+    )
     control_block = make_control_block(
         LaunchConfiguration("command_port").perform(context),
         LaunchConfiguration("feedback_port").perform(context),
+        joint_limits,
     )
     control_description = robot_description.replace(
         "</robot>", control_block + "</robot>"
@@ -147,6 +163,16 @@ def launch_setup(context):
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "backend",
+                choices=["simulation", "real"],
+                description="Required immutable execution backend",
+            ),
+            DeclareLaunchArgument(
+                "arm_serial",
+                default_value="",
+                description="Explicit physical D1 serial for per-unit URDF adjustments",
+            ),
             DeclareLaunchArgument(
                 "dds_domain_id",
                 default_value="42",

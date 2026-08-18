@@ -34,6 +34,7 @@
 #include "d1_manipulation/action/pick_object.hpp"
 #include "d1_manipulation/pick_strategy.hpp"
 #include "d1_manipulation/srv/detect_target.hpp"
+#include "d1_manipulation/task_lock.hpp"
 
 using namespace std::chrono_literals;
 
@@ -82,8 +83,13 @@ public:
   explicit PickObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
     move_group_(node, parameterOrDeclare(node, "arm_group", std::string("arm"))),
-    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_)
+    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_),
+    task_lock_(parameterOrDeclare(node, "task_lock_path", std::string("/tmp/d1_arm_task.lock")))
   {
+    backend_ = parameterOrDeclare(node_, "backend", std::string{});
+    if (backend_ != "simulation" && backend_ != "real") {
+      throw std::invalid_argument("backend must be explicitly set to 'simulation' or 'real'");
+    }
     action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/tasks/pick_object"));
     observe_name_ = parameterOrDeclare(node_, "observe_action_name", std::string("/arm/debug/observe_target"));
     detect_name_ = parameterOrDeclare(
@@ -164,17 +170,24 @@ public:
         if (!busy_.compare_exchange_strong(expected, true)) {
           return rclcpp_action::GoalResponse::REJECT;
         }
+        if (!task_lock_.tryAcquire()) {
+          busy_.store(false);
+          RCLCPP_WARN(node_->get_logger(), "Rejecting PickObject goal: another public arm task is active");
+          return rclcpp_action::GoalResponse::REJECT;
+        }
         cancel_.store(false);
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [this](const std::shared_ptr<PickHandle>) {
-        cancel_.store(true); move_group_.stop();
+        requestCancel();
         return rclcpp_action::CancelResponse::ACCEPT;
       },
       [this](const std::shared_ptr<PickHandle> handle) {
         std::thread([this, handle]() { execute(handle); }).detach();
       });
-    RCLCPP_INFO(node_->get_logger(), "PickObject action server ready: %s", action_name_.c_str());
+    RCLCPP_INFO(
+      node_->get_logger(), "PickObject action server ready: %s backend=%s",
+      action_name_.c_str(), backend_.c_str());
   }
 
 private:
@@ -196,26 +209,45 @@ private:
     return true;
   }
 
-  bool returnStowed()
+  void releaseTask()
   {
-    if (isStowed()) return true;
-    move_group_.setStartStateToCurrentState();
-    if (!move_group_.setJointValueTarget(stowed_)) return false;
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    return move_group_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
-      move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS && isStowed();
+    task_lock_.release();
+    busy_.store(false);
+  }
+
+  void requestCancel()
+  {
+    cancel_.store(true);
+    move_group_.stop();
+    std::lock_guard<std::mutex> lock(active_goals_mutex_);
+    if (active_observe_goal_) observe_client_->async_cancel_goal(active_observe_goal_);
+    if (active_gripper_goal_) gripper_client_->async_cancel_goal(active_gripper_goal_);
+  }
+
+  bool waitCancelable(double seconds)
+  {
+    const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::duration<double>(seconds);
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (cancel_.load()) return false;
+      std::this_thread::sleep_for(20ms);
+    }
+    return true;
   }
 
   void fail(const std::shared_ptr<PickHandle>& handle, uint8_t category,
     const std::string& state, const std::string& detail, bool canceled = false)
   {
-    const bool returned = returnStowed();
+    move_group_.stop();
+    const bool returned = isStowed();
     auto result = std::make_shared<Pick::Result>();
     result->success = false; result->failure_category = category;
-    result->failed_state = state; result->detail = detail;
+    result->failed_state = state;
+    result->detail = detail + "; motion stopped and current position held";
     result->returned_to_stowed = returned;
-    if (canceled) handle->canceled(result); else handle->abort(result);
-    busy_.store(false);
+    const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
+    if (was_canceled) handle->canceled(result); else handle->abort(result);
+    releaseTask();
   }
 
   std::string detectClass(const geometry_msgs::msg::PointStamped& hint, std::string& detail)
@@ -242,9 +274,26 @@ private:
     Observe::Goal goal; goal.target = target;
     auto sent = observe_client_->async_send_goal(goal);
     if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) return false;
-    auto result = observe_client_->async_get_result(sent.get());
-    return result.wait_for(40s) == std::future_status::ready &&
-      result.get().code == rclcpp_action::ResultCode::SUCCEEDED && result.get().result->success;
+    const auto observe_goal = sent.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_observe_goal_ = observe_goal;
+    }
+    auto result = observe_client_->async_get_result(observe_goal);
+    const auto deadline = std::chrono::steady_clock::now() + 40s;
+    while (result.wait_for(50ms) != std::future_status::ready) {
+      if (cancel_.load() || std::chrono::steady_clock::now() >= deadline) {
+        observe_client_->async_cancel_goal(observe_goal);
+        std::lock_guard<std::mutex> lock(active_goals_mutex_);
+        active_observe_goal_.reset();
+        return false;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_observe_goal_.reset();
+    }
+    return result.get().code == rclcpp_action::ResultCode::SUCCEEDED && result.get().result->success;
   }
 
 public:
@@ -308,9 +357,26 @@ private:
     Gripper::Goal goal; goal.command.position = position;
     auto sent = gripper_client_->async_send_goal(goal);
     if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) return false;
-    auto result = gripper_client_->async_get_result(sent.get());
-    return result.wait_for(8s) == std::future_status::ready &&
-      result.get().code == rclcpp_action::ResultCode::SUCCEEDED;
+    const auto gripper_goal = sent.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_gripper_goal_ = gripper_goal;
+    }
+    auto result = gripper_client_->async_get_result(gripper_goal);
+    const auto deadline = std::chrono::steady_clock::now() + 8s;
+    while (result.wait_for(50ms) != std::future_status::ready) {
+      if (cancel_.load() || std::chrono::steady_clock::now() >= deadline) {
+        gripper_client_->async_cancel_goal(gripper_goal);
+        std::lock_guard<std::mutex> lock(active_goals_mutex_);
+        active_gripper_goal_.reset();
+        return false;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_gripper_goal_.reset();
+    }
+    return result.get().code == rclcpp_action::ResultCode::SUCCEEDED;
   }
 
   bool executeTrajectory(moveit_msgs::msg::RobotTrajectory message)
@@ -488,9 +554,15 @@ private:
 
   bool verifyHeldObject(const PreparedPick& pick, std::string& detail)
   {
-    std::this_thread::sleep_for(std::chrono::duration<double>(gripper_verify_settle_));
+    if (!waitCancelable(gripper_verify_settle_)) {
+      detail = "canceled while waiting for gripper feedback to settle";
+      return false;
+    }
     const auto window_start = std::chrono::steady_clock::now();
-    std::this_thread::sleep_for(std::chrono::duration<double>(gripper_verify_sample_));
+    if (!waitCancelable(gripper_verify_sample_)) {
+      detail = "canceled while sampling gripper feedback";
+      return false;
+    }
 
     std::vector<double> positions;
     {
@@ -567,6 +639,10 @@ private:
       feedback(handle, "CLASSIFY_TARGET", 0.15F, "Selecting object-specific grasp strategy");
       std::string detection_detail;
       const std::string class_name = detectClass(goal->target, detection_detail);
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "CLASSIFY_TARGET", "canceled", true);
+        return;
+      }
       if (class_name.empty()) {
         fail(handle, Pick::Result::FAILURE_INCOMPLETE_INFORMATION,
           "CLASSIFY_TARGET", detection_detail);
@@ -586,6 +662,10 @@ private:
         fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
         return;
       }
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "PREPARE_GRASP", "canceled", true);
+        return;
+      }
 
       auto result = std::make_shared<Pick::Result>();
       result->class_name = prepared.class_name;
@@ -602,7 +682,7 @@ private:
       if (goal->stop_after == Pick::Goal::COMPUTE_ONLY) {
         result->success = true;
         result->detail = prepared.class_name + " grasp pose computed and visualized";
-        handle->succeed(result); busy_.store(false); return;
+        handle->succeed(result); releaseTask(); return;
       }
       feedback(handle, "MOVE_PREGRASP", 0.65F, "Executing selected pregrasp plan");
       if (!commandGripper(prepared.gripper_open_m) ||
@@ -610,8 +690,11 @@ private:
       {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "pregrasp execution failed"); return;
       }
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "canceled", true); return;
+      }
       if (goal->stop_after == Pick::Goal::MOVE_PREGRASP) {
-        result->success = true; result->detail = "pregrasp pose reached"; handle->succeed(result); busy_.store(false); return;
+        result->success = true; result->detail = "pregrasp pose reached"; handle->succeed(result); releaseTask(); return;
       }
       if (!strategy.confirmDescent(prepared, strategy_failure)) {
         fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
@@ -627,14 +710,19 @@ private:
       if (!executeTrajectory(prepared.descent_trajectory)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND", "Cartesian descent failed"); return;
       }
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND", "canceled", true); return;
+      }
       if (goal->stop_after == Pick::Goal::DESCEND) {
-        result->success = true; result->detail = "grasp pose reached with gripper open"; handle->succeed(result); busy_.store(false); return;
+        result->success = true; result->detail = "grasp pose reached with gripper open"; handle->succeed(result); releaseTask(); return;
       }
       feedback(handle, "GRASP", 0.88F, "Closing gripper");
       if (!commandGripper(prepared.gripper_closed_m)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "GRASP", "gripper close failed"); return;
       }
-      std::this_thread::sleep_for(std::chrono::duration<double>(prepared.grasp_settle_s));
+      if (!waitCancelable(prepared.grasp_settle_s)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "GRASP", "canceled", true); return;
+      }
       feedback(handle, "LIFT", 0.95F, "Reversing the strategy approach trajectory");
       auto lift_trajectory = reverseLiftTrajectory(
         prepared.descent_trajectory, prepared.lift_direction, prepared.lift_distance_m);
@@ -644,7 +732,7 @@ private:
       if (goal->stop_after == Pick::Goal::GRASP_AND_LIFT) {
         result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
         result->detail = prepared.class_name + " visually estimated, grasped and lifted";
-        handle->succeed(result); busy_.store(false);
+        handle->succeed(result); releaseTask();
         RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_LIFT");
         return;
       }
@@ -673,7 +761,7 @@ private:
       result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
       result->detail = prepared.class_name + " grasped, carried and mechanically verified: " +
         verification_detail;
-      handle->succeed(result); busy_.store(false);
+      handle->succeed(result); releaseTask();
       RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_CARRY");
     } catch (const std::exception& error) {
       RCLCPP_ERROR(node_->get_logger(), "PickObject error: %s", error.what());
@@ -686,6 +774,7 @@ private:
   moveit::planning_interface::PlanningSceneInterface planning_scene_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
+  TaskLock task_lock_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
   rclcpp::Client<srv::DetectTarget>::SharedPtr detect_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
@@ -693,7 +782,10 @@ private:
   rclcpp_action::Server<Pick>::SharedPtr server_;
   std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> busy_{false}, cancel_{false};
-  std::string action_name_, observe_name_, detect_name_, planning_frame_;
+  std::mutex active_goals_mutex_;
+  rclcpp_action::ClientGoalHandle<Observe>::SharedPtr active_observe_goal_;
+  rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
+  std::string backend_, action_name_, observe_name_, detect_name_, planning_frame_;
   std::string link6_frame_, tcp_frame_, camera_frame_;
   std::vector<double> stowed_;
   std::vector<double> carry_;

@@ -2,8 +2,13 @@ cmake_minimum_required(VERSION 3.8)
 project(d1_constrained_description)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+
+ament_python_install_package(${PROJECT_NAME}
+  PACKAGE_DIR python/${PROJECT_NAME}
+)
 
 find_path(
   UNITREE_SDK2_INCLUDE_DIR
@@ -94,5 +99,10 @@ install(
   TARGETS d1_joint_state_bridge
   DESTINATION lib/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_hardware_profile test/test_hardware_profile.py)
+endif()
 
 ament_package()

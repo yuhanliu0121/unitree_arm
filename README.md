@@ -14,10 +14,24 @@ wrist-mounted RealSense D435i, and a fixed-cube grasp acceptance flow.
 - `d1_grasp_demo`: grasp baseline and application-level fixed poses.
 - `d1_manipulation`: gravity-aligned eye-in-hand observation Action and
   ordered MoveIt candidate search.
+- `d1_bringup`: explicit real-machine configuration and motionless preflight.
+
+## Development environment
+
+Open a new zsh terminal and load ROS 2, the `trash_collection` Conda
+environment and this workspace overlay with one command:
+
+```zsh
+source ./setup_dev_env.zsh
+```
+
+The command must be sourced so that the environment remains active in the
+current terminal. It deliberately leaves `ROS_DOMAIN_ID` unset; launchers
+select the simulation or real-machine DDS domain explicitly.
 
 ## Acceptance
 
-Activate the `trash_collection` Conda environment and run:
+After loading the development environment, run:
 
 ```zsh
 ./accept_cube_grasp.zsh
@@ -52,3 +66,24 @@ d1-mujoco-sim --manual-control \
 
 See `doc/codex_handoff.md` for the detailed architecture, calibration values,
 validation history and current limitations.
+
+## Physical-hardware motionless preflight
+
+With the D1 Ethernet cable and the wrist D435i connected, run:
+
+```zsh
+./real_preflight.zsh
+```
+
+Per-unit adjustments are opt-in. For physical arm `D1095`, use:
+
+```zsh
+./real_preflight.zsh --arm-serial D1095
+```
+
+This entry point starts no controller and sends no arm command. It checks the
+configured NIC, passive D1 feedback, joint-limit consistency, live color and
+aligned-depth CameraInfo, D435i accelerometer stability, and the required TF
+chain. Deployment-owned values are in
+`d1_bringup/config/real_machine.yaml`. A failed check leaves the system
+`NOT_READY`.

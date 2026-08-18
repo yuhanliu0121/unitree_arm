@@ -13,6 +13,18 @@ from rclpy.action import ActionClient
 from d1_manipulation.action import PickObject
 
 
+def wait_for_result_or_cancel(node, handle):
+    future = handle.get_result_async()
+    try:
+        rclpy.spin_until_future_complete(node, future)
+    except KeyboardInterrupt:
+        print("\nCtrl+C: canceling PickObject and waiting for the arm to hold...")
+        canceled = handle.cancel_goal_async()
+        rclpy.spin_until_future_complete(node, canceled, timeout_sec=3.0)
+        return None
+    return future.result()
+
+
 def _rotate(qw, qx, qy, qz, vector):
     x, y, z = vector
     tx = 2.0 * (qy * z - qz * y)
@@ -80,9 +92,9 @@ def main() -> int:
         if handle is None or not handle.accepted:
             print("PICK FAILED: goal rejected")
             return 1
-        result_future = handle.get_result_async()
-        rclpy.spin_until_future_complete(node, result_future)
-        wrapped = result_future.result()
+        wrapped = wait_for_result_or_cancel(node, handle)
+        if wrapped is None:
+            return 130
         if wrapped is None or not wrapped.result.success:
             detail = wrapped.result.detail if wrapped is not None else "no result"
             print(f"PICK FAILED: {detail}")

@@ -14,6 +14,18 @@ from rclpy.action import ActionClient
 from d1_manipulation.action import DropObject
 
 
+def wait_for_result_or_cancel(node, handle):
+    future = handle.get_result_async()
+    try:
+        rclpy.spin_until_future_complete(node, future)
+    except KeyboardInterrupt:
+        print("\nCtrl+C: canceling DropObject and waiting for the arm to hold...")
+        canceled = handle.cancel_goal_async()
+        rclpy.spin_until_future_complete(node, canceled, timeout_sec=3.0)
+        return None
+    return future.result()
+
+
 def receive_records(sock: socket.socket, timeout_s: float, object_name: str):
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -93,9 +105,9 @@ def main() -> int:
             if handle is None or not handle.accepted:
                 print("DROP FAILED: goal rejected")
                 return 1
-            result_future = handle.get_result_async()
-            rclpy.spin_until_future_complete(node, result_future)
-            wrapped = result_future.result()
+            wrapped = wait_for_result_or_cancel(node, handle)
+            if wrapped is None:
+                return 130
             if wrapped is None or not wrapped.result.success:
                 detail = wrapped.result.detail if wrapped is not None else "no result"
                 print(f"DROP FAILED: {detail}")

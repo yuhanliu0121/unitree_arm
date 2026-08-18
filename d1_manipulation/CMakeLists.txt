@@ -96,6 +96,9 @@ ament_target_dependencies(pick_object_server
 )
 add_executable(drop_object_server src/drop_object_server.cpp)
 target_compile_features(drop_object_server PRIVATE cxx_std_17)
+target_include_directories(drop_object_server PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 target_link_libraries(drop_object_server Eigen3::Eigen)
 ament_target_dependencies(drop_object_server
   control_msgs geometry_msgs moveit_core moveit_msgs
@@ -149,6 +152,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_gtest(test_observation_geometry test/test_observation_geometry.cpp)
   target_link_libraries(test_observation_geometry observation_geometry Eigen3::Eigen)
+  ament_add_gtest(test_task_lock test/test_task_lock.cpp)
+  target_include_directories(test_task_lock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
   ament_add_pytest_test(test_gripper_profiles test/test_gripper_profiles.py)
 endif()

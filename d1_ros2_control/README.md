@@ -62,7 +62,7 @@ Terminal 2:
 cd /home/tony/Project/unitree_arm/dev
 source /opt/ros/humble/setup.zsh
 source install/setup.zsh
-ros2 launch d1_ros2_control control.launch.py
+ros2 launch d1_ros2_control control.launch.py backend:=simulation
 ```
 
 Inspect the loaded hardware and controllers:

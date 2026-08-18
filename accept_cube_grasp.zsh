@@ -114,7 +114,7 @@ setsid ${sim_args[@]} >${sim_log} 2>&1 &
 sim_pid=$!
 
 print '[2/3] Starting ros2_control and MoveIt...'
-setsid ros2 launch d1_moveit_config move_group.launch.py launch_rviz:=${rviz} \
+setsid ros2 launch d1_moveit_config move_group.launch.py launch_rviz:=${rviz} backend:=simulation \
   >${stack_log} 2>&1 &
 stack_pid=$!
 

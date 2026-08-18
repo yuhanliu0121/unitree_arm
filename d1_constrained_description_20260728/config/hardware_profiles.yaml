@@ -1,0 +1,10 @@
+# Per-unit adjustments. These never load implicitly: launch callers must pass
+# the exact arm serial number. The base URDF remains the default for simulation
+# and for every unlisted/unspecified physical arm.
+hardware_profiles:
+  D1095:
+    joint_limits:
+      Joint1:
+        lower: -1.553343034275  # -89.0 deg
+      Joint2:
+        upper: 1.596976265574   # +91.5 deg

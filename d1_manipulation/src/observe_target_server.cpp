@@ -116,6 +116,10 @@ public:
     tf_buffer_(node_->get_clock()),
     tf_listener_(tf_buffer_)
   {
+    backend_ = parameterOrDeclare(node_, "backend", std::string{});
+    if (backend_ != "simulation" && backend_ != "real") {
+      throw std::invalid_argument("backend must be explicitly set to 'simulation' or 'real'");
+    }
     action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/debug/observe_target"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
@@ -185,8 +189,10 @@ public:
       });
 
     RCLCPP_INFO(
-      node_->get_logger(), "ObserveTarget action server ready: %s (%zu ordered candidates)",
-      action_name_.c_str(), beta_degrees_.size() * alpha_degrees_.size() * distances_m_.size());
+      node_->get_logger(),
+      "ObserveTarget action server ready: %s backend=%s (%zu ordered candidates)",
+      action_name_.c_str(), backend_.c_str(),
+      beta_degrees_.size() * alpha_degrees_.size() * distances_m_.size());
   }
 
 private:
@@ -240,9 +246,10 @@ private:
     result->success = false;
     result->failure_category = category;
     result->failed_state = state;
-    result->detail = detail;
+    result->detail = detail + "; motion stopped and current position held";
     result->returned_to_stowed = isAtStowed();
-    if (canceled) {
+    const bool was_canceled = canceled || cancel_requested_.load() || goal_handle->is_canceling();
+    if (was_canceled) {
       goal_handle->canceled(result);
     } else {
       goal_handle->abort(result);
@@ -389,22 +396,6 @@ private:
     return true;
   }
 
-  bool returnToStowed()
-  {
-    if (isAtStowed()) {
-      return true;
-    }
-    move_group_.setStartStateToCurrentState();
-    if (!move_group_.setJointValueTarget(stowed_)) {
-      return false;
-    }
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
-      return false;
-    }
-    return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS && isAtStowed();
-  }
-
   visualization_msgs::msg::Marker arrowMarker(
     int id,
     const std::string& name,
@@ -497,8 +488,9 @@ private:
 
       for (std::size_t index = 0; index < candidates.size(); ++index) {
         if (cancel_requested_.load() || goal_handle->is_canceling()) {
-          publishFeedback(goal_handle, "RETURNING_STOWED", index, candidates.size(), nullptr, "Canceled; returning to STOWED");
-          returnToStowed();
+          move_group_.stop();
+          publishFeedback(goal_handle, "HOLDING", index, candidates.size(), nullptr,
+            "Canceled; motion stopped and current position held");
           finishFailure(
             goal_handle, ObserveTarget::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_OBSERVE", "ObserveTarget was canceled", true);
@@ -530,10 +522,10 @@ private:
           goal_handle, "MOVE_OBSERVE", index + 1, candidates.size(), &candidate,
           "Executing first fully planned candidate");
         if (move_group_.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+          move_group_.stop();
           publishFeedback(
-            goal_handle, "RETURNING_STOWED", index + 1, candidates.size(), &candidate,
-            "Execution failed; returning to STOWED");
-          returnToStowed();
+            goal_handle, "HOLDING", index + 1, candidates.size(), &candidate,
+            "Execution failed; current position held");
           finishFailure(
             goal_handle, ObserveTarget::Result::FAILURE_EXECUTION_ERROR,
             "MOVE_OBSERVE", "Observation trajectory execution failed");
@@ -548,9 +540,9 @@ private:
             "Executed observation target is %.1f px from image centre (limit %.1f px)",
             pixel_error, max_target_pixel_error_);
           publishFeedback(
-            goal_handle, "RETURNING_STOWED", index + 1, candidates.size(), &candidate,
-            "Executed camera alignment failed; returning to STOWED");
-          returnToStowed();
+            goal_handle, "HOLDING", index + 1, candidates.size(), &candidate,
+            "Executed camera alignment failed; current position held");
+          move_group_.stop();
           finishFailure(
             goal_handle, ObserveTarget::Result::FAILURE_EXECUTION_ERROR,
             "OBSERVING", "Executed target projection is outside the centre tolerance");
@@ -612,6 +604,7 @@ private:
   sensor_msgs::msg::CameraInfo::ConstSharedPtr latest_camera_info_;
   std::atomic<bool> busy_{false};
   std::atomic<bool> cancel_requested_{false};
+  std::string backend_;
   std::string action_name_;
   std::string planning_frame_;
   std::string gravity_frame_;

@@ -113,9 +113,21 @@ object-specific targets (`cube=35`, `zucchini=0`, `bowl=-30 deg`) and matching
 thresholds (`37.5`, `3`, `-28 deg`):
 
 ```zsh
-ros2 launch d1_manipulation observe_target.launch.py gripper_profile:=simulation
-ros2 launch d1_manipulation observe_target.launch.py gripper_profile:=real
+ros2 launch d1_manipulation observe_target.launch.py backend:=simulation
+ros2 launch d1_manipulation observe_target.launch.py backend:=real
 ```
+
+`backend` is required and cannot fall back automatically. The public
+`PickObject` and `DropObject` actions are mutually exclusive across their
+separate server processes. Canceling either action stops the active arm
+trajectory, cancels any nested observation or gripper goal, and leaves the
+controller holding the current measured position. Failures also hold position;
+they do not automatically command STOWED. A successful `DropObject` still
+returns to STOWED as part of its normal task sequence.
+
+The bundled pick/drop command-line clients convert `Ctrl+C` into an Action
+cancel request before shutting down. This is a software stop and does not
+replace the physical emergency stop during real-machine tests.
 
 ## Gravity-aligned object release
 

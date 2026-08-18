@@ -4,6 +4,7 @@
 #include <cmath>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,6 +24,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "d1_manipulation/action/drop_object.hpp"
+#include "d1_manipulation/task_lock.hpp"
 
 using namespace std::chrono_literals;
 
@@ -63,8 +65,13 @@ public:
   explicit DropObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
     move_group_(node, parameterOrDeclare(node, "arm_group", std::string("arm"))),
-    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_)
+    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_),
+    task_lock_(parameterOrDeclare(node, "task_lock_path", std::string("/tmp/d1_arm_task.lock")))
   {
+    backend_ = parameterOrDeclare(node_, "backend", std::string{});
+    if (backend_ != "simulation" && backend_ != "real") {
+      throw std::invalid_argument("backend must be explicitly set to 'simulation' or 'real'");
+    }
     action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/tasks/drop_object"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
@@ -104,15 +111,22 @@ public:
         if (!busy_.compare_exchange_strong(expected, true)) {
           return rclcpp_action::GoalResponse::REJECT;
         }
+        if (!task_lock_.tryAcquire()) {
+          busy_.store(false);
+          RCLCPP_WARN(node_->get_logger(), "Rejecting DropObject goal: another public arm task is active");
+          return rclcpp_action::GoalResponse::REJECT;
+        }
         cancel_.store(false); return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [this](const std::shared_ptr<Handle>) {
-        cancel_.store(true); move_group_.stop(); return rclcpp_action::CancelResponse::ACCEPT;
+        requestCancel(); return rclcpp_action::CancelResponse::ACCEPT;
       },
       [this](const std::shared_ptr<Handle> handle) {
         std::thread([this, handle]() { execute(handle); }).detach();
       });
-    RCLCPP_INFO(node_->get_logger(), "DropObject action server ready: %s", action_name_.c_str());
+    RCLCPP_INFO(
+      node_->get_logger(), "DropObject action server ready: %s backend=%s",
+      action_name_.c_str(), backend_.c_str());
   }
 
 private:
@@ -143,16 +157,34 @@ private:
     handle->publish_feedback(message);
   }
 
+  void releaseTask()
+  {
+    task_lock_.release();
+    busy_.store(false);
+  }
+
+  void requestCancel()
+  {
+    cancel_.store(true);
+    move_group_.stop();
+    std::lock_guard<std::mutex> lock(active_goal_mutex_);
+    if (active_gripper_goal_) gripper_client_->async_cancel_goal(active_gripper_goal_);
+  }
+
   void fail(const std::shared_ptr<Handle>& handle, uint8_t category,
     const std::string& state, const std::string& detail, bool canceled = false)
   {
-    const bool returned = nearPose(stowed_, stowed_tolerance_) || moveTo(stowed_);
+    move_group_.stop();
+    const bool returned = nearPose(stowed_, stowed_tolerance_);
     planning_scene_.removeCollisionObjects({"drop_trash_bin"});
     auto result = std::make_shared<Drop::Result>();
     result->success = false; result->failure_category = category;
-    result->failed_state = state; result->detail = detail; result->returned_to_stowed = returned;
-    if (canceled) handle->canceled(result); else handle->abort(result);
-    busy_.store(false);
+    result->failed_state = state;
+    result->detail = detail + "; motion stopped and current position held";
+    result->returned_to_stowed = returned;
+    const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
+    if (was_canceled) handle->canceled(result); else handle->abort(result);
+    releaseTask();
   }
 
   Eigen::Vector3d pointInPlanningFrame(const geometry_msgs::msg::PointStamped& target)
@@ -178,8 +210,25 @@ private:
     Gripper::Goal goal; goal.command.position = position;
     auto sent = gripper_client_->async_send_goal(goal);
     if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) return false;
-    auto result = gripper_client_->async_get_result(sent.get());
-    if (result.wait_for(8s) != std::future_status::ready) return false;
+    const auto gripper_goal = sent.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goal_mutex_);
+      active_gripper_goal_ = gripper_goal;
+    }
+    auto result = gripper_client_->async_get_result(gripper_goal);
+    const auto deadline = std::chrono::steady_clock::now() + 8s;
+    while (result.wait_for(50ms) != std::future_status::ready) {
+      if (cancel_.load() || std::chrono::steady_clock::now() >= deadline) {
+        gripper_client_->async_cancel_goal(gripper_goal);
+        std::lock_guard<std::mutex> lock(active_goal_mutex_);
+        active_gripper_goal_.reset();
+        return false;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(active_goal_mutex_);
+      active_gripper_goal_.reset();
+    }
     const auto wrapped = result.get();
     return wrapped.code == rclcpp_action::ResultCode::SUCCEEDED &&
       wrapped.result && wrapped.result->reached_goal;
@@ -323,6 +372,9 @@ private:
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "MOVE_RELEASE", "release trajectory execution failed"); return;
       }
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR, "MOVE_RELEASE", "canceled", true); return;
+      }
       feedback(handle, "RELEASE", 0.75F, "Opening gripper fully");
       if (!commandGripper(gripper_open_)) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
@@ -332,8 +384,19 @@ private:
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "RELEASE", "failed to detach and remove held object from MoveIt"); return;
       }
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR, "RELEASE", "canceled", true); return;
+      }
       feedback(handle, "RELEASE_HOLD", 0.80F, "Holding gripper fully open");
-      std::this_thread::sleep_for(std::chrono::duration<double>(gripper_open_hold_));
+      const auto hold_deadline = std::chrono::steady_clock::now() +
+        std::chrono::duration<double>(gripper_open_hold_);
+      while (std::chrono::steady_clock::now() < hold_deadline) {
+        if (cancel_.load() || handle->is_canceling()) {
+          fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
+            "RELEASE_HOLD", "canceled", true); return;
+        }
+        std::this_thread::sleep_for(20ms);
+      }
       feedback(handle, "STOWED", 0.85F, "Planning directly from release pose to STOWED");
       if (!moveTo(stowed_)) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
@@ -347,7 +410,7 @@ private:
       result->release_pose.header.frame_id = planning_frame_;
       result->release_pose.header.stamp = node_->now(); result->release_pose.pose = selected_pose;
       result->height_offset_m = selected_height; result->release_yaw_degrees = selected_yaw;
-      handle->succeed(result); busy_.store(false);
+      handle->succeed(result); releaseTask();
       RCLCPP_INFO(node_->get_logger(), "DROP SUCCEEDED");
     } catch (const std::exception& error) {
       RCLCPP_ERROR(node_->get_logger(), "DropObject error: %s", error.what());
@@ -359,10 +422,13 @@ private:
   moveit::planning_interface::MoveGroupInterface move_group_;
   moveit::planning_interface::PlanningSceneInterface planning_scene_;
   tf2_ros::Buffer tf_buffer_; tf2_ros::TransformListener tf_listener_;
+  TaskLock task_lock_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Server<Drop>::SharedPtr server_;
   std::atomic<bool> busy_{false}, cancel_{false};
-  std::string action_name_, planning_frame_, gravity_frame_, tcp_frame_;
+  std::mutex active_goal_mutex_;
+  rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
+  std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;
   std::vector<double> carry_, stowed_, height_offsets_, yaw_offsets_;
   double carry_tolerance_{}, stowed_tolerance_{}, min_distance_{}, max_distance_;
   double bin_radius_{}, bin_height_{}, bin_wall_{};

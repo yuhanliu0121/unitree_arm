@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+from d1_constrained_description import (
+    apply_joint_limit_overrides,
+    load_joint_limit_overrides,
+)
+
 
 _COLLISIONS = {
     "base_link": (
@@ -62,9 +67,14 @@ _COLLISIONS = {
 }
 
 
-def load_planning_description(urdf_path: Path) -> str:
+def load_planning_description(urdf_path: Path, arm_serial: str = "") -> str:
     """Return shared kinematics with planning-only primitive collisions."""
-    root = ET.fromstring(Path(urdf_path).read_text(encoding="utf-8"))
+    urdf_path = Path(urdf_path)
+    robot_description = urdf_path.read_text(encoding="utf-8")
+    profile_path = urdf_path.parent.parent / "config" / "hardware_profiles.yaml"
+    overrides = load_joint_limit_overrides(profile_path, arm_serial)
+    robot_description = apply_joint_limit_overrides(robot_description, overrides)
+    root = ET.fromstring(robot_description)
     links = {link.attrib["name"]: link for link in root.findall("link")}
     for link_name, (kind, xyz, rpy, attributes) in _COLLISIONS.items():
         collision = next(
