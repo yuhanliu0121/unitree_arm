@@ -60,6 +60,7 @@ private:
 
   bool copy_feedback_to_state(bool require_fresh);
   bool publish_command(bool ignore_rate_limit);
+  bool prepare_physical_hardware();
   void shutdown_transport();
 
   std::unique_ptr<Impl> impl_;
@@ -75,7 +76,9 @@ private:
   double command_rate_hz_{10.0};
   double feedback_timeout_s_{0.5};
   double initial_feedback_timeout_s_{10.0};
+  double hardware_prepare_timeout_s_{5.0};
   int smoothing_mode_{0};
+  bool prepare_hardware_{false};
   double gripper_closed_angle_deg_{-30.0};
   double gripper_open_angle_deg_{60.0};
   double gripper_travel_m_{0.03};

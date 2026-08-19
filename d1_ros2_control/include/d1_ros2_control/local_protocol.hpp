@@ -16,6 +16,9 @@ enum class PacketKind : std::uint16_t
 {
   command = 1U,
   feedback = 2U,
+  status = 3U,
+  power_command = 4U,
+  enable_command = 5U,
 };
 
 struct JointPacket
@@ -37,6 +40,12 @@ inline bool packet_is_valid(const JointPacket & packet, PacketKind expected_kind
   return packet.magic == kLocalProtocolMagic &&
          packet.version == kLocalProtocolVersion &&
          packet.kind == expected_kind;
+}
+
+inline bool packet_header_is_valid(const JointPacket & packet)
+{
+  return packet.magic == kLocalProtocolMagic &&
+         packet.version == kLocalProtocolVersion;
 }
 
 }  // namespace d1_ros2_control

@@ -61,6 +61,24 @@ std::string parameter_as_string(
            : iterator->second;
 }
 
+bool parameter_as_bool(
+  const hardware_interface::HardwareInfo & info,
+  const std::string & name,
+  bool default_value)
+{
+  const auto value = parameter_as_string(
+    info, name, default_value ? "true" : "false");
+  if (value == "true" || value == "1")
+  {
+    return true;
+  }
+  if (value == "false" || value == "0")
+  {
+    return false;
+  }
+  throw std::invalid_argument(name + " must be true or false");
+}
+
 }  // namespace
 
 class D1SystemHardware::Impl
@@ -95,9 +113,24 @@ public:
         return false;
       }
       if (received != static_cast<ssize_t>(sizeof(packet)) ||
-          !packet_is_valid(packet, PacketKind::feedback))
+          !packet_header_is_valid(packet))
       {
         RCLCPP_WARN(kLogger, "Ignored an invalid local D1 feedback packet");
+        continue;
+      }
+      if (packet.kind == PacketKind::status)
+      {
+        enable_status = static_cast<int>(packet.angle_deg[0]);
+        power_status = static_cast<int>(packet.angle_deg[1]);
+        error_status = static_cast<int>(packet.angle_deg[2]);
+        latest_status_time = std::chrono::steady_clock::now();
+        status_received = true;
+        ++status_count;
+        continue;
+      }
+      if (packet.kind != PacketKind::feedback)
+      {
+        RCLCPP_WARN(kLogger, "Ignored an unexpected local D1 packet kind");
         continue;
       }
       bool finite = true;
@@ -144,6 +177,12 @@ public:
   std::array<double, kJointCount> latest_sdk_angles_deg{};
   std::chrono::steady_clock::time_point latest_feedback_time{};
   bool feedback_received{false};
+  std::chrono::steady_clock::time_point latest_status_time{};
+  int enable_status{0};
+  int power_status{0};
+  int error_status{0};
+  bool status_received{false};
+  std::uint64_t status_count{0U};
 };
 
 D1SystemHardware::D1SystemHardware() = default;
@@ -171,7 +210,10 @@ hardware_interface::CallbackReturn D1SystemHardware::on_init(
     feedback_timeout_s_ = parameter_as_double(info, "feedback_timeout_s", 0.5);
     initial_feedback_timeout_s_ = parameter_as_double(
       info, "initial_feedback_timeout_s", 10.0);
+    hardware_prepare_timeout_s_ = parameter_as_double(
+      info, "hardware_prepare_timeout_s", 5.0);
     smoothing_mode_ = parameter_as_int(info, "smoothing_mode", 0);
+    prepare_hardware_ = parameter_as_bool(info, "prepare_hardware", false);
     gripper_closed_angle_deg_ = parameter_as_double(
       info, "gripper_closed_angle_deg", -30.0);
     gripper_open_angle_deg_ = parameter_as_double(
@@ -186,6 +228,7 @@ hardware_interface::CallbackReturn D1SystemHardware::on_init(
 
   if (info.joints.size() != kJointCount || command_rate_hz_ <= 0.0 ||
       feedback_timeout_s_ <= 0.0 || initial_feedback_timeout_s_ <= 0.0 ||
+      hardware_prepare_timeout_s_ <= 0.0 ||
       command_port_ <= 0 || command_port_ > 65535 ||
       feedback_port_ <= 0 || feedback_port_ > 65535 ||
       command_port_ == feedback_port_ || gripper_travel_m_ <= 0.0 ||
@@ -334,6 +377,10 @@ hardware_interface::CallbackReturn D1SystemHardware::on_activate(
   {
     if (copy_feedback_to_state(false))
     {
+      if (prepare_hardware_ && !prepare_physical_hardware())
+      {
+        return hardware_interface::CallbackReturn::ERROR;
+      }
       command_position_ = state_position_;
       last_write_time_ = {};
       active_ = true;
@@ -347,6 +394,87 @@ hardware_interface::CallbackReturn D1SystemHardware::on_activate(
     kLogger, "No D1 gateway feedback received within %.2f seconds",
     initial_feedback_timeout_s_);
   return hardware_interface::CallbackReturn::ERROR;
+}
+
+bool D1SystemHardware::prepare_physical_hardware()
+{
+  if (!impl_)
+  {
+    return false;
+  }
+
+  const auto wait_for_status = [this](
+    const auto & predicate, const char * phase,
+    const std::uint64_t minimum_status_count)
+  {
+    const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::duration<double>(hardware_prepare_timeout_s_);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      copy_feedback_to_state(false);
+      if (impl_->status_received)
+      {
+        if (impl_->error_status != 0)
+        {
+          RCLCPP_ERROR(
+            kLogger, "D1 reports error_status=%d during %s",
+            impl_->error_status, phase);
+          return false;
+        }
+        if (impl_->status_count >= minimum_status_count && predicate())
+        {
+          return true;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    RCLCPP_ERROR(
+      kLogger,
+      "D1 hardware preparation timed out during %s "
+      "(status_received=%s power=%d enable=%d error=%d)",
+      phase, impl_->status_received ? "true" : "false",
+      impl_->power_status, impl_->enable_status, impl_->error_status);
+    return false;
+  };
+
+  if (!wait_for_status(
+      [this]() {return impl_->status_received;}, "initial status", 1U))
+  {
+    return false;
+  }
+
+  if (impl_->power_status != 1)
+  {
+    JointPacket power;
+    power.kind = PacketKind::power_command;
+    power.sequence = sequence_++;
+    const auto next_status = impl_->status_count + 1U;
+    if (!impl_->send(power) ||
+        !wait_for_status(
+          [this]() {return impl_->power_status == 1;}, "power on", next_status))
+    {
+      return false;
+    }
+  }
+
+  // D1 firmware can report enable_status=1 even after a weak/partial enable.
+  // Always request the empirically validated full-enable value before motion.
+  JointPacket enable;
+  enable.kind = PacketKind::enable_command;
+  enable.sequence = sequence_++;
+  const auto next_status = impl_->status_count + 1U;
+  if (!impl_->send(enable) ||
+      !wait_for_status(
+        [this]() {return impl_->power_status == 1 && impl_->enable_status == 1;},
+        "full enable", next_status))
+  {
+    return false;
+  }
+
+  RCLCPP_INFO(
+    kLogger, "D1 physical preparation passed: power=%d enable=%d error=%d",
+    impl_->power_status, impl_->enable_status, impl_->error_status);
+  return true;
 }
 
 hardware_interface::CallbackReturn D1SystemHardware::on_deactivate(
@@ -406,6 +534,31 @@ bool D1SystemHardware::copy_feedback_to_state(bool require_fresh)
       kLogger, "D1 feedback stale for %.3f s (limit %.3f s)",
       age, feedback_timeout_s_);
     return false;
+  }
+  if (require_fresh && prepare_hardware_)
+  {
+    if (!impl_->status_received)
+    {
+      RCLCPP_ERROR(kLogger, "D1 hardware status has not been received");
+      return false;
+    }
+    const double status_age = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - impl_->latest_status_time).count();
+    if (status_age > feedback_timeout_s_)
+    {
+      RCLCPP_ERROR(
+        kLogger, "D1 hardware status stale for %.3f s (limit %.3f s)",
+        status_age, feedback_timeout_s_);
+      return false;
+    }
+    if (impl_->power_status != 1 || impl_->enable_status != 1 ||
+        impl_->error_status != 0)
+    {
+      RCLCPP_ERROR(
+        kLogger, "D1 hardware became NOT_READY: power=%d enable=%d error=%d",
+        impl_->power_status, impl_->enable_status, impl_->error_status);
+      return false;
+    }
   }
 
   if (!updated)

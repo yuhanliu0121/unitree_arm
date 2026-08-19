@@ -9,10 +9,16 @@ The Unitree SDK is deliberately isolated from `ros2_control_node` because ROS
 The launch file starts both parts automatically:
 
 ```text
-ROS 2 controllers -> hardware plugin -> UDP loopback -> d1_dds_gateway
-                                                      -> Unitree DDS
-                                                      -> MuJoCo or D1
+ROS 2 controllers -> hardware plugin -> UDP loopback -> command gateway -> Unitree DDS
+Unitree DDS -> feedback gateway -> UDP loopback -> hardware plugin
+Unitree DDS -> status gateway -> UDP loopback -> hardware plugin
+Unitree DDS <-> MuJoCo or D1
 ```
+
+Command publication, joint feedback, and hardware status subscription run in
+separate gateway processes. This isolates the physical D1 SDK runtime: writing
+commands from the same process that owns a feedback subscriber can stop its
+callback, while the arm continues publishing to independent subscribers.
 
 The loopback ports default to `15000` for commands and `15001` for feedback.
 Starting a second control stack with the same ports fails instead of allowing
@@ -23,6 +29,9 @@ two controllers to command one arm.
 - The default domain is 42 and does not target a factory-default physical D1.
 - Activating the hardware waits for live feedback and initializes every command
   from the measured position.
+- Real-hardware activation requires live status with `error_status=0`, powers
+  the D1 when necessary, requests the validated `mode=65535` full enable, and
+  verifies a fresh powered/enabled status before controllers become active.
 - Commands are range-checked and limited to 10 Hz.
 - `Joint6/velocity` is estimated from adjacent feedback frames for the standard
   gripper action controller.

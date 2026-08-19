@@ -18,7 +18,12 @@ from d1_constrained_description import (
 )
 
 
-def make_control_block(command_port: str, feedback_port: str, joint_limits) -> str:
+def make_control_block(
+    command_port: str,
+    feedback_port: str,
+    joint_limits,
+    prepare_hardware: bool,
+) -> str:
     joints = []
     for index, (lower, upper) in enumerate(joint_limits):
         joints.append(
@@ -39,8 +44,10 @@ def make_control_block(command_port: str, feedback_port: str, joint_limits) -> s
       <param name="command_port">{command_port}</param>
       <param name="feedback_port">{feedback_port}</param>
       <param name="command_rate_hz">10.0</param>
-      <param name="feedback_timeout_s">0.5</param>
+      <param name="feedback_timeout_s">1.5</param>
       <param name="initial_feedback_timeout_s">10.0</param>
+      <param name="hardware_prepare_timeout_s">5.0</param>
+      <param name="prepare_hardware">{'true' if prepare_hardware else 'false'}</param>
       <param name="smoothing_mode">0</param>
       <param name="gripper_closed_angle_deg">-30.0</param>
       <param name="gripper_open_angle_deg">60.0</param>
@@ -84,6 +91,7 @@ def launch_setup(context):
         LaunchConfiguration("command_port").perform(context),
         LaunchConfiguration("feedback_port").perform(context),
         joint_limits,
+        backend == "real",
     )
     control_description = robot_description.replace(
         "</robot>", control_block + "</robot>"
@@ -91,32 +99,62 @@ def launch_setup(context):
     controllers = control_share / "config" / "controllers.yaml"
     rviz_config = description_share / "config" / "display.rviz"
     gateway = control_prefix / "lib" / "d1_ros2_control" / "d1_dds_gateway"
-    gateway_cmd = [
+    gateway_common = [
         str(gateway),
         "--domain",
         LaunchConfiguration("dds_domain_id").perform(context),
-        "--command-topic",
-        "rt/arm_Command",
-        "--feedback-topic",
-        "current_servo_angle",
-        "--command-port",
-        LaunchConfiguration("command_port").perform(context),
-        "--feedback-port",
-        LaunchConfiguration("feedback_port").perform(context),
     ]
     interface = LaunchConfiguration("interface").perform(context)
     if interface:
-        gateway_cmd[3:3] = ["--interface", interface]
+        gateway_common.extend(["--interface", interface])
+    command_gateway_cmd = gateway_common + [
+        "--direction", "command",
+        "--command-topic", "rt/arm_Command",
+        "--command-port", LaunchConfiguration("command_port").perform(context),
+        "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
+    ]
+    feedback_gateway_cmd = gateway_common + [
+        "--direction", "feedback",
+        "--feedback-topic", "current_servo_angle",
+        "--command-port", LaunchConfiguration("command_port").perform(context),
+        "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
+    ]
+    status_gateway_cmd = gateway_common + [
+        "--direction", "status",
+        "--status-topic", LaunchConfiguration("status_topic").perform(context),
+        "--command-port", LaunchConfiguration("command_port").perform(context),
+        "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
+    ]
 
-    return [
+    gateway_actions = [
         ExecuteProcess(
-            cmd=gateway_cmd,
+            cmd=command_gateway_cmd,
             additional_env={
                 "LD_LIBRARY_PATH": "/usr/local/lib:"
                 + os.environ.get("LD_LIBRARY_PATH", "")
             },
             output="screen",
         ),
+        ExecuteProcess(
+            cmd=feedback_gateway_cmd,
+            additional_env={
+                "LD_LIBRARY_PATH": "/usr/local/lib:"
+                + os.environ.get("LD_LIBRARY_PATH", "")
+            },
+            output="screen",
+        ),
+    ]
+    if backend == "real":
+        gateway_actions.append(ExecuteProcess(
+            cmd=status_gateway_cmd,
+            additional_env={
+                "LD_LIBRARY_PATH": "/usr/local/lib:"
+                + os.environ.get("LD_LIBRARY_PATH", "")
+            },
+            output="screen",
+        ))
+
+    return gateway_actions + [
         Node(
             package="controller_manager",
             executable="ros2_control_node",
@@ -192,6 +230,11 @@ def generate_launch_description():
                 "feedback_port",
                 default_value="15001",
                 description="Loopback UDP port consumed by the hardware plugin",
+            ),
+            DeclareLaunchArgument(
+                "status_topic",
+                default_value="rt/arm_Feedback",
+                description="D1 native hardware status/ACK topic",
             ),
             DeclareLaunchArgument(
                 "rviz",

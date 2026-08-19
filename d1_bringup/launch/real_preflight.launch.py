@@ -83,12 +83,26 @@ def _launch_setup(context):
     )
     # This is intentionally ExecuteProcess: the isolated gateway is not a ROS
     # node and must not receive the implicit `--ros-args` suffix from Node().
-    gateway_node = ExecuteProcess(
+    feedback_gateway = ExecuteProcess(
         cmd=[str(gateway),
             "--domain", str(arm["d1_native_domain_id"]),
             "--interface", arm["network_interface"],
-            "--command-topic", arm["command_topic"],
+            "--direction", "feedback",
             "--feedback-topic", arm["feedback_topic"],
+            "--command-port", str(arm["loopback_command_port"]),
+            "--feedback-port", str(arm["loopback_feedback_port"]),
+        ],
+        additional_env={
+            "LD_LIBRARY_PATH": "/usr/local/lib:" + os.environ.get("LD_LIBRARY_PATH", "")
+        },
+        output="screen",
+    )
+    status_gateway = ExecuteProcess(
+        cmd=[str(gateway),
+            "--domain", str(arm["d1_native_domain_id"]),
+            "--interface", arm["network_interface"],
+            "--direction", "status",
+            "--status-topic", arm["status_topic"],
             "--command-port", str(arm["loopback_command_port"]),
             "--feedback-port", str(arm["loopback_feedback_port"]),
         ],
@@ -178,7 +192,8 @@ def _launch_setup(context):
         )
     )
     return [
-        gateway_node,
+        feedback_gateway,
+        status_gateway,
         realsense,
         robot_state_publisher,
         mount_tf,

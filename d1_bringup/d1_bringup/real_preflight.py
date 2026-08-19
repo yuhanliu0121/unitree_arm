@@ -18,6 +18,7 @@ PACKET = struct.Struct("<IHHQII7d")
 PACKET_MAGIC = 0x44314350
 PACKET_VERSION = 1
 PACKET_FEEDBACK = 2
+PACKET_STATUS = 3
 DEG_TO_RAD = math.pi / 180.0
 
 
@@ -112,6 +113,8 @@ class RealPreflight(Node):
         self.last_feedback = None
         self.feedback_count = 0
         self.latest_positions = None
+        self.latest_arm_status = None
+        self.last_arm_status = None
         self.color_info = None
         self.color_info_time = None
         self.depth_info = None
@@ -180,7 +183,13 @@ class RealPreflight(Node):
             if len(data) != PACKET.size:
                 continue
             unpacked = PACKET.unpack(data)
-            if unpacked[0:3] != (PACKET_MAGIC, PACKET_VERSION, PACKET_FEEDBACK):
+            if unpacked[0:2] != (PACKET_MAGIC, PACKET_VERSION):
+                continue
+            if unpacked[2] == PACKET_STATUS:
+                self.latest_arm_status = tuple(int(value) for value in unpacked[6:9])
+                self.last_arm_status = time.monotonic()
+                continue
+            if unpacked[2] != PACKET_FEEDBACK:
                 continue
             angles_deg = unpacked[6:13]
             if not all(math.isfinite(value) for value in angles_deg):
@@ -277,6 +286,21 @@ class RealPreflight(Node):
             return False, "; ".join(violations)
         return True, "feedback fresh; all joints within configured limits"
 
+    def _arm_status_result(self):
+        if self.latest_arm_status is None:
+            return False, "waiting for D1 hardware status"
+        age = time.monotonic() - self.last_arm_status
+        if age > float(self.get_parameter("feedback_max_age_s").value):
+            return False, f"D1 hardware status stale ({age:.3f} s)"
+        enable, power, error = self.latest_arm_status
+        if error != 0:
+            return False, f"D1 error_status={error}"
+        if power != 1:
+            return False, f"D1 not powered (power_status={power})"
+        if enable != 1:
+            return False, f"D1 not enabled (enable_status={enable})"
+        return True, f"power={power}; enable={enable}; error={error}"
+
     def _camera_result(self):
         if self.color_info is None or self.depth_info is None:
             return False, "waiting for color/aligned-depth CameraInfo"
@@ -296,6 +320,7 @@ class RealPreflight(Node):
         results = {
             "network": self._network_result(),
             "arm_feedback_and_limits": self._joint_result(),
+            "arm_hardware_status": self._arm_status_result(),
             "camera": self._camera_result(),
             "gravity": self._gravity_result(),
         }
@@ -310,7 +335,8 @@ class RealPreflight(Node):
         # finish immediately. Otherwise wait for the deadline so one run gives
         # a comprehensive report rather than hiding later checks.
         complete_with_joint_failure = definitive_joint_failure and all(
-            results[name][0] for name in ("network", "camera", "gravity")
+            results[name][0]
+            for name in ("network", "arm_hardware_status", "camera", "gravity")
         )
         if not (ready_to_finish or timed_out or complete_with_joint_failure):
             return
