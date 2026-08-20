@@ -105,7 +105,7 @@ if [[ ${headless} == true ]]; then
   sim_args+=(--headless)
 fi
 if [[ ${rviz} == true ]]; then
-  sim_args+=(--ros-camera --camera-debug --ros-scene)
+  sim_args+=(--ros-camera --ros-scene)
 fi
 
 print '[1/3] Starting MuJoCo simulation...'

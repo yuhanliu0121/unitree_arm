@@ -13,10 +13,10 @@ from d1_mujoco_sim.model import build_model, default_description_root
 from d1_mujoco_sim.ros_camera import (
     align_depth_to_color,
     apply_distortion,
-    colorize_depth,
     depth_to_uint16,
     distortion_source_indices,
 )
+from d1_camera_visualization.depth_debug_visualizer import colorize_depth
 from d1_mujoco_sim.scene import default_objects_root
 
 
@@ -195,13 +195,13 @@ def main() -> None:
         np.asarray(config["camera"]["T_color_depth_optical"]),
     )
     alignment_ms = 1000.0 * (time.perf_counter() - alignment_started)
-    aligned_m = aligned_raw.astype(np.float32) * float(
-        depth_config["depth_scale_m_per_unit"]
-    )
     aligned_plasma = colorize_depth(
-        aligned_m,
-        float(config["camera"]["display_min_depth_m"]),
-        float(config["camera"]["display_max_depth_m"]),
+        aligned_raw,
+        float(depth_config["depth_scale_m_per_unit"]),
+        0.20,
+        10.0,
+        0.20,
+        2.0,
     )
     overlay = color.copy()
     overlay[_depth_edges(aligned_raw)] = [0, 255, 255]

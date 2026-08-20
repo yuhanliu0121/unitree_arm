@@ -370,12 +370,12 @@ private:
       }
       if (packet.kind == PacketKind::power_command)
       {
-        publish_management_command(6, "\"power\":1");
+        publish_management_command(6, "\"power\":1", packet.sequence);
         continue;
       }
       if (packet.kind == PacketKind::enable_command)
       {
-        publish_management_command(5, "\"mode\":65535");
+        publish_management_command(5, "\"mode\":65535", packet.sequence);
         continue;
       }
       if (packet.kind != PacketKind::command)
@@ -403,10 +403,11 @@ private:
     {
       ++native_sequence_;
     }
+    const std::uint32_t native_sequence = native_sequence_++;
     std::ostringstream payload;
     payload.setf(std::ios::fixed);
     payload.precision(7);
-    payload << "{\"seq\":" << native_sequence_++
+    payload << "{\"seq\":" << native_sequence
             << ",\"address\":1,\"funcode\":2,\"data\":{\"mode\":"
             << packet.smoothing_mode;
     for (std::size_t index = 0; index < kD1JointCount; ++index)
@@ -416,40 +417,49 @@ private:
     payload << "}}";
 
     ++command_count_;
-    if (command_count_ == 1U)
-    {
-      std::cout << "d1_dds_gateway: forwarding command #" << command_count_
-                << " local_seq=" << packet.sequence
-                << " payload=" << payload.str() << std::endl;
-    }
+    std::cout << "d1_dds_gateway: forwarding command #" << command_count_
+              << " local_seq=" << packet.sequence
+              << " native_seq=" << native_sequence
+              << " payload=" << payload.str() << std::endl;
 
     ArmString message;
     message.data_() = payload.str();
     if (!publisher_->Write(message))
     {
-      std::cerr << "d1_dds_gateway: native DDS command publish failed\n";
+      std::cerr << "d1_dds_gateway: native DDS command publish failed"
+                << " native_seq=" << native_sequence << std::endl;
+      return;
     }
+    std::cout << "d1_dds_gateway: DDS Write accepted native_seq="
+              << native_sequence << std::endl;
   }
 
-  void publish_management_command(const int funcode, const char * data)
+  void publish_management_command(
+    const int funcode, const char * data, const std::uint64_t local_sequence)
   {
     if (native_sequence_ == 10U)
     {
       ++native_sequence_;
     }
+    const std::uint32_t native_sequence = native_sequence_++;
     std::ostringstream payload;
-    payload << "{\"seq\":" << native_sequence_++
+    payload << "{\"seq\":" << native_sequence
             << ",\"address\":1,\"funcode\":" << funcode
             << ",\"data\":{" << data << "}}";
+    std::cout << "d1_dds_gateway: forwarding management command"
+              << " local_seq=" << local_sequence
+              << " native_seq=" << native_sequence
+              << " payload=" << payload.str() << std::endl;
     ArmString message;
     message.data_() = payload.str();
     if (!publisher_->Write(message))
     {
-      std::cerr << "d1_dds_gateway: native DDS management publish failed\n";
+      std::cerr << "d1_dds_gateway: native DDS management publish failed"
+                << " native_seq=" << native_sequence << std::endl;
       return;
     }
-    std::cout << "d1_dds_gateway: published hardware preparation funcode="
-              << funcode << std::endl;
+    std::cout << "d1_dds_gateway: DDS management Write accepted native_seq="
+              << native_sequence << " funcode=" << funcode << std::endl;
   }
 
   void handle_feedback(const void * raw_message)
@@ -505,6 +515,34 @@ private:
       return;
     }
     const auto * message = static_cast<const ArmString *>(raw_message);
+    int sequence = 0;
+    int address = 0;
+    int function = 0;
+    if (extract_status_value(message->data_(), "seq", sequence) &&
+        extract_status_value(message->data_(), "address", address) &&
+        (extract_status_value(message->data_(), "funcode", function) ||
+        extract_status_value(message->data_(), "code", function)) &&
+        address == 3 && (function == 1 || function == 2))
+    {
+      const char * status_key = function == 1 ? "recv_status" : "exec_status";
+      int acknowledgement_status = 0;
+      if (extract_status_value(
+          message->data_(), status_key, acknowledgement_status))
+      {
+        std::cout << "d1_dds_gateway: D1 "
+                  << (function == 1 ? "receive" : "execution")
+                  << " ACK native_seq=" << sequence
+                  << " status=" << acknowledgement_status
+                  << " payload=" << message->data_() << std::endl;
+      }
+      else
+      {
+        std::cerr << "d1_dds_gateway: malformed D1 ACK payload="
+                  << message->data_() << std::endl;
+      }
+      return;
+    }
+
     int enable_status = 0;
     int power_status = 0;
     int error_status = 0;

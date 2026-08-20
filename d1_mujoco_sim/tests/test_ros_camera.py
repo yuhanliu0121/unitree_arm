@@ -9,7 +9,6 @@ from d1_mujoco_sim.ros_camera import (
     align_depth_to_color,
     apply_distortion,
     camera_static_transforms,
-    colorize_depth,
     depth_to_uint16,
     distortion_source_indices,
 )
@@ -35,10 +34,6 @@ def test_config_uses_fixed_d435i_depth_and_display_ranges() -> None:
     assert camera["depth"]["frame"] == "wrist_camera_depth_optical_frame"
     assert camera["min_depth_m"] == 0.2
     assert camera["max_depth_m"] == 10.0
-    assert camera["display_min_depth_m"] == 0.2
-    assert camera["display_max_depth_m"] == 2.0
-    assert "display_auto_range" not in camera
-    assert "display_percentiles" not in camera
 
 
 def test_wrist_camera_topic_contract_separates_data_and_debug() -> None:
@@ -53,10 +48,6 @@ def test_wrist_camera_topic_contract_separates_data_and_debug() -> None:
         ),
         "aligned_depth_info": (
             "/wrist_camera/aligned_depth_to_color/camera_info"
-        ),
-        "raw_depth_debug": "/wrist_camera/debug/depth_plasma",
-        "aligned_depth_debug": (
-            "/wrist_camera/debug/aligned_depth_plasma"
         ),
     }
 
@@ -132,16 +123,6 @@ def test_depth_alignment_preserves_empty_pixels_as_zero() -> None:
     assert aligned.shape == (color["height"], color["width"])
     assert aligned.dtype == np.uint16
     assert not np.any(aligned)
-
-
-def test_colorized_depth_is_rgb_and_marks_invalid_pixels_black() -> None:
-    depth_m = np.asarray([[0.0, 0.1, 1.05, 2.0, 3.0]], dtype=np.float32)
-    image = colorize_depth(depth_m, 0.1, 2.0)
-    assert image.shape == (1, 5, 3)
-    assert image.dtype == np.uint8
-    np.testing.assert_array_equal(image[0, 0], [0, 0, 0])
-    np.testing.assert_array_equal(image[0, 4], [0, 0, 0])
-    assert not np.array_equal(image[0, 1], image[0, 3])
 
 
 def test_rgb_distortion_map_uses_measured_calibration() -> None:

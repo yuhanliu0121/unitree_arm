@@ -145,7 +145,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /arm/perception/debug/overlay
     - Class: rviz_default_plugins/Image
-      Enabled: false
+      Enabled: true
       Name: Wrist Raw Depth (Plasma)
       Normalize Range: false
       Topic:

@@ -29,6 +29,6 @@ def test_d1095_adjusts_only_requested_bounds():
     assert adjusted_limits[1][0] == -1.553343034275
     assert adjusted_limits[1][1] == base_limits[1][1]
     assert adjusted_limits[2][0] == base_limits[2][0]
-    assert adjusted_limits[2][1] == 1.596976265574
+    assert adjusted_limits[2][1] == 1.605702911835
     for index in (0, 3, 4, 5, 6):
         assert adjusted_limits[index] == base_limits[index]

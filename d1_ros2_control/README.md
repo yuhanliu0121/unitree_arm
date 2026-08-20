@@ -32,13 +32,54 @@ two controllers to command one arm.
 - Real-hardware activation requires live status with `error_status=0`, powers
   the D1 when necessary, requests the validated `mode=65535` full enable, and
   verifies a fresh powered/enabled status before controllers become active.
-- Commands are range-checked and limited to 10 Hz.
-- `Joint6/velocity` is estimated from adjacent feedback frames for the standard
-  gripper action controller.
-- Completion is evaluated from joint feedback by the standard trajectory
-  controller; D1 execution ACK is not used.
-- Software deactivation sends a measured-position hold. It is not an emergency
-  stop and does not replace a vendor-approved hardware stop.
+- Simulation commands are range-checked and limited to 10 Hz. Physical motion
+  bypasses the ros2_control write interface and is emitted only by the
+  dedicated mode=1 Action controller.
+- Joint6 completion uses a 2 degree target tolerance. Contact stop is detected
+  only after at least 1 degree of commanded motion, when a 0.55 second rolling
+  window spans no more than 0.3 degree; it does not depend on noisy
+  adjacent-frame velocity estimates or the ROS joint-state publication rate.
+- Completion is evaluated from joint feedback; D1 execution ACK is not used.
+- If a mode=1 absolute target is written but fresh joint feedback shows
+  no physical motion for 2.0 seconds while the endpoint remains outside its
+  tolerance, the controller resends the same absolute target with a fresh
+  sequence number every two seconds. It stops retrying as soon as motion starts
+  and aborts after four retries. This applies to both arm and gripper goals.
+- Simulation hardware deactivation sends a measured-position hold. Physical
+  Action cancellation sends a measured-position hold through the unique
+  command owner. Neither mechanism is an emergency stop or a replacement for
+  a vendor-approved hardware stop.
+
+On physical hardware, `d1_mode1_controller` is the sole motion-command owner.
+It implements the standard arm and gripper Action names expected by MoveIt,
+keeps one coherent seven-joint target, and emits complete D1
+`funcode=2, mode=1` snapshots. Arm goals update Joint0--5 while preserving the
+commanded gripper target; gripper goals update Joint6 while preserving the arm
+target. The ros2_control hardware plugin remains responsible for preparation
+and feedback publication but its physical command output is disabled.
+
+Simulation continues to use the standard ros2_control trajectory and gripper
+controllers. Canceling a physical arm goal holds measured Joint0--5 while
+preserving the active gripper target; canceling a gripper goal holds its
+measured opening.
+
+The physical arm Action currently sends the final MoveIt trajectory endpoint
+as one vendor-smoothed joint goal. It does not replay every planned waypoint;
+real collision avoidance therefore remains a staged-validation boundary until
+the D1 interface exposes trajectory timing or sparse waypoint execution is
+added and validated.
+
+For physical-command diagnosis, the controller logs the initial and requested
+Joint0--5 angles, preserved Joint6 target, local UDP sequence, first observed
+motion, final feedback, and timeout error. The command gateway logs every
+native JSON payload and its local/native sequence pair. The status gateway logs
+matching D1 receive and execution acknowledgements from `rt/arm_Feedback`.
+`DDS Write accepted` only means the message entered the DDS writer; joint
+feedback remains the authority for motion start and endpoint completion.
+
+`d1_mode1_gripper_goal.py` is a low-level diagnostic helper, not a normal task
+interface. It bypasses the Action controller, so stop and restart the real
+control stack after using it before resuming task execution.
 
 ## Build
 

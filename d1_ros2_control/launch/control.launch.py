@@ -23,6 +23,12 @@ def make_control_block(
     feedback_port: str,
     joint_limits,
     prepare_hardware: bool,
+    send_repeated_commands: bool,
+    command_output_enabled: bool,
+    smoothing_mode: int,
+    gripper_closed_angle_deg: str,
+    gripper_open_angle_deg: str,
+    gripper_travel_m: str,
 ) -> str:
     joints = []
     for index, (lower, upper) in enumerate(joint_limits):
@@ -48,10 +54,12 @@ def make_control_block(
       <param name="initial_feedback_timeout_s">10.0</param>
       <param name="hardware_prepare_timeout_s">5.0</param>
       <param name="prepare_hardware">{'true' if prepare_hardware else 'false'}</param>
-      <param name="smoothing_mode">0</param>
-      <param name="gripper_closed_angle_deg">-30.0</param>
-      <param name="gripper_open_angle_deg">60.0</param>
-      <param name="gripper_travel_m">0.03</param>
+      <param name="send_repeated_commands">{'true' if send_repeated_commands else 'false'}</param>
+      <param name="command_output_enabled">{'true' if command_output_enabled else 'false'}</param>
+      <param name="smoothing_mode">{smoothing_mode}</param>
+      <param name="gripper_closed_angle_deg">{gripper_closed_angle_deg}</param>
+      <param name="gripper_open_angle_deg">{gripper_open_angle_deg}</param>
+      <param name="gripper_travel_m">{gripper_travel_m}</param>
     </hardware>
 {''.join(joints)}
   </ros2_control>
@@ -92,6 +100,14 @@ def launch_setup(context):
         LaunchConfiguration("feedback_port").perform(context),
         joint_limits,
         backend == "real",
+        backend != "real",
+        backend != "real",
+        # The hardware plugin publishes commands only in simulation. Real
+        # motion is owned by d1_mode1_controller and always uses mode=1.
+        0,
+        LaunchConfiguration("gripper_closed_angle_deg").perform(context),
+        LaunchConfiguration("gripper_open_angle_deg").perform(context),
+        LaunchConfiguration("gripper_travel_m").perform(context),
     )
     control_description = robot_description.replace(
         "</robot>", control_block + "</robot>"
@@ -109,13 +125,13 @@ def launch_setup(context):
         gateway_common.extend(["--interface", interface])
     command_gateway_cmd = gateway_common + [
         "--direction", "command",
-        "--command-topic", "rt/arm_Command",
+        "--command-topic", LaunchConfiguration("command_topic").perform(context),
         "--command-port", LaunchConfiguration("command_port").perform(context),
         "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
     ]
     feedback_gateway_cmd = gateway_common + [
         "--direction", "feedback",
-        "--feedback-topic", "current_servo_angle",
+        "--feedback-topic", LaunchConfiguration("feedback_topic").perform(context),
         "--command-port", LaunchConfiguration("command_port").perform(context),
         "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
     ]
@@ -154,6 +170,56 @@ def launch_setup(context):
             output="screen",
         ))
 
+    controller_actions = [
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+            output="screen",
+        )
+    ]
+    if backend == "simulation":
+        controller_actions.extend([
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=["arm_controller", "--controller-manager", "/controller_manager"],
+                output="screen",
+            ),
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=["gripper_controller", "--controller-manager", "/controller_manager"],
+                output="screen",
+            ),
+        ])
+    else:
+        controller_actions.append(Node(
+            package="d1_ros2_control",
+            executable="d1_mode1_controller",
+            output="screen",
+            parameters=[{
+                "command_port": int(LaunchConfiguration("command_port").perform(context)),
+                "lower_limits": [limits[0] for limits in joint_limits],
+                "upper_limits": [limits[1] for limits in joint_limits],
+                "gripper_closed_angle_deg": float(
+                    LaunchConfiguration("gripper_closed_angle_deg").perform(context)
+                ),
+                "gripper_open_angle_deg": float(
+                    LaunchConfiguration("gripper_open_angle_deg").perform(context)
+                ),
+                "gripper_travel_m": float(
+                    LaunchConfiguration("gripper_travel_m").perform(context)
+                ),
+                "command_start_timeout_s": float(
+                    LaunchConfiguration("command_start_timeout_s").perform(context)
+                ),
+                "no_motion_max_retries": int(
+                    LaunchConfiguration("no_motion_max_retries").perform(context)
+                ),
+            }],
+        ))
+
     return gateway_actions + [
         Node(
             package="controller_manager",
@@ -171,31 +237,13 @@ def launch_setup(context):
             output="screen",
         ),
         Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
-            output="screen",
-        ),
-        Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=["arm_controller", "--controller-manager", "/controller_manager"],
-            output="screen",
-        ),
-        Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=["gripper_controller", "--controller-manager", "/controller_manager"],
-            output="screen",
-        ),
-        Node(
             package="rviz2",
             executable="rviz2",
             arguments=["-d", str(rviz_config)],
             condition=IfCondition(LaunchConfiguration("rviz")),
             output="screen",
         ),
-    ]
+    ] + controller_actions
 
 
 def generate_launch_description():
@@ -236,6 +284,13 @@ def generate_launch_description():
                 default_value="rt/arm_Feedback",
                 description="D1 native hardware status/ACK topic",
             ),
+            DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
+            DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
+            DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
+            DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
+            DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
+            DeclareLaunchArgument("command_start_timeout_s", default_value="2.0"),
+            DeclareLaunchArgument("no_motion_max_retries", default_value="4"),
             DeclareLaunchArgument(
                 "rviz",
                 default_value="true",

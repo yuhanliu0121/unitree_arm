@@ -1,12 +1,25 @@
 # Arm Collection 项目：Codex CLI Handoff
 
-> 更新时间：2026-08-11  
+> 更新时间：2026-08-20
 > 用途：把此前在 ChatGPT 中已经完成的讨论结论移交给本地 Codex CLI。  
 > 当前阶段：MuJoCo、ros2_control、MoveIt 固定方块抓取基线已打通。
 
 ## 0. 当前实现状态（优先于下文的早期规划描述）
 
 当前工作区已经实现并验证：
+
+- 真机控制链已统一：`d1_mode1_controller` 同时实现 MoveIt 使用的
+  `/arm_controller/follow_joint_trajectory` 与
+  `/gripper_controller/gripper_cmd`，是 Joint0～6 唯一运动命令所有者；
+  所有真机动作均发送完整 `funcode=2, mode=1` 七关节快照。机械臂目标只
+  更新 Joint0～5 并保留夹爪期望值，夹爪目标只更新 Joint6 并保留机械臂
+  期望值。真机 ros2_control hardware interface 仅负责上电/使能预检和反馈，
+  运动写出口已关闭；仿真仍使用标准 arm/gripper controllers。
+- D1095 已真机验证：在 Joint0～5 保持当前角度时，以
+  `funcode=2, mode=1` 将 Joint6 在 60° 与 -30°之间开合，六轴保持稳定、
+  夹爪平滑、反馈不中断。此前精观测后失能的直接原因是直接六轴执行器与
+  ros2_control 夹爪链路同时写入完整七关节命令，导致旧六轴缓存被重发；
+  新的唯一命令所有者消除了该双写路径。
 
 - `d1_mujoco_sim`：D1 SDK 协议兼容的 MuJoCo 服务，DDS domain 42；
 - `d1_ros2_control`：隔离 SDK ABI 的 UDP gateway、hardware interface，以及
@@ -82,7 +95,8 @@ URDF 保留 STL，以免破坏 MuJoCo 导入时的 link-frame 变换。为避免
 机身相机区分。RGB 图会应用实测 `plumb_bob` 畸变；
 原始 `16UC1` 深度有效范围固定为 0.20—10.0 m，范围外发布为零；彩色
 调试图固定把 0.20—2.0 m 映射到 plasma 色带，范围外显示为黑色。
-Plasma 话题位于 `/wrist_camera/debug`，仅在 `--camera-debug` 下发布；
+Plasma 话题位于 `/wrist_camera/debug`，由仿真和真机共用的
+`d1_camera_visualization/depth_debug_visualizer` 从原始 `16UC1` 生成；
 相机渲染、对齐和 ROS 序列化使用 latest-only 后台线程，物理/控制循环只复制
 最新 `qpos` 快照，避免完整 RViz 图像链阻塞 1 kHz 仿真。完整
 `--headless --rviz` 抓取回归已通过，12 秒保持高度仍为 0.097 m；

@@ -100,9 +100,6 @@ sim_args=(
 if [[ ${headless} == true ]]; then
   sim_args+=(--headless)
 fi
-if [[ ${rviz} == true ]]; then
-  sim_args+=(--camera-debug)
-fi
 
 print '[1/3] Starting MuJoCo and the calibrated wrist camera...'
 cd ${workspace}

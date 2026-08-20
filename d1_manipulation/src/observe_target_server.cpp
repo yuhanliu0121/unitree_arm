@@ -396,6 +396,12 @@ private:
     return true;
   }
 
+  bool executeObservationPlan(
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan)
+  {
+    return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+  }
+
   visualization_msgs::msg::Marker arrowMarker(
     int id,
     const std::string& name,
@@ -521,14 +527,18 @@ private:
         publishFeedback(
           goal_handle, "MOVE_OBSERVE", index + 1, candidates.size(), &candidate,
           "Executing first fully planned candidate");
-        if (move_group_.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+        if (!executeObservationPlan(plan)) {
           move_group_.stop();
+          const bool canceled =
+            cancel_requested_.load() || goal_handle->is_canceling();
+          const std::string execution_result = canceled ? "canceled" : "failed";
           publishFeedback(
             goal_handle, "HOLDING", index + 1, candidates.size(), &candidate,
-            "Execution failed; current position held");
+            "Execution ended with " + execution_result + "; current position held");
           finishFailure(
             goal_handle, ObserveTarget::Result::FAILURE_EXECUTION_ERROR,
-            "MOVE_OBSERVE", "Observation trajectory execution failed");
+            "MOVE_OBSERVE",
+            "Observation joint goal " + execution_result, canceled);
           return;
         }
 

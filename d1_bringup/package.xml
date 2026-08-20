@@ -11,10 +11,13 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>d1_constrained_description</exec_depend>
   <exec_depend>d1_ros2_control</exec_depend>
+  <exec_depend>d1_manipulation</exec_depend>
+  <exec_depend>d1_moveit_config</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

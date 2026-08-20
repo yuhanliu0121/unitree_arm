@@ -10,7 +10,7 @@ set -u
 
 # Must match d1_bringup/config/real_machine.yaml. Keeping this explicit avoids
 # accidentally joining a simulation ROS graph or another team's live graph.
-export ROS_DOMAIN_ID=31
+export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-31}
 export ROS_LOG_DIR=/tmp/d1_ros_logs
 mkdir -p "${ROS_LOG_DIR}"
 

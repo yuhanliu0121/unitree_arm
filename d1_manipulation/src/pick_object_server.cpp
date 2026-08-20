@@ -104,7 +104,7 @@ public:
     top_rolls_ = parameterOrDeclare(node_, "top_observation_roll_degrees", std::vector<double>{0, 90, -90, 180, 45, -45, 135, -135});
     camera_settle_ = parameterOrDeclare(node_, "camera_settle_s", 0.5);
     cartesian_step_ = parameterOrDeclare(node_, "cartesian_step_m", 0.005);
-    minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.95);
+    minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.999);
     stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
     gripper_verify_settle_ = parameterOrDeclare(node_, "gripper_verify_settle_s", 0.5);
@@ -363,7 +363,9 @@ private:
       active_gripper_goal_ = gripper_goal;
     }
     auto result = gripper_client_->async_get_result(gripper_goal);
-    const auto deadline = std::chrono::steady_clock::now() + 8s;
+    // The physical gripper controller owns a 10 s terminal timeout. Keep the
+    // task-side guard wider so it cannot cancel a valid controller result first.
+    const auto deadline = std::chrono::steady_clock::now() + 12s;
     while (result.wait_for(50ms) != std::future_status::ready) {
       if (cancel_.load() || std::chrono::steady_clock::now() >= deadline) {
         gripper_client_->async_cancel_goal(gripper_goal);

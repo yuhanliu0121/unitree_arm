@@ -25,6 +25,12 @@ d1_observe_target:
     max_target_pixel_error: 30.0
     stowed_tolerance_rad: 0.08
     stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
+    real_joint_goal_tolerance_rad: 0.034906585
+    real_joint_goal_stable_samples: 3
+    real_joint_goal_assumed_speed_deg_s: 10.0
+    real_joint_goal_timeout_padding_s: 3.0
+    real_joint_goal_minimum_timeout_s: 5.0
+    real_joint_goal_feedback_timeout_s: 1.5
 
     # Temporary nominal ground used by MoveIt until the perception-fitted
     # plane is promoted into the planning scene.
@@ -59,7 +65,7 @@ d1_pick_object:
     top_observation_roll_degrees: [0.0, 90.0, -90.0, 180.0, 45.0, -45.0, 135.0, -135.0]
     camera_settle_s: 0.5
     cartesian_step_m: 0.005
-    minimum_cartesian_fraction: 0.95
+    minimum_cartesian_fraction: 0.999
     gripper_open_m: 0.03
     grasp_settle_s: 0.5
     gripper_verify_settle_s: 0.5

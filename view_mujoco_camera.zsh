@@ -40,9 +40,13 @@ export PYTHONNOUSERSITE=1
 
 run_dir=$(mktemp -d /tmp/d1_camera_view.XXXXXX)
 sim_log=${run_dir}/mujoco_camera.log
-sim_pid=''
+sim_pid=''; visualizer_pid=''
 
 function stop_simulator() {
+  if [[ -n ${visualizer_pid} ]] && kill -0 ${visualizer_pid} 2>/dev/null; then
+    /bin/kill -TERM ${visualizer_pid} 2>/dev/null || true
+    wait ${visualizer_pid} 2>/dev/null || true
+  fi
   if [[ -n ${sim_pid} ]] && kill -0 ${sim_pid} 2>/dev/null; then
     /bin/kill -TERM -- -${sim_pid} 2>/dev/null || true
     wait ${sim_pid} 2>/dev/null || true
@@ -52,7 +56,7 @@ trap stop_simulator EXIT INT TERM
 
 sim_args=(
   ${conda_bin} run --no-capture-output -n trash_collection
-  d1-mujoco-sim --ros-camera --camera-debug
+  d1-mujoco-sim --ros-camera
 )
 if [[ ${headless} == true ]]; then
   sim_args+=(--headless)
@@ -88,4 +92,6 @@ fi
 
 print 'Camera bridge ready. Starting RViz...'
 print "Logs: ${run_dir}"
+ros2 run d1_camera_visualization depth_debug_visualizer >${run_dir}/depth_visualizer.log 2>&1 &
+visualizer_pid=$!
 rviz2 -d ${workspace}/d1_mujoco_sim/config/camera.rviz

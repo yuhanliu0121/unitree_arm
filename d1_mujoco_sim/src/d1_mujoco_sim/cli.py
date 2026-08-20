@@ -109,11 +109,6 @@ def parse_args() -> argparse.Namespace:
         help="Publish RGB, depth, CameraInfo and TF on ROS 2 topics",
     )
     parser.add_argument(
-        "--camera-debug",
-        action="store_true",
-        help="Also publish plasma depth images for RViz diagnostics",
-    )
-    parser.add_argument(
         "--ros-scene",
         action="store_true",
         help="Publish object meshes and physical collisions for RViz",
@@ -245,7 +240,6 @@ def main() -> None:
                     model,
                     simulator.data,
                     config["camera"],
-                    publish_debug=args.camera_debug,
                 )
             if args.ros_scene:
                 from .ros_scene import RosScenePublisher

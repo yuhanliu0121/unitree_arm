@@ -46,7 +46,7 @@ def generate_launch_description():
                         "pregrasp_clearance_m": 0.12,
                         "lift_distance_m": 0.10,
                         "cartesian_step_m": 0.005,
-                        "minimum_cartesian_fraction": 0.95,
+                        "minimum_cartesian_fraction": 0.999,
                         "gripper_open_m": 0.03,
                         "gripper_closed_m": 0.0,
                         "grasp_settle_s": 0.5,

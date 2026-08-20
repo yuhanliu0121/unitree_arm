@@ -5,6 +5,9 @@ import struct
 import sys
 import time
 from collections import deque
+from pathlib import Path
+
+import yaml
 
 import rclpy
 from geometry_msgs.msg import TransformStamped
@@ -91,6 +94,7 @@ class RealPreflight(Node):
             "acceleration_norm_tolerance_mps2": 1.5,
             "acceleration_max_component_stddev_mps2": 0.35,
             "gravity_required_samples": 30,
+            "gravity_output_path": "",
             "timeout_s": 20.0,
             "minimum_arm_feedback_samples": 5,
             "feedback_max_age_s": 0.5,
@@ -255,6 +259,23 @@ class RealPreflight(Node):
         message.transform.rotation.z = quaternion[2]
         message.transform.rotation.w = quaternion[3]
         self.tf_broadcaster.sendTransform(message)
+        output_path = str(self.get_parameter("gravity_output_path").value)
+        if output_path and not self.gravity_published:
+            destination = Path(output_path)
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            try:
+                temporary.write_text(
+                    yaml.safe_dump({
+                        "parent_frame": parent,
+                        "child_frame": message.child_frame_id,
+                        "translation_xyz_m": [0.0, 0.0, 0.0],
+                        "quaternion_xyzw": list(quaternion),
+                    }, sort_keys=False),
+                    encoding="utf-8",
+                )
+                temporary.replace(destination)
+            except OSError as error:
+                return False, f"cannot persist gravity calibration: {error}"
         self.gravity_published = True
         return True, f"stationary acceleration norm={norm:.3f} m/s^2, up(base)={up}"
 
@@ -295,11 +316,18 @@ class RealPreflight(Node):
         enable, power, error = self.latest_arm_status
         if error != 0:
             return False, f"D1 error_status={error}"
-        if power != 1:
-            return False, f"D1 not powered (power_status={power})"
-        if enable != 1:
-            return False, f"D1 not enabled (enable_status={enable})"
-        return True, f"power={power}; enable={enable}; error={error}"
+        # This phase is deliberately motionless and runs before ros2_control.
+        # A disabled arm is therefore valid here: hardware activation owns the
+        # idempotent power/enable requests and verifies enable_status afterward.
+        if enable not in (0, 1):
+            return False, f"unexpected D1 enable_status={enable}"
+        # D1 power_status has proven unreliable on physical arms: a live,
+        # responsive arm can continue to report zero.  Keep it in diagnostics,
+        # but never use it as a readiness gate.
+        return True, (
+            f"enable={enable} (activation verifies enabled); error={error}; "
+            f"power_status={power} (diagnostic only)"
+        )
 
     def _camera_result(self):
         if self.color_info is None or self.depth_info is None:

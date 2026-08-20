@@ -1181,10 +1181,16 @@ def main() -> None:
     executor.add_node(node)
     try:
         executor.spin()
+    except KeyboardInterrupt:
+        # A launch-wide Ctrl+C is an expected shutdown path, not a node error.
+        pass
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        # ROS launch's SIGINT handler may already have shut the context down.
+        # Avoid turning a normal Ctrl+C into a misleading process error.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

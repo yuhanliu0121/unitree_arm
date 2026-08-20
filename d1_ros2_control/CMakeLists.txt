@@ -6,10 +6,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(control_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 find_path(
   UNITREE_SDK2_INCLUDE_DIR
@@ -110,6 +113,17 @@ target_link_options(
   PRIVATE "-Wl,--disable-new-dtags,-rpath,/usr/local/lib"
 )
 
+add_executable(d1_mode1_controller src/d1_mode1_controller.cpp)
+target_compile_features(d1_mode1_controller PUBLIC cxx_std_17)
+target_include_directories(d1_mode1_controller PRIVATE include)
+ament_target_dependencies(
+  d1_mode1_controller
+  control_msgs
+  rclcpp
+  rclcpp_action
+  sensor_msgs
+)
+
 pluginlib_export_plugin_description_file(
   hardware_interface
   d1_ros2_control_plugin.xml
@@ -128,11 +142,18 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 install(
-  TARGETS ${PROJECT_NAME} d1_dds_gateway
+  TARGETS ${PROJECT_NAME}
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+)
+install(
+  TARGETS d1_dds_gateway d1_mode1_controller
   RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+install(
+  PROGRAMS scripts/d1_mode1_gripper_goal.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

@@ -7,6 +7,9 @@ deployment:
   ros_domain_id: 31
 
 arm:
+  # Explicitly selects the per-unit joint-limit profile. Changing hardware
+  # requires changing this value rather than silently reusing D1095 limits.
+  serial_no: D1095
   # Verified on Dell G3 on 2026-08-19.
   network_interface: enp3s0
   expected_ipv4_subnet: 192.168.123.0/24

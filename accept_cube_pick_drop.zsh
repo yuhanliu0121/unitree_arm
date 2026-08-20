@@ -67,7 +67,6 @@ trap 'exit 130' INT TERM
 
 sim_args=(${conda_bin} run --no-capture-output -n trash_collection d1-mujoco-sim --ros-camera --ros-scene --fixed-layout)
 [[ ${headless} == true ]] && sim_args+=(--headless)
-[[ ${rviz} == true ]] && sim_args+=(--camera-debug)
 
 print '[1/4] Starting deterministic MuJoCo acceptance scene...'
 cd ${workspace}

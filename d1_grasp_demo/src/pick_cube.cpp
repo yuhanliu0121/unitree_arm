@@ -256,7 +256,7 @@ public:
     pregrasp_clearance_ = parameterOrDeclare(node_, "pregrasp_clearance_m", 0.12);
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     cartesian_step_ = parameterOrDeclare(node_, "cartesian_step_m", 0.005);
-    minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.95);
+    minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.999);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
     gripper_closed_ = parameterOrDeclare(node_, "gripper_closed_m", 0.0);
     grasp_settle_ = parameterOrDeclare(node_, "grasp_settle_s", 0.5);

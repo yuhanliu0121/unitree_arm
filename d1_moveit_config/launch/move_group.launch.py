@@ -47,9 +47,13 @@ def _launch_setup(context):
     control_launch = Path(
         get_package_share_directory("d1_ros2_control")
     ) / "launch" / "control.launch.py"
+    rviz_profile = "real.rviz" if backend == "real" else "moveit.rviz"
     rviz_config = Path(
         get_package_share_directory("d1_moveit_config")
-    ) / "config" / "moveit.rviz"
+    ) / "config" / rviz_profile
+    depth_visualizer_config = Path(
+        get_package_share_directory("d1_camera_visualization")
+    ) / "config" / "depth_debug.yaml"
 
     return [
             # Keep this name distinct from control.launch.py's own `rviz`
@@ -61,6 +65,16 @@ def _launch_setup(context):
                     "rviz": "false",
                     "backend": backend,
                     "arm_serial": arm_serial,
+                    "dds_domain_id": LaunchConfiguration("dds_domain_id"),
+                    "interface": LaunchConfiguration("interface"),
+                    "command_port": LaunchConfiguration("command_port"),
+                    "feedback_port": LaunchConfiguration("feedback_port"),
+                    "command_topic": LaunchConfiguration("command_topic"),
+                    "feedback_topic": LaunchConfiguration("feedback_topic"),
+                    "status_topic": LaunchConfiguration("status_topic"),
+                    "gripper_closed_angle_deg": LaunchConfiguration("gripper_closed_angle_deg"),
+                    "gripper_open_angle_deg": LaunchConfiguration("gripper_open_angle_deg"),
+                    "gripper_travel_m": LaunchConfiguration("gripper_travel_m"),
                 }.items(),
             ),
             Node(
@@ -68,6 +82,13 @@ def _launch_setup(context):
                 executable="move_group",
                 output="screen",
                 parameters=[moveit_config.to_dict()],
+            ),
+            Node(
+                package="d1_camera_visualization",
+                executable="depth_debug_visualizer",
+                output="screen",
+                parameters=[str(depth_visualizer_config)],
+                condition=IfCondition(LaunchConfiguration("launch_rviz")),
             ),
             Node(
                 package="rviz2",
@@ -100,6 +121,16 @@ def generate_launch_description():
                 default_value="",
                 description="Explicit physical D1 serial for per-unit URDF adjustments",
             ),
+            DeclareLaunchArgument("dds_domain_id", default_value="42"),
+            DeclareLaunchArgument("interface", default_value=""),
+            DeclareLaunchArgument("command_port", default_value="15000"),
+            DeclareLaunchArgument("feedback_port", default_value="15001"),
+            DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
+            DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
+            DeclareLaunchArgument("status_topic", default_value="rt/arm_Feedback"),
+            DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
+            DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
+            DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

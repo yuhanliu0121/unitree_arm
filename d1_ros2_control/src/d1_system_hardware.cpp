@@ -214,6 +214,10 @@ hardware_interface::CallbackReturn D1SystemHardware::on_init(
       info, "hardware_prepare_timeout_s", 5.0);
     smoothing_mode_ = parameter_as_int(info, "smoothing_mode", 0);
     prepare_hardware_ = parameter_as_bool(info, "prepare_hardware", false);
+    send_repeated_commands_ = parameter_as_bool(
+      info, "send_repeated_commands", true);
+    command_output_enabled_ = parameter_as_bool(
+      info, "command_output_enabled", true);
     gripper_closed_angle_deg_ = parameter_as_double(
       info, "gripper_closed_angle_deg", -30.0);
     gripper_open_angle_deg_ = parameter_as_double(
@@ -383,6 +387,7 @@ hardware_interface::CallbackReturn D1SystemHardware::on_activate(
       }
       command_position_ = state_position_;
       last_write_time_ = {};
+      last_published_command_valid_ = false;
       active_ = true;
       RCLCPP_INFO(kLogger, "Activated D1 hardware from live joint feedback");
       return hardware_interface::CallbackReturn::SUCCESS;
@@ -443,18 +448,18 @@ bool D1SystemHardware::prepare_physical_hardware()
     return false;
   }
 
-  if (impl_->power_status != 1)
+  // Always issue the idempotent power-on request.  D1 power_status is not a
+  // reliable acknowledgement on physical arms, so only require a subsequent
+  // fresh, error-free status sample here.
+  JointPacket power;
+  power.kind = PacketKind::power_command;
+  power.sequence = sequence_++;
+  auto next_status = impl_->status_count + 1U;
+  if (!impl_->send(power) ||
+      !wait_for_status(
+        []() {return true;}, "power-on request", next_status))
   {
-    JointPacket power;
-    power.kind = PacketKind::power_command;
-    power.sequence = sequence_++;
-    const auto next_status = impl_->status_count + 1U;
-    if (!impl_->send(power) ||
-        !wait_for_status(
-          [this]() {return impl_->power_status == 1;}, "power on", next_status))
-    {
-      return false;
-    }
+    return false;
   }
 
   // D1 firmware can report enable_status=1 even after a weak/partial enable.
@@ -462,18 +467,20 @@ bool D1SystemHardware::prepare_physical_hardware()
   JointPacket enable;
   enable.kind = PacketKind::enable_command;
   enable.sequence = sequence_++;
-  const auto next_status = impl_->status_count + 1U;
+  next_status = impl_->status_count + 1U;
   if (!impl_->send(enable) ||
       !wait_for_status(
-        [this]() {return impl_->power_status == 1 && impl_->enable_status == 1;},
+        [this]() {return impl_->enable_status == 1;},
         "full enable", next_status))
   {
     return false;
   }
 
   RCLCPP_INFO(
-    kLogger, "D1 physical preparation passed: power=%d enable=%d error=%d",
-    impl_->power_status, impl_->enable_status, impl_->error_status);
+    kLogger,
+    "D1 physical preparation passed: enable=%d error=%d "
+    "power_status=%d (diagnostic only)",
+    impl_->enable_status, impl_->error_status, impl_->power_status);
   return true;
 }
 
@@ -482,14 +489,17 @@ hardware_interface::CallbackReturn D1SystemHardware::on_deactivate(
 {
   if (active_)
   {
-    if (copy_feedback_to_state(false))
+    if (command_output_enabled_ && copy_feedback_to_state(false))
     {
       command_position_ = state_position_;
       publish_command(true);
     }
     active_ = false;
   }
-  RCLCPP_INFO(kLogger, "Deactivated D1 hardware with a measured-position hold");
+  RCLCPP_INFO(
+    kLogger, command_output_enabled_ ?
+    "Deactivated D1 hardware with a measured-position hold" :
+    "Deactivated read-only D1 hardware transport");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -505,6 +515,10 @@ hardware_interface::return_type D1SystemHardware::write(
   const rclcpp::Time &, const rclcpp::Duration &)
 {
   if (!active_)
+  {
+    return hardware_interface::return_type::OK;
+  }
+  if (!command_output_enabled_)
   {
     return hardware_interface::return_type::OK;
   }
@@ -551,12 +565,13 @@ bool D1SystemHardware::copy_feedback_to_state(bool require_fresh)
         status_age, feedback_timeout_s_);
       return false;
     }
-    if (impl_->power_status != 1 || impl_->enable_status != 1 ||
-        impl_->error_status != 0)
+    if (impl_->enable_status != 1 || impl_->error_status != 0)
     {
       RCLCPP_ERROR(
-        kLogger, "D1 hardware became NOT_READY: power=%d enable=%d error=%d",
-        impl_->power_status, impl_->enable_status, impl_->error_status);
+        kLogger,
+        "D1 hardware became NOT_READY: enable=%d error=%d "
+        "power_status=%d (diagnostic only)",
+        impl_->enable_status, impl_->error_status, impl_->power_status);
       return false;
     }
   }
@@ -618,6 +633,22 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
       command_position_[index], lower_limits_[index], upper_limits_[index]);
   }
 
+  if (!ignore_rate_limit && !send_repeated_commands_ &&
+      last_published_command_valid_)
+  {
+    constexpr double kCommandChangeEpsilon = 1e-7;
+    const bool changed = std::equal(
+      clamped.begin(), clamped.end(), last_published_command_.begin(),
+      [](const double current, const double previous)
+      {
+        return std::abs(current - previous) <= kCommandChangeEpsilon;
+      }) == false;
+    if (!changed)
+    {
+      return true;
+    }
+  }
+
   JointPacket packet;
   packet.kind = PacketKind::command;
   packet.sequence = sequence_++;
@@ -635,6 +666,8 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
   {
     return false;
   }
+  last_published_command_ = clamped;
+  last_published_command_valid_ = true;
   last_write_time_ = now;
   return true;
 }
@@ -643,6 +676,7 @@ void D1SystemHardware::shutdown_transport()
 {
   active_ = false;
   configured_ = false;
+  last_published_command_valid_ = false;
   last_state_sample_time_ = {};
   impl_.reset();
 }

@@ -25,7 +25,7 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /wrist_camera/debug/aligned_depth_plasma
     - Class: rviz_default_plugins/Image
-      Enabled: false
+      Enabled: true
       Name: Wrist Raw Depth (Plasma)
       Normalize Range: false
       Topic:

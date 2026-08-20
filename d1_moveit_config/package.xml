@@ -10,6 +10,7 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <exec_depend>d1_constrained_description</exec_depend>
+  <exec_depend>d1_camera_visualization</exec_depend>
   <exec_depend>d1_grasp_demo</exec_depend>
   <exec_depend>d1_ros2_control</exec_depend>
   <exec_depend>launch</exec_depend>

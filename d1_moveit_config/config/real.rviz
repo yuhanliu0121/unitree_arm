@@ -1,0 +1,135 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.35
+      Class: rviz_default_plugins/Grid
+      Name: Base Plane
+      Plane: XY
+      Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+      Name: Real Arm
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.12
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Value: true
+    - Class: moveit_rviz_plugin/Trajectory
+      Enabled: true
+      Loop Animation: false
+      Name: Planned Trajectory
+      Robot Alpha: 0.5
+      Robot Description: robot_description
+      Show Trail: false
+      State Display Time: 0.05 s
+      Trajectory Topic: /display_planned_path
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Observation Debug
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/debug/observation_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Cube Grasp Geometry
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/debug/cube_grasp_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Zucchini Grasp Geometry
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/debug/zucchini_grasp_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Bowl Grasp Geometry
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/debug/bowl_grasp_markers
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Wrist RGB
+      Normalize Range: false
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera/color/image_raw
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Wrist Raw Depth (Plasma)
+      Normalize Range: false
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera/debug/depth_plasma
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Wrist Aligned Depth (Plasma)
+      Normalize Range: false
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera/debug/aligned_depth_plasma
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Wrist Camera YOLO
+      Normalize Range: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /arm/perception/debug/overlay
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_link
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.2
+      Focal Point:
+        X: 0.25
+        Y: 0.0
+        Z: 0.25
+      Name: Current View
+      Pitch: 0.45
+      Target Frame: base_link
+      Yaw: 0.75
+Window Geometry:
+  Height: 900
+  Width: 1400

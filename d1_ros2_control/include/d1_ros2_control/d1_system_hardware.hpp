@@ -67,6 +67,7 @@ private:
   std::array<double, 7> state_position_{};
   std::array<double, 7> state_velocity_{};
   std::array<double, 7> command_position_{};
+  std::array<double, 7> last_published_command_{};
   std::array<double, 7> lower_limits_{};
   std::array<double, 7> upper_limits_{};
 
@@ -79,12 +80,15 @@ private:
   double hardware_prepare_timeout_s_{5.0};
   int smoothing_mode_{0};
   bool prepare_hardware_{false};
+  bool send_repeated_commands_{true};
+  bool command_output_enabled_{true};
   double gripper_closed_angle_deg_{-30.0};
   double gripper_open_angle_deg_{60.0};
   double gripper_travel_m_{0.03};
   std::uint64_t sequence_{1};
   bool configured_{false};
   bool active_{false};
+  bool last_published_command_valid_{false};
   std::chrono::steady_clock::time_point last_write_time_{};
   std::chrono::steady_clock::time_point last_state_sample_time_{};
 };

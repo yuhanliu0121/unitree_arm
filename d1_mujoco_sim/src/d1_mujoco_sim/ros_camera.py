@@ -12,33 +12,6 @@ import numpy as np
 LOGGER = logging.getLogger(__name__)
 
 
-def _plasma_lut() -> np.ndarray:
-    """Return a compact plasma-like RGB lookup table without matplotlib."""
-    positions = np.asarray(
-        [0.0, 0.13, 0.25, 0.38, 0.50, 0.63, 0.75, 0.88, 1.0],
-        dtype=np.float32,
-    )
-    colors = np.asarray(
-        [
-            [13, 8, 135],
-            [75, 3, 161],
-            [125, 3, 168],
-            [168, 34, 150],
-            [203, 70, 121],
-            [229, 107, 93],
-            [248, 148, 65],
-            [253, 195, 40],
-            [240, 249, 33],
-        ],
-        dtype=np.float32,
-    )
-    samples = np.linspace(0.0, 1.0, 256, dtype=np.float32)
-    channels = [np.interp(samples, positions, colors[:, i]) for i in range(3)]
-    return np.rint(np.stack(channels, axis=1)).astype(np.uint8)
-
-
-PLASMA_LUT = _plasma_lut()
-
 # REP-103 camera body axes are +X forward, +Y left, +Z up. Optical axes are
 # +X right, +Y down, +Z forward.
 CAMERA_LINK_FROM_OPTICAL = np.asarray(
@@ -68,28 +41,6 @@ def depth_to_uint16(
     result[valid] = np.clip(scaled, 1, np.iinfo(np.uint16).max).astype(
         np.uint16
     )
-    return result
-
-
-def colorize_depth(
-    depth_m: np.ndarray,
-    min_depth_m: float,
-    max_depth_m: float,
-) -> np.ndarray:
-    valid = (
-        np.isfinite(depth_m)
-        & (depth_m >= min_depth_m)
-        & (depth_m <= max_depth_m)
-    )
-    normalized = np.zeros(depth_m.shape, dtype=np.float32)
-    normalized[valid] = np.clip(
-        (depth_m[valid] - min_depth_m) / (max_depth_m - min_depth_m),
-        0.0,
-        1.0,
-    )
-    indices = np.rint(normalized * 255.0).astype(np.uint8)
-    result = PLASMA_LUT[indices]
-    result[~valid] = 0
     return result
 
 
@@ -360,8 +311,6 @@ class RosCameraPublisher:
         model: mujoco.MjModel,
         data: mujoco.MjData,
         config: dict,
-        *,
-        publish_debug: bool = False,
     ) -> None:
         try:
             import rclpy
@@ -395,18 +344,11 @@ class RosCameraPublisher:
         self._model = model
         self._data = data
         self._config = config
-        self._publish_debug = publish_debug
         self.publish_rate_hz = float(config.get("publish_rate_hz", 10.0))
         self._topic_root = str(config.get("topic_root", "/wrist_camera"))
         self._topic_root = self._topic_root.rstrip("/")
         self._min_depth_m = float(config.get("min_depth_m", 0.2))
         self._max_depth_m = float(config.get("max_depth_m", 10.0))
-        self._display_min_depth_m = float(
-            config.get("display_min_depth_m", self._min_depth_m)
-        )
-        self._display_max_depth_m = float(
-            config.get("display_max_depth_m", 2.0)
-        )
         color = config["color"]
         depth = config["depth"]
         model.vis.global_.offwidth = max(
@@ -452,19 +394,6 @@ class RosCameraPublisher:
             topics["aligned_depth_info"],
             qos_profile_sensor_data,
         )
-        self._raw_depth_debug_publisher = None
-        self._aligned_depth_debug_publisher = None
-        if publish_debug:
-            self._raw_depth_debug_publisher = self._node.create_publisher(
-                Image,
-                topics["raw_depth_debug"],
-                qos_profile_sensor_data,
-            )
-            self._aligned_depth_debug_publisher = self._node.create_publisher(
-                Image,
-                topics["aligned_depth_debug"],
-                qos_profile_sensor_data,
-            )
 
         self._static_tf = StaticTransformBroadcaster(self._node)
         self._publish_static_transforms()
@@ -488,10 +417,9 @@ class RosCameraPublisher:
                 self._worker_error
             )
         LOGGER.info(
-            "ROS camera streams ready under %s at %.2f Hz (debug=%s)",
+            "ROS camera streams ready under %s at %.2f Hz",
             self._topic_root,
             self.publish_rate_hz,
-            publish_debug,
         )
 
     @staticmethod
@@ -508,10 +436,6 @@ class RosCameraPublisher:
             ),
             "aligned_depth_info": (
                 f"{root}/aligned_depth_to_color/camera_info"
-            ),
-            "raw_depth_debug": f"{root}/debug/depth_plasma",
-            "aligned_depth_debug": (
-                f"{root}/debug/aligned_depth_plasma"
             ),
         }
 
@@ -735,36 +659,6 @@ class RosCameraPublisher:
         self._aligned_depth_info_publisher.publish(
             self._camera_info(color_config, stamp)
         )
-        if self._publish_debug:
-            depth_colorized = colorize_depth(
-                depth_m,
-                self._display_min_depth_m,
-                self._display_max_depth_m,
-            )
-            aligned_depth_m = aligned_depth_raw.astype(np.float32) * float(
-                depth_config["depth_scale_m_per_unit"]
-            )
-            aligned_depth_colorized = colorize_depth(
-                aligned_depth_m,
-                self._display_min_depth_m,
-                self._display_max_depth_m,
-            )
-            self._raw_depth_debug_publisher.publish(
-                self._image(
-                    depth_colorized,
-                    "rgb8",
-                    str(depth_config["frame"]),
-                    stamp,
-                )
-            )
-            self._aligned_depth_debug_publisher.publish(
-                self._image(
-                    aligned_depth_colorized,
-                    "rgb8",
-                    str(color_config["frame"]),
-                    stamp,
-                )
-            )
         self._rclpy.spin_once(self._node, timeout_sec=0.0)
 
     def close(self) -> None:

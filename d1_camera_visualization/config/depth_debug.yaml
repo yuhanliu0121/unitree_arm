@@ -1,0 +1,12 @@
+d1_depth_debug_visualizer:
+  ros__parameters:
+    raw_depth_topic: /wrist_camera/depth/image_rect_raw
+    aligned_depth_topic: /wrist_camera/aligned_depth_to_color/image_raw
+    raw_debug_topic: /wrist_camera/debug/depth_plasma
+    aligned_debug_topic: /wrist_camera/debug/aligned_depth_plasma
+    depth_scale_m_per_unit: 0.001
+    sensor_min_m: 0.20
+    sensor_max_m: 10.0
+    display_min_m: 0.20
+    display_max_m: 2.0
+    publish_rate_limit_hz: 10.0

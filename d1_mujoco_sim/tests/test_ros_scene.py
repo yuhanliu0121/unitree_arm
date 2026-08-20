@@ -192,7 +192,7 @@ def test_rviz_layer_defaults_keep_meshes_on_and_collisions_off() -> None:
     assert displays["MoveIt Planning Collisions"]["Value"] is False
     assert displays["Wrist RGB"]["Enabled"] is True
     assert displays["Wrist Aligned Depth (Plasma)"]["Enabled"] is True
-    assert displays["Wrist Raw Depth (Plasma)"]["Enabled"] is False
+    assert displays["Wrist Raw Depth (Plasma)"]["Enabled"] is True
     assert rviz["Visualization Manager"]["Global Options"]["Fixed Frame"] == "world"
     assert (
         displays["Wrist RGB"]["Topic"]["Value"]

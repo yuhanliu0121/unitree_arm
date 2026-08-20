@@ -188,7 +188,7 @@ public:
     ik_timeout_s_ = parameterOrDeclare(node_, "ik_timeout_s", 0.025);
     planning_time_s_ = parameterOrDeclare(node_, "scan_planning_time_s", 0.35);
     cartesian_step_ = parameterOrDeclare(node_, "cartesian_step_m", 0.005);
-    minimum_cartesian_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.95);
+    minimum_cartesian_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.999);
 
     beta_degrees_ = parameterOrDeclare<std::vector<double>>(node_,
       "beta_degrees", {0.0, -5.0, 5.0, -10.0, 10.0, -15.0, 15.0});

@@ -1,0 +1,168 @@
+import math
+import os
+from pathlib import Path
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def _static_tf(parent, child, translation, quaternion):
+    return Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=[
+            "--x", str(translation[0]), "--y", str(translation[1]), "--z", str(translation[2]),
+            "--qx", str(quaternion[0]), "--qy", str(quaternion[1]),
+            "--qz", str(quaternion[2]), "--qw", str(quaternion[3]),
+            "--frame-id", parent, "--child-frame-id", child,
+        ],
+        output="screen",
+    )
+
+
+def _configured_static_tf(parent, child, transform):
+    return _static_tf(
+        parent,
+        child,
+        transform["translation_xyz_m"],
+        transform["quaternion_xyzw"],
+    )
+
+
+def _load_yaml(path, description):
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        raise RuntimeError(f"cannot load {description} {path}: {error}") from error
+    if not isinstance(document, dict):
+        raise RuntimeError(f"{description} {path} is not a YAML mapping")
+    return document
+
+
+def _launch_setup(context):
+    default_config = Path(get_package_share_directory("d1_bringup")) / "config" / "real_machine.yaml"
+    requested_config = LaunchConfiguration("config").perform(context).strip()
+    config_path = Path(requested_config or os.environ.get("D1_REAL_MACHINE_CONFIG", default_config))
+    config = _load_yaml(config_path, "real-machine config")
+    if config.get("deployment", {}).get("backend") != "real":
+        raise RuntimeError("real_system requires deployment.backend: real")
+
+    expected_ros_domain = int(config["deployment"]["ros_domain_id"])
+    actual_ros_domain = int(os.environ.get("ROS_DOMAIN_ID", "0"))
+    if actual_ros_domain != expected_ros_domain:
+        raise RuntimeError(
+            f"ROS_DOMAIN_ID={actual_ros_domain}, but config requires {expected_ros_domain}"
+        )
+
+    arm = config["arm"]
+    camera = config["wrist_camera"]
+    site = config["site"]
+    gravity_config = site["gravity"]
+    arm_serial = LaunchConfiguration("arm_serial").perform(context).strip() or str(
+        arm.get("serial_no", "")
+    ).strip()
+    if not arm_serial:
+        raise RuntimeError("real_system requires an explicit physical arm serial")
+
+    gravity_path_text = LaunchConfiguration("gravity_calibration").perform(context).strip()
+    if not gravity_path_text:
+        raise RuntimeError("real_system requires a gravity calibration produced by preflight")
+    gravity_path = Path(gravity_path_text)
+    gravity = _load_yaml(gravity_path, "gravity calibration")
+    expected_parent = gravity_config["parent_frame"]
+    expected_child = gravity_config["frame"]
+    if gravity.get("parent_frame") != expected_parent or gravity.get("child_frame") != expected_child:
+        raise RuntimeError(
+            "gravity calibration frame mismatch: "
+            f"got {gravity.get('parent_frame')} -> {gravity.get('child_frame')}, "
+            f"expected {expected_parent} -> {expected_child}"
+        )
+    quaternion = gravity.get("quaternion_xyzw", [])
+    if len(quaternion) != 4 or not all(math.isfinite(float(value)) for value in quaternion):
+        raise RuntimeError("gravity calibration has an invalid quaternion")
+    quaternion_norm = math.sqrt(sum(float(value) ** 2 for value in quaternion))
+    if abs(quaternion_norm - 1.0) > 1e-3:
+        raise RuntimeError(f"gravity calibration quaternion norm is {quaternion_norm:.6f}")
+
+    rs_launch = Path(get_package_share_directory("realsense2_camera")) / "launch" / "rs_launch.py"
+    realsense = GroupAction(
+        scoped=True,
+        forwarding=False,
+        actions=[IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(rs_launch)),
+            launch_arguments={
+                "camera_namespace": "/",
+                "camera_name": camera["name"],
+                "serial_no": "_" + camera["serial_no"],
+                "enable_color": "true",
+                "enable_depth": "true",
+                "align_depth.enable": "true",
+                "enable_accel": "true",
+                "enable_gyro": "true",
+                "unite_imu_method": "2",
+                "rgb_camera.color_profile": camera["color_profile"],
+                "depth_module.depth_profile": camera["depth_profile"],
+                "publish_tf": "true",
+            }.items(),
+        )],
+    )
+
+    manipulation_launch = (
+        Path(get_package_share_directory("d1_manipulation"))
+        / "launch"
+        / "observe_target.launch.py"
+    )
+    manipulation = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(str(manipulation_launch)),
+        launch_arguments={
+            "launch_rviz": LaunchConfiguration("launch_rviz"),
+            "backend": "real",
+            "arm_serial": arm_serial,
+            "gravity_frame": expected_child,
+            "dds_domain_id": str(arm["d1_native_domain_id"]),
+            "interface": arm["network_interface"],
+            "command_port": str(arm["loopback_command_port"]),
+            "feedback_port": str(arm["loopback_feedback_port"]),
+            "command_topic": arm["command_topic"],
+            "feedback_topic": arm["feedback_topic"],
+            "status_topic": arm["status_topic"],
+            "gripper_closed_angle_deg": str(arm["gripper_closed_angle_deg"]),
+            "gripper_open_angle_deg": str(arm["gripper_open_angle_deg"]),
+            "gripper_travel_m": str(arm["gripper_travel_m"]),
+        }.items(),
+    )
+
+    return [
+        LogInfo(msg=f"Starting REAL D1 system: serial={arm_serial} config={config_path}"),
+        realsense,
+        _configured_static_tf("go2_base", "base_link", site["go2_base_to_arm_base"]),
+        _configured_static_tf("Link6", "wrist_camera_link", camera["link6_to_camera_link"]),
+        _static_tf(
+            gravity["parent_frame"],
+            gravity["child_frame"],
+            gravity.get("translation_xyz_m", [0.0, 0.0, 0.0]),
+            quaternion,
+        ),
+        manipulation,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument("config", default_value=""),
+        DeclareLaunchArgument("arm_serial", default_value=""),
+        DeclareLaunchArgument("gravity_calibration"),
+        DeclareLaunchArgument("launch_rviz", default_value="false"),
+        OpaqueFunction(function=_launch_setup),
+    ])

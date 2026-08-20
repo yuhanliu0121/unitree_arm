@@ -40,6 +40,9 @@ def _launch_setup(context):
         raise RuntimeError(f"unsupported backend: {backend}")
     requested_arm_serial = LaunchConfiguration("arm_serial").perform(context).strip()
     arm_serial = requested_arm_serial if backend == "real" else ""
+    gravity_frame = LaunchConfiguration("gravity_frame").perform(context).strip()
+    if not gravity_frame:
+        raise RuntimeError("gravity_frame must not be empty")
     moveit_config = build_moveit_config(arm_serial)
     move_group_launch = Path(
         get_package_share_directory("d1_moveit_config")
@@ -62,13 +65,26 @@ def _launch_setup(context):
                     "launch_rviz": LaunchConfiguration("launch_rviz"),
                     "backend": backend,
                     "arm_serial": arm_serial,
+                    "dds_domain_id": LaunchConfiguration("dds_domain_id"),
+                    "interface": LaunchConfiguration("interface"),
+                    "command_port": LaunchConfiguration("command_port"),
+                    "feedback_port": LaunchConfiguration("feedback_port"),
+                    "command_topic": LaunchConfiguration("command_topic"),
+                    "feedback_topic": LaunchConfiguration("feedback_topic"),
+                    "status_topic": LaunchConfiguration("status_topic"),
+                    "gripper_closed_angle_deg": LaunchConfiguration("gripper_closed_angle_deg"),
+                    "gripper_open_angle_deg": LaunchConfiguration("gripper_open_angle_deg"),
+                    "gripper_travel_m": LaunchConfiguration("gripper_travel_m"),
                 }.items(),
         ),
         Node(
                 package="d1_manipulation",
                 executable="observe_target_server",
                 output="screen",
-                parameters=[moveit_config.to_dict(), str(observe_config), {"backend": backend}],
+                parameters=[
+                    moveit_config.to_dict(), str(observe_config), str(gripper_config),
+                    {"backend": backend, "gravity_frame": gravity_frame},
+                ],
         ),
         Node(
                 package="d1_manipulation",
@@ -76,14 +92,20 @@ def _launch_setup(context):
                 output="screen",
                 parameters=[
                     moveit_config.to_dict(), str(observe_config), str(gripper_config),
-                    {"backend": backend},
+                    {
+                        "backend": backend,
+                        "gravity_frame": gravity_frame,
+                    },
                 ],
         ),
         Node(
                 package="d1_manipulation",
                 executable="drop_object_server",
                 output="screen",
-                parameters=[moveit_config.to_dict(), str(observe_config), {"backend": backend}],
+                parameters=[
+                    moveit_config.to_dict(), str(observe_config), str(gripper_config),
+                    {"backend": backend, "gravity_frame": gravity_frame},
+                ],
         ),
         Node(
                 package="d1_manipulation",
@@ -91,10 +113,12 @@ def _launch_setup(context):
                 output="screen",
                 parameters=[
                     str(perception_config),
+                    str(gripper_config),
                     {
                         "perception_runtime_root": str(
                             workspace_root / "perception_runtime_v1"
-                        )
+                        ),
+                        "gravity_frame": gravity_frame,
                     },
                 ],
         ),
@@ -115,6 +139,17 @@ def generate_launch_description():
                 default_value="",
                 description="Explicit physical D1 serial for per-unit URDF adjustments",
             ),
+            DeclareLaunchArgument("gravity_frame", default_value="world"),
+            DeclareLaunchArgument("dds_domain_id", default_value="42"),
+            DeclareLaunchArgument("interface", default_value=""),
+            DeclareLaunchArgument("command_port", default_value="15000"),
+            DeclareLaunchArgument("feedback_port", default_value="15001"),
+            DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
+            DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
+            DeclareLaunchArgument("status_topic", default_value="rt/arm_Feedback"),
+            DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
+            DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
+            DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

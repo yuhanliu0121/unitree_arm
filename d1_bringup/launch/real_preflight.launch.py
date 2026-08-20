@@ -43,7 +43,8 @@ def _static_tf(parent, child, transform):
 
 def _launch_setup(context):
     default_config = Path(get_package_share_directory("d1_bringup")) / "config" / "real_machine.yaml"
-    config_path = Path(os.environ.get("D1_REAL_MACHINE_CONFIG", default_config))
+    requested_config = LaunchConfiguration("config").perform(context).strip()
+    config_path = Path(requested_config or os.environ.get("D1_REAL_MACHINE_CONFIG", default_config))
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if config["deployment"]["backend"] != "real":
         raise RuntimeError("real_preflight requires deployment.backend: real")
@@ -64,7 +65,9 @@ def _launch_setup(context):
     robot_description = (description_share / "urdf" / "d1_description.urdf").read_text(
         encoding="utf-8"
     )
-    arm_serial = LaunchConfiguration("arm_serial").perform(context).strip()
+    arm_serial = LaunchConfiguration("arm_serial").perform(context).strip() or str(
+        arm.get("serial_no", "")
+    ).strip()
     profile_path = description_share / "config" / "hardware_profiles.yaml"
     overrides = load_joint_limit_overrides(profile_path, arm_serial)
     if arm_serial and not overrides:
@@ -176,6 +179,7 @@ def _launch_setup(context):
             "acceleration_norm_tolerance_mps2": gravity["norm_tolerance_mps2"],
             "acceleration_max_component_stddev_mps2": gravity["max_component_stddev_mps2"],
             "gravity_required_samples": gravity["required_samples"],
+            "gravity_output_path": LaunchConfiguration("gravity_output_path"),
             "timeout_s": preflight_config["timeout_s"],
             "minimum_arm_feedback_samples": preflight_config["minimum_arm_feedback_samples"],
             "feedback_max_age_s": preflight_config["feedback_max_age_s"],
@@ -210,5 +214,11 @@ def generate_launch_description():
             default_value="",
             description="Explicit physical D1 serial for per-unit URDF adjustments",
         ),
+        DeclareLaunchArgument(
+            "config",
+            default_value="",
+            description="Physical deployment YAML; defaults to D1_REAL_MACHINE_CONFIG or package config",
+        ),
+        DeclareLaunchArgument("gravity_output_path", default_value=""),
         OpaqueFunction(function=_launch_setup),
     ])

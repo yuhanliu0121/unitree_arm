@@ -188,9 +188,12 @@ The stable ROS topic layout identifies this eye-in-hand device by role:
 - `/wrist_camera/aligned_depth_to_color/image_raw` (`16UC1`, RGB grid);
 - `/wrist_camera/aligned_depth_to_color/camera_info`.
 
-`--camera-debug` additionally publishes the visualization-only topics
+The backend-neutral `d1_camera_visualization/depth_debug_visualizer` converts
+both `16UC1` streams into the visualization-only topics
 `/wrist_camera/debug/depth_plasma` and
-`/wrist_camera/debug/aligned_depth_plasma`. Depth-to-color alignment uses the
+`/wrist_camera/debug/aligned_depth_plasma`. It is started automatically with
+the MoveIt RViz profile; MuJoCo only publishes canonical camera data.
+Depth-to-color alignment uses the
 measured stream extrinsics and intrinsics, fills the RGB pixel grid, preserves
 zero for missing samples, and keeps the nearest Z16 value where projections
 overlap.

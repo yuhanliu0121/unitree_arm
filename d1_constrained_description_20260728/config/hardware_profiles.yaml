@@ -7,4 +7,4 @@ hardware_profiles:
       Joint1:
         lower: -1.553343034275  # -89.0 deg
       Joint2:
-        upper: 1.596976265574   # +91.5 deg
+        upper: 1.605702911835   # +92.0 deg
