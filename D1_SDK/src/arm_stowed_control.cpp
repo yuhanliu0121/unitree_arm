@@ -3,8 +3,6 @@
 
 #include "msg/ArmString_.hpp"
 #include "msg/PubServoInfo_.hpp"
-#include "maintenance_lock.hpp"
-
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -401,11 +399,9 @@ int main(int argc, char** argv)
             throw std::runtime_error("Publishing requires --confirm STOWED_MOVE");
         }
 
-        d1_tools::ExclusiveHardwareLease lease("arm_stowed_control");
-
         std::cout
-            << "WARNING: this directly commands the physical D1 and takes ownership\n"
-            << "from real_bringup if necessary. Support the arm and clear its workspace.\n"
+            << "WARNING: this directly commands the physical D1 without a software lock.\n"
+            << "Support the arm, clear its workspace, and stop other command publishers.\n"
             << std::flush;
         const std::string executable = std::filesystem::absolute(argv[0]).string();
         std::array<char, 64> state_template{};

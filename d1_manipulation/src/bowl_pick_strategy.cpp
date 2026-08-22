@@ -134,6 +134,19 @@ public:
         "ESTIMATE_POSE", fine ? fine->detail : "bowl fine estimation unavailable"};
       return false;
     }
+    up = Eigen::Vector3d(
+      fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
+    if (!up.allFinite() || up.norm() < 0.9) {
+      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        "ESTIMATE_POSE", "bowl fine ground normal is invalid"};
+      return false;
+    }
+    up.normalize();
+    if (!runtime_.applyEstimatedGround(up, fine->ground_offset)) {
+      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
+      return false;
+    }
     const Eigen::Vector3d bottom(
       fine->bottom_center.point.x, fine->bottom_center.point.y,
       fine->bottom_center.point.z);
@@ -228,7 +241,7 @@ public:
     state->bottom_center = bottom; state->world_from_model = world_from_model;
     state->grasp_transform = selected_grasp;
     state->target_collision_ids = target_ids; output.strategy_state = std::move(state);
-    publishMarkers(bottom, up, output);
+    publishMarkers(*coarse, *fine, bottom, up, output);
     RCLCPP_INFO(node_->get_logger(),
       "Bowl strategy selected pregrasp=%.0f mm rim_azimuth=%.1f deg finger_flip=%.0f deg",
       1000.0 * selected_pregrasp, selected_azimuth, selected_flip);
@@ -371,21 +384,47 @@ private:
     return values;
   }
 
-  void publishMarkers(const Eigen::Vector3d& bottom, const Eigen::Vector3d& up,
+  void publishMarkers(
+    const srv::EstimateBowl::Response& coarse,
+    const srv::EstimateBowl::Response& fine,
+    const Eigen::Vector3d& bottom, const Eigen::Vector3d& up,
     const PreparedPick& plan)
   {
     visualization_msgs::msg::MarkerArray array;
     visualization_msgs::msg::Marker clear; clear.action = visualization_msgs::msg::Marker::DELETEALL;
     array.markers.push_back(clear);
+    const auto append_ground = [&](const auto& estimate, const std::string& name,
+        int id, const std_msgs::msg::ColorRGBA& plane_color)
+      {
+        visualization_msgs::msg::Marker plane;
+        plane.header.frame_id = runtime_.planningFrame(); plane.ns = name; plane.id = id;
+        plane.type = visualization_msgs::msg::Marker::CUBE;
+        plane.action = visualization_msgs::msg::Marker::ADD;
+        Eigen::Vector3d normal(
+          estimate.ground_normal.x, estimate.ground_normal.y, estimate.ground_normal.z);
+        normal.normalize();
+        const Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(
+          Eigen::Vector3d::UnitZ(), normal);
+        plane.pose.orientation.x = q.x(); plane.pose.orientation.y = q.y();
+        plane.pose.orientation.z = q.z(); plane.pose.orientation.w = q.w();
+        const Eigen::Vector3d on_plane = -estimate.ground_offset * normal;
+        plane.pose.position.x = on_plane.x(); plane.pose.position.y = on_plane.y();
+        plane.pose.position.z = on_plane.z();
+        plane.scale.x = 0.8; plane.scale.y = 0.6; plane.scale.z = 0.003;
+        plane.color = plane_color;
+        array.markers.push_back(plane);
+      };
+    append_ground(coarse, "coarse_ground_plane", 0, color(1.0F, 0.75F, 0.1F, 0.18F));
+    append_ground(fine, "fine_ground_plane", 1, color(0.2F, 0.7F, 1.0F, 0.32F));
     visualization_msgs::msg::Marker sphere;
-    sphere.header.frame_id = runtime_.planningFrame(); sphere.ns = "bowl_bottom"; sphere.id = 0;
+    sphere.header.frame_id = runtime_.planningFrame(); sphere.ns = "bowl_bottom"; sphere.id = 2;
     sphere.type = visualization_msgs::msg::Marker::SPHERE;
     sphere.action = visualization_msgs::msg::Marker::ADD;
     sphere.pose.position.x = bottom.x(); sphere.pose.position.y = bottom.y();
     sphere.pose.position.z = bottom.z(); sphere.pose.orientation.w = 1.0;
     sphere.scale.x = sphere.scale.y = sphere.scale.z = 0.025;
     sphere.color = color(1, 0, 1); array.markers.push_back(sphere);
-    int id = 1;
+    int id = 3;
     for (const auto& item : {std::make_pair("grasp", plan.grasp_pose),
       std::make_pair("pregrasp", plan.pregrasp_pose)})
     {

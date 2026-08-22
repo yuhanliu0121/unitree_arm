@@ -166,10 +166,24 @@ public:
       return false;
     }
 
+    up = Eigen::Vector3d(
+      fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
+    if (!up.allFinite() || up.norm() < 0.9) {
+      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        "ESTIMATE_POSE", "cube fine ground normal is invalid"};
+      return false;
+    }
+    up.normalize();
+    if (!runtime_.applyEstimatedGround(up, fine->ground_offset)) {
+      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
+      return false;
+    }
+
     Eigen::Vector3d center(fine->center.point.x, fine->center.point.y, fine->center.point.z);
     Eigen::Vector3d edge(
       fine->edge_direction.x, fine->edge_direction.y, fine->edge_direction.z);
-    up.normalize(); edge = (edge - edge.dot(up) * up).normalized();
+    edge = (edge - edge.dot(up) * up).normalized();
     const Eigen::Vector3d top_center = center + 0.5 * cube_size_ * up;
     const std::vector<std::string> target_ids{"yellow_cube", "observe_target"};
     const auto target_objects = runtime_.planningScene().getObjects(target_ids);
@@ -378,7 +392,7 @@ public:
     state->grasp_distances = grasp_distances;
     state->target_collision_ids = target_ids;
     output.strategy_state = std::move(state);
-    publishMarkers(*fine, output);
+    publishMarkers(*coarse, *fine, output);
     RCLCPP_INFO(node_->get_logger(),
       "Cube strategy selected pregrasp=%+.0f mm grasp=%+.0f mm yaw=%.1f deg tilt=%.1f deg "
       "joint_motion_cost=%.4f IK_candidates=%zu descent_candidates=%zu full_plan_attempts=%zu "
@@ -653,29 +667,39 @@ private:
     return values;
   }
 
-  void publishMarkers(const srv::EstimateCube::Response& estimate, const PreparedPick& plan)
+  void publishMarkers(
+    const srv::EstimateCube::Response& coarse,
+    const srv::EstimateCube::Response& fine,
+    const PreparedPick& plan)
   {
     visualization_msgs::msg::MarkerArray array;
     visualization_msgs::msg::Marker clear;
     clear.action = visualization_msgs::msg::Marker::DELETEALL;
     array.markers.push_back(clear);
-    visualization_msgs::msg::Marker plane;
-    plane.header.frame_id = runtime_.planningFrame(); plane.ns = "ground_plane"; plane.id = 0;
-    plane.type = visualization_msgs::msg::Marker::CUBE;
-    plane.action = visualization_msgs::msg::Marker::ADD;
-    Eigen::Vector3d normal(
-      estimate.ground_normal.x, estimate.ground_normal.y, estimate.ground_normal.z);
-    const Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(
-      Eigen::Vector3d::UnitZ(), normal);
-    plane.pose.orientation.x = q.x(); plane.pose.orientation.y = q.y();
-    plane.pose.orientation.z = q.z(); plane.pose.orientation.w = q.w();
-    const Eigen::Vector3d on_plane = -estimate.ground_offset * normal;
-    plane.pose.position.x = on_plane.x(); plane.pose.position.y = on_plane.y();
-    plane.pose.position.z = on_plane.z();
-    plane.scale.x = 0.8; plane.scale.y = 0.6; plane.scale.z = 0.003;
-    plane.color = color(0.3F, 0.7F, 1.0F, 0.25F);
-    array.markers.push_back(plane);
-    int id = 1;
+    const auto append_ground = [&](const auto& estimate, const std::string& name,
+        int id, const std_msgs::msg::ColorRGBA& plane_color)
+      {
+        visualization_msgs::msg::Marker plane;
+        plane.header.frame_id = runtime_.planningFrame(); plane.ns = name; plane.id = id;
+        plane.type = visualization_msgs::msg::Marker::CUBE;
+        plane.action = visualization_msgs::msg::Marker::ADD;
+        Eigen::Vector3d normal(
+          estimate.ground_normal.x, estimate.ground_normal.y, estimate.ground_normal.z);
+        normal.normalize();
+        const Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(
+          Eigen::Vector3d::UnitZ(), normal);
+        plane.pose.orientation.x = q.x(); plane.pose.orientation.y = q.y();
+        plane.pose.orientation.z = q.z(); plane.pose.orientation.w = q.w();
+        const Eigen::Vector3d on_plane = -estimate.ground_offset * normal;
+        plane.pose.position.x = on_plane.x(); plane.pose.position.y = on_plane.y();
+        plane.pose.position.z = on_plane.z();
+        plane.scale.x = 0.8; plane.scale.y = 0.6; plane.scale.z = 0.003;
+        plane.color = plane_color;
+        array.markers.push_back(plane);
+      };
+    append_ground(coarse, "coarse_ground_plane", 0, color(1.0F, 0.75F, 0.1F, 0.18F));
+    append_ground(fine, "fine_ground_plane", 1, color(0.2F, 0.7F, 1.0F, 0.32F));
+    int id = 2;
     for (const auto& item : {
       std::make_pair(std::string("cube_center"), plan.grasp_pose),
       std::make_pair(std::string("pregrasp"), plan.pregrasp_pose)})
@@ -693,7 +717,7 @@ private:
     polygon.id = id; polygon.type = visualization_msgs::msg::Marker::LINE_STRIP;
     polygon.action = visualization_msgs::msg::Marker::ADD;
     polygon.scale.x = 0.006; polygon.color = color(1, 1, 0);
-    for (const auto& point : estimate.top_polygon.polygon.points) {
+    for (const auto& point : fine.top_polygon.polygon.points) {
       geometry_msgs::msg::Point p;
       p.x = point.x; p.y = point.y; p.z = point.z; polygon.points.push_back(p);
     }

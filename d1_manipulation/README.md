@@ -121,9 +121,11 @@ ros2 launch d1_manipulation observe_target.launch.py backend:=real
 `PickObject` and `DropObject` actions are mutually exclusive across their
 separate server processes. Canceling either action stops the active arm
 trajectory, cancels any nested observation or gripper goal, and leaves the
-controller holding the current measured position. Failures also hold position;
-they do not automatically command STOWED. A successful `DropObject` still
-returns to STOWED as part of its normal task sequence.
+controller holding the current measured position. A physical arm execution
+timeout does not enqueue a measured-position hold command; it reports failure
+without issuing another arm target. Failures do not automatically command
+STOWED. A successful `DropObject` still returns to STOWED as part of its normal
+task sequence.
 
 Every `PickObject` starts with `ENSURE_STOWED`. If the current pose is within
 45 degrees per joint of `[0, -1.54, 1.55, 0, 0, 0]`, the server sends that

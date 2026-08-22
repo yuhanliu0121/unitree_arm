@@ -19,6 +19,7 @@ from d1_perception_adapter import (  # noqa: E402
     match_target_detection,
     project_plumb_bob,
     ros_depth_to_meters,
+    select_class_mask_near_pixel,
     transform_point,
     undistorted_rays,
 )
@@ -31,6 +32,7 @@ class Detection:
     position_camera_m: tuple[float, float, float] | None
     confidence: float
     mask: np.ndarray
+    class_name: str = "yellow_cube"
 
 
 def test_ros_image_adapters_respect_encoding_stride_and_scale() -> None:
@@ -75,6 +77,48 @@ def test_match_prefers_hint_mask_then_3d_distance() -> None:
     assert match.detection is detections[1]
     assert match.mask_distance_px == 0.0
     assert np.isclose(match.position_distance_m, 0.02)
+
+
+def test_fine_reacquisition_uses_class_and_optical_centre_not_3d_hint() -> None:
+    centered_mask = np.zeros((20, 20), dtype=bool)
+    centered_mask[9:12, 9:12] = True
+    off_center_mask = np.zeros((20, 20), dtype=bool)
+    off_center_mask[1:4, 1:4] = True
+    detections = [
+        Detection(True, "depth_verified", (9.0, 9.0, 9.0), 0.70, centered_mask),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.99, off_center_mask),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 1.00,
+                  centered_mask, "zucchini"),
+    ]
+    selected = select_class_mask_near_pixel(
+        detections, "yellow_cube", (10.0, 10.0)
+    )
+    assert selected is detections[0]
+
+
+def test_fine_reacquisition_accepts_rgb_mask_without_object_depth() -> None:
+    mask = np.ones((4, 4), dtype=bool)
+    detections = [
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.9,
+                  mask, "bowl"),
+        Detection(False, "rejected", None, 1.0, mask),
+    ]
+    assert select_class_mask_near_pixel(
+        detections, "yellow_cube", (2.0, 2.0)
+    ) is detections[1]
+
+
+def test_fine_reacquisition_rejects_empty_masks() -> None:
+    detection = Detection(
+        True,
+        "depth_verified",
+        (0.0, 0.0, 0.5),
+        1.0,
+        np.zeros((4, 4), dtype=bool),
+    )
+    assert select_class_mask_near_pixel(
+        [detection], "yellow_cube", (2.0, 2.0)
+    ) is None
 
 
 def test_ground_ransac_rejects_object_points_and_obeys_gravity() -> None:

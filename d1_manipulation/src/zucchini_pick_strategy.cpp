@@ -182,6 +182,20 @@ public:
       return false;
     }
 
+    up = Eigen::Vector3d(
+      fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
+    if (!up.allFinite() || up.norm() < 0.9) {
+      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        "ESTIMATE_POSE", "zucchini fine ground normal is invalid"};
+      return false;
+    }
+    up.normalize();
+    if (!runtime_.applyEstimatedGround(up, fine->ground_offset)) {
+      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
+      return false;
+    }
+
     const Eigen::Vector3d center(
       fine->center.point.x, fine->center.point.y, fine->center.point.z);
     Eigen::Vector3d axis(
@@ -194,7 +208,7 @@ public:
     }
     // The zucchini has no reliable planar top surface. Preserve the
     // fine-estimated tangent-plane position, but derive TCP height directly
-    // from the ground plane fitted during the oblique observation.
+    // from the ground plane refitted during the fine observation.
     const double center_ground_distance = up.dot(center) + fine->ground_offset;
     const Eigen::Vector3d grasp_point =
       center + (tcp_ground_clearance_ - center_ground_distance) * up;
@@ -289,7 +303,7 @@ public:
     state->object_rotation.col(2) = up;
     state->target_collision_ids = target_ids;
     output.strategy_state = std::move(state);
-    publishMarkers(*fine, output, axis, selected_closing);
+    publishMarkers(*coarse, *fine, output, axis, selected_closing);
     RCLCPP_INFO(node_->get_logger(),
       "Zucchini strategy selected pregrasp=%+.0f mm tcp_ground_clearance=%.0f mm "
       "yaw=%.1f deg tilt=%.1f deg",
@@ -388,15 +402,40 @@ private:
     return values;
   }
 
-  void publishMarkers(const srv::EstimateZucchini::Response& estimate,
+  void publishMarkers(
+    const srv::EstimateZucchini::Response& coarse,
+    const srv::EstimateZucchini::Response& fine,
     const PreparedPick& plan, const Eigen::Vector3d& axis, const Eigen::Vector3d& closing)
   {
     visualization_msgs::msg::MarkerArray array;
     visualization_msgs::msg::Marker clear; clear.action = visualization_msgs::msg::Marker::DELETEALL;
     array.markers.push_back(clear);
+    const auto append_ground = [&](const auto& estimate, const std::string& name,
+        int id, const std_msgs::msg::ColorRGBA& plane_color)
+      {
+        visualization_msgs::msg::Marker plane;
+        plane.header.frame_id = runtime_.planningFrame(); plane.ns = name; plane.id = id;
+        plane.type = visualization_msgs::msg::Marker::CUBE;
+        plane.action = visualization_msgs::msg::Marker::ADD;
+        Eigen::Vector3d normal(
+          estimate.ground_normal.x, estimate.ground_normal.y, estimate.ground_normal.z);
+        normal.normalize();
+        const Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(
+          Eigen::Vector3d::UnitZ(), normal);
+        plane.pose.orientation.x = q.x(); plane.pose.orientation.y = q.y();
+        plane.pose.orientation.z = q.z(); plane.pose.orientation.w = q.w();
+        const Eigen::Vector3d on_plane = -estimate.ground_offset * normal;
+        plane.pose.position.x = on_plane.x(); plane.pose.position.y = on_plane.y();
+        plane.pose.position.z = on_plane.z();
+        plane.scale.x = 0.8; plane.scale.y = 0.6; plane.scale.z = 0.003;
+        plane.color = plane_color;
+        array.markers.push_back(plane);
+      };
+    append_ground(coarse, "coarse_ground_plane", 0, color(1.0F, 0.75F, 0.1F, 0.18F));
+    append_ground(fine, "fine_ground_plane", 1, color(0.2F, 0.7F, 1.0F, 0.32F));
     const Eigen::Vector3d center(
-      estimate.center.point.x, estimate.center.point.y, estimate.center.point.z);
-    int id = 0;
+      fine.center.point.x, fine.center.point.y, fine.center.point.z);
+    int id = 2;
     for (const auto& item : {
       std::make_pair(std::string("local_axis"), axis),
       std::make_pair(std::string("closing_direction"), closing)})

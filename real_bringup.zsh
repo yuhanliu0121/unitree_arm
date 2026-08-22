@@ -5,41 +5,36 @@ SCRIPT_DIR=${0:A:h}
 CONFIG_PATH="${SCRIPT_DIR}/d1_bringup/config/real_machine.yaml"
 ARM_SERIAL=""
 LAUNCH_RVIZ=false
-LOCK_FILE=/tmp/d1_real_bringup.lock
-LOCK_FD=""
 GRAVITY_CALIBRATION=""
 LAUNCH_PID=""
 
-launch_process_alive() {
+launch_process_group_alive() {
   [[ -n "${LAUNCH_PID}" ]] || return 1
-  kill -0 "${LAUNCH_PID}" 2>/dev/null || return 1
-  local state
-  state=$(ps -o stat= -p "${LAUNCH_PID}" 2>/dev/null | tr -d ' ')
-  [[ -n "${state}" && "${state[1]}" != Z ]]
+  kill -0 -- "-${LAUNCH_PID}" 2>/dev/null
 }
 
 cleanup() {
   local exit_code=$?
   trap - EXIT INT TERM HUP
 
-  if launch_process_alive; then
+  if launch_process_group_alive; then
     print "Stopping physical D1 launch process group ${LAUNCH_PID}..."
     kill -INT -- "-${LAUNCH_PID}" 2>/dev/null || true
     local attempt=0
-    while launch_process_alive && (( attempt < 100 )); do
+    while launch_process_group_alive && (( attempt < 100 )); do
       sleep 0.1
       (( ++attempt ))
     done
-    if launch_process_alive; then
+    if launch_process_group_alive; then
       print -u2 "ROS launch did not stop after SIGINT; sending SIGTERM."
       kill -TERM -- "-${LAUNCH_PID}" 2>/dev/null || true
       attempt=0
-      while launch_process_alive && (( attempt < 50 )); do
+      while launch_process_group_alive && (( attempt < 50 )); do
         sleep 0.1
         (( ++attempt ))
       done
     fi
-    if launch_process_alive; then
+    if launch_process_group_alive; then
       print -u2 "ROS launch did not stop after SIGTERM; sending SIGKILL."
       kill -KILL -- "-${LAUNCH_PID}" 2>/dev/null || true
     fi
@@ -100,18 +95,9 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
   exit 2
 fi
 
-exec {LOCK_FD}<>"${LOCK_FILE}"
-if ! flock -n "${LOCK_FD}"; then
-  LOCK_OWNER=$(head -n 1 "${LOCK_FILE}" 2>/dev/null || true)
-  print -u2 "D1 command ownership is already held${LOCK_OWNER:+ by ${LOCK_OWNER}}."
-  print -u2 "Stop it with Ctrl+C before starting another physical control stack."
-  exit 3
-fi
-print -r -- "real_bringup $$" >"${LOCK_FILE}"
-
 EXISTING_LAUNCH=$(pgrep -f '/opt/ros/humble/bin/ros2 launch d1_bringup real_system.launch.py' || true)
 if [[ -n "${EXISTING_LAUNCH}" ]]; then
-  print -u2 "A physical D1 ROS launch is already running outside this lock: PID(s) ${EXISTING_LAUNCH}."
+  print -u2 "A physical D1 ROS launch is already running: PID(s) ${EXISTING_LAUNCH}."
   print -u2 "Stop the existing launch cleanly before starting another one."
   exit 3
 fi
@@ -167,5 +153,4 @@ if wait "${LAUNCH_PID}"; then
 else
   LAUNCH_STATUS=$?
 fi
-LAUNCH_PID=""
 exit "${LAUNCH_STATUS}"

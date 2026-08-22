@@ -44,6 +44,7 @@ from d1_perception_adapter import (
     match_target_detection,
     project_plumb_bob,
     ros_depth_to_meters,
+    select_class_mask_near_pixel,
     transform_point,
     transform_rotation,
     undistorted_rays,
@@ -587,6 +588,86 @@ class DetectTargetServer(Node):
             raise LookupError("no depth-verified detection matches the projected target hint")
         return match
 
+    def _select_stage_detection(
+        self,
+        stage: int,
+        coarse_stage: int,
+        fine_stage: int,
+        expected_class: str,
+        target_hint,
+        optical_frame: str,
+        camera_info,
+        detections,
+    ):
+        """Apply the common coarse/fine target association policy."""
+        if stage == coarse_stage:
+            detection = self._match(
+                target_hint, optical_frame, camera_info, detections
+            ).detection
+            if detection.class_name != expected_class:
+                raise LookupError(
+                    f"matched object is {detection.class_name}, not {expected_class}"
+                )
+            return detection
+        if stage == fine_stage:
+            principal_point = (
+                float(camera_info.k[2]), float(camera_info.k[5])
+            )
+            detection = select_class_mask_near_pixel(
+                detections, expected_class, principal_point
+            )
+            if detection is None:
+                raise LookupError(
+                    f"fine observation found no {expected_class} mask"
+                )
+            mask_y, mask_x = np.nonzero(detection.mask)
+            mask_distance = np.hypot(
+                mask_x - principal_point[0], mask_y - principal_point[1]
+            ).min()
+            self.get_logger().info(
+                "%s fine observation independently reacquired near optical "
+                "centre: mask_distance=%.1fpx confidence=%.3f"
+                % (expected_class, mask_distance, detection.confidence)
+            )
+            return detection
+        raise ValueError(
+            f"unsupported {expected_class} estimation stage {stage}"
+        )
+
+    def _fit_ground_from_current_depth(
+        self, depth_m, camera_info, rotation, camera_origin
+    ):
+        """Fit the ground from the RGB-aligned depth frame at the current pose."""
+        world_transform = self._lookup_transform(
+            self._planning_frame, self._gravity_frame
+        )
+        world_rotation, _ = self._transform_arrays(world_transform)
+        gravity_up = world_rotation[:, 2]
+        rows, columns = np.nonzero(np.isfinite(depth_m) & (depth_m > 0.0))
+        if len(columns) > self._ground_max_points:
+            rng = np.random.default_rng(0)
+            indices = rng.choice(
+                len(columns), self._ground_max_points, replace=False
+            )
+            rows, columns = rows[indices], columns[indices]
+        pixels = np.column_stack((columns, rows))
+        rays_camera = undistorted_rays(
+            pixels, camera_info.k, camera_info.d
+        )
+        points_camera = rays_camera * (
+            depth_m[rows, columns] / rays_camera[:, 2]
+        )[:, None]
+        points_planning = points_camera @ rotation.T + camera_origin
+        normal, offset, _ = fit_ground_plane_ransac(
+            points_planning,
+            gravity_up,
+            self._ground_distance,
+            self._ground_normal_tolerance,
+            self._ground_iterations,
+            0,
+        )
+        return normal, offset
+
     def _estimate_cube(self, request, response):
         if not self._request_lock.acquire(blocking=False):
             return self._cube_fail(response, EstimateCube.Response.FAILURE_INTERNAL,
@@ -594,32 +675,23 @@ class DetectTargetServer(Node):
         try:
             (color_message, color_bgr, depth_m, camera_info,
              optical_frame, detections) = self._runtime_frame()
-            match = self._match(request.target_hint, optical_frame, camera_info, detections)
-            detection = match.detection
-            if detection.class_name != "yellow_cube":
-                raise LookupError(f"matched object is {detection.class_name}, not yellow_cube")
+            detection = self._select_stage_detection(
+                request.stage,
+                EstimateCube.Request.COARSE,
+                EstimateCube.Request.FINE,
+                "yellow_cube",
+                request.target_hint,
+                optical_frame,
+                camera_info,
+                detections,
+            )
             planning_transform = self._lookup_transform(self._planning_frame, optical_frame)
             rotation, camera_origin = self._transform_arrays(planning_transform)
+            normal, offset = self._fit_ground_from_current_depth(
+                depth_m, camera_info, rotation, camera_origin
+            )
 
             if request.stage == EstimateCube.Request.COARSE:
-                world_transform = self._lookup_transform(
-                    self._planning_frame, self._gravity_frame
-                )
-                world_rotation, _ = self._transform_arrays(world_transform)
-                gravity_up = world_rotation[:, 2]
-                rows, columns = np.nonzero(np.isfinite(depth_m) & (depth_m > 0.0))
-                if len(columns) > self._ground_max_points:
-                    rng = np.random.default_rng(0)
-                    indices = rng.choice(len(columns), self._ground_max_points, replace=False)
-                    rows, columns = rows[indices], columns[indices]
-                pixels = np.column_stack((columns, rows))
-                rays_camera = undistorted_rays(pixels, camera_info.k, camera_info.d)
-                points_camera = rays_camera * (depth_m[rows, columns] / rays_camera[:, 2])[:, None]
-                points_planning = points_camera @ rotation.T + camera_origin
-                normal, offset, _ = fit_ground_plane_ransac(
-                    points_planning, gravity_up, self._ground_distance,
-                    self._ground_normal_tolerance, self._ground_iterations, 0,
-                )
                 mask_y, mask_x = np.nonzero(detection.mask)
                 center_pixel = np.array([[np.median(mask_x), np.median(mask_y)]])
                 center_ray = undistorted_rays(center_pixel, camera_info.k, camera_info.d) @ rotation.T
@@ -630,14 +702,6 @@ class DetectTargetServer(Node):
                 corners = np.empty((0, 3))
                 detail = "ground fitted and mask-centre ray intersected with cube mid-plane"
             elif request.stage == EstimateCube.Request.FINE:
-                normal = np.array([
-                    request.ground_normal.x, request.ground_normal.y,
-                    request.ground_normal.z,
-                ], dtype=np.float64)
-                if not np.isfinite(normal).all() or np.linalg.norm(normal) < 0.9:
-                    raise ValueError("fine estimate requires a valid ground normal")
-                normal /= np.linalg.norm(normal)
-                offset = float(request.ground_offset)
                 contours, _ = cv2.findContours(
                     detection.mask.astype(np.uint8), cv2.RETR_EXTERNAL,
                     cv2.CHAIN_APPROX_NONE,
@@ -654,15 +718,15 @@ class DetectTargetServer(Node):
                 )
                 top_center, edge, corners = fit_square_on_plane(top_points, normal)
                 center = top_center - self._cube_half_size * normal
-                detail = "mask contour projected to known top plane and fitted with minAreaRect"
+                detail = (
+                    "ground refitted; mask contour projected to the refreshed "
+                    "top plane and fitted with minAreaRect"
+                )
                 debug = color_bgr.copy()
                 cv2.drawContours(debug, [contour.astype(np.int32)], -1, (255, 0, 255), 2)
                 cv2.putText(debug, "yellow_cube fine geometry", (20, 32),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2, cv2.LINE_AA)
                 self._cube_debug_publisher.publish(self._to_ros_image(debug, color_message.header))
-            else:
-                raise ValueError(f"unsupported cube estimation stage {request.stage}")
-
             response.success = True
             response.failure_reason = EstimateCube.Response.FAILURE_NONE
             response.detail = detail
@@ -728,56 +792,27 @@ class DetectTargetServer(Node):
         try:
             (color_message, color_bgr, depth_m, camera_info,
              optical_frame, detections) = self._runtime_frame()
-            match = self._match(
-                request.target_hint, optical_frame, camera_info, detections
+            detection = self._select_stage_detection(
+                request.stage,
+                EstimateBowl.Request.COARSE,
+                EstimateBowl.Request.FINE,
+                "bowl",
+                request.target_hint,
+                optical_frame,
+                camera_info,
+                detections,
             )
-            detection = match.detection
-            if detection.class_name != "bowl":
-                raise LookupError(
-                    f"matched object is {detection.class_name}, not bowl"
-                )
             planning_transform = self._lookup_transform(
                 self._planning_frame, optical_frame
             )
             rotation, camera_origin = self._transform_arrays(planning_transform)
+            normal, offset = self._fit_ground_from_current_depth(
+                depth_m, camera_info, rotation, camera_origin
+            )
 
             if request.stage == EstimateBowl.Request.COARSE:
-                world_transform = self._lookup_transform(
-                    self._planning_frame, self._gravity_frame
-                )
-                world_rotation, _ = self._transform_arrays(world_transform)
-                gravity_up = world_rotation[:, 2]
-                rows, columns = np.nonzero(
-                    np.isfinite(depth_m) & (depth_m > 0.0)
-                )
-                if len(columns) > self._ground_max_points:
-                    rng = np.random.default_rng(0)
-                    indices = rng.choice(
-                        len(columns), self._ground_max_points, replace=False
-                    )
-                    rows, columns = rows[indices], columns[indices]
-                pixels = np.column_stack((columns, rows))
-                rays_camera = undistorted_rays(
-                    pixels, camera_info.k, camera_info.d
-                )
-                points_camera = rays_camera * (
-                    depth_m[rows, columns] / rays_camera[:, 2]
-                )[:, None]
-                points_planning = points_camera @ rotation.T + camera_origin
-                normal, offset, _ = fit_ground_plane_ransac(
-                    points_planning, gravity_up, self._ground_distance,
-                    self._ground_normal_tolerance, self._ground_iterations, 0,
-                )
                 stage_name = "coarse"
             elif request.stage == EstimateBowl.Request.FINE:
-                normal = np.asarray([
-                    request.ground_normal.x, request.ground_normal.y,
-                    request.ground_normal.z,
-                ], dtype=np.float64)
-                if not np.isfinite(normal).all() or np.linalg.norm(normal) < 0.9:
-                    raise ValueError("fine estimate requires a valid ground normal")
-                normal /= np.linalg.norm(normal)
-                offset = float(request.ground_offset)
                 stage_name = "fine"
             else:
                 raise ValueError(
@@ -878,42 +913,25 @@ class DetectTargetServer(Node):
         try:
             (color_message, color_bgr, depth_m, camera_info,
              optical_frame, detections) = self._runtime_frame()
-            match = self._match(request.target_hint, optical_frame, camera_info, detections)
-            detection = match.detection
-            if detection.class_name != "zucchini":
-                raise LookupError(
-                    f"matched object is {detection.class_name}, not zucchini"
-                )
+            detection = self._select_stage_detection(
+                request.stage,
+                EstimateZucchini.Request.COARSE,
+                EstimateZucchini.Request.FINE,
+                "zucchini",
+                request.target_hint,
+                optical_frame,
+                camera_info,
+                detections,
+            )
             planning_transform = self._lookup_transform(
                 self._planning_frame, optical_frame
             )
             rotation, camera_origin = self._transform_arrays(planning_transform)
+            normal, offset = self._fit_ground_from_current_depth(
+                depth_m, camera_info, rotation, camera_origin
+            )
 
             if request.stage == EstimateZucchini.Request.COARSE:
-                world_transform = self._lookup_transform(
-                    self._planning_frame, self._gravity_frame
-                )
-                world_rotation, _ = self._transform_arrays(world_transform)
-                gravity_up = world_rotation[:, 2]
-                rows, columns = np.nonzero(np.isfinite(depth_m) & (depth_m > 0.0))
-                if len(columns) > self._ground_max_points:
-                    rng = np.random.default_rng(0)
-                    indices = rng.choice(
-                        len(columns), self._ground_max_points, replace=False
-                    )
-                    rows, columns = rows[indices], columns[indices]
-                pixels = np.column_stack((columns, rows))
-                rays_camera = undistorted_rays(
-                    pixels, camera_info.k, camera_info.d
-                )
-                points_camera = rays_camera * (
-                    depth_m[rows, columns] / rays_camera[:, 2]
-                )[:, None]
-                points_planning = points_camera @ rotation.T + camera_origin
-                normal, offset, _ = fit_ground_plane_ransac(
-                    points_planning, gravity_up, self._ground_distance,
-                    self._ground_normal_tolerance, self._ground_iterations, 0,
-                )
                 mask_y, mask_x = np.nonzero(detection.mask)
                 center_pixel = np.array([[np.median(mask_x), np.median(mask_y)]])
                 center_ray = undistorted_rays(
@@ -933,14 +951,6 @@ class DetectTargetServer(Node):
                 )
                 debug = color_bgr.copy()
             elif request.stage == EstimateZucchini.Request.FINE:
-                normal = np.asarray([
-                    request.ground_normal.x, request.ground_normal.y,
-                    request.ground_normal.z,
-                ], dtype=np.float64)
-                if not np.isfinite(normal).all() or np.linalg.norm(normal) < 0.9:
-                    raise ValueError("fine estimate requires a valid ground normal")
-                normal /= np.linalg.norm(normal)
-                offset = float(request.ground_offset)
                 center_plane_offset = offset - self._zucchini_center_height
                 center, axis, segment, length, width = fit_zucchini_axis_on_plane(
                     detection.mask, camera_origin, rotation,

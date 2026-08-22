@@ -543,7 +543,6 @@ private:
               degreesString(armPositions(current)).c_str());
             result->error_code = Arm::Result::GOAL_TOLERANCE_VIOLATED;
             result->error_string = "D1 arm target produced no observed motion";
-            holdArmAtMeasuredPosition();
             handle->abort(result); finish(); return;
           }
           ++no_motion_retries;
@@ -577,7 +576,6 @@ private:
         degreesString(final_error).c_str());
       result->error_code = Arm::Result::GOAL_TOLERANCE_VIOLATED;
       result->error_string = "D1 mode=1 arm endpoint timed out";
-      holdArmAtMeasuredPosition();
       handle->abort(result); finish();
     } catch (const std::exception & error) {
       result->error_code = Arm::Result::INVALID_GOAL;

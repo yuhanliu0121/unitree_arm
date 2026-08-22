@@ -1,6 +1,5 @@
 #include <unitree/robot/channel/channel_publisher.hpp>
 
-#include "maintenance_lock.hpp"
 #include "msg/ArmString_.hpp"
 
 #include <chrono>
@@ -47,7 +46,6 @@ int main(int argc, char** argv)
             throw std::runtime_error("Explicit confirmation UNLOAD_ALL is required");
         }
 
-        d1_tools::ExclusiveHardwareLease lease("all_joints_unload");
         const std::string interface = argc == 3 ? argv[2] : "eno1";
         std::cout
             << "WARNING: Publishing global unload on interface '" << interface

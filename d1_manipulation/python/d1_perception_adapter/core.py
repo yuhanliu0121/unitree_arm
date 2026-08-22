@@ -151,6 +151,36 @@ def match_target_detection(
     )
 
 
+def select_class_mask_near_pixel(
+    detections: Sequence[Any],
+    class_name: str,
+    reference_pixel: tuple[float, float],
+) -> Any | None:
+    """Reacquire an RGB class independently, preferring the nearest mask.
+
+    This is intended for a fine observation made after the camera has already
+    been moved over the coarse target.  It deliberately does not compare the
+    fresh detection against a 3-D hint or require object-surface depth.
+    """
+    candidates = []
+    for detection in detections:
+        if (
+            detection.class_name != class_name
+            or not np.any(detection.mask)
+        ):
+            continue
+        candidates.append(detection)
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda detection: (
+            _mask_distance(detection.mask, reference_pixel),
+            -float(detection.confidence),
+        ),
+    )
+
+
 def transform_point(
     point: Sequence[float],
     translation: Sequence[float],
