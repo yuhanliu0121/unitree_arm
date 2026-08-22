@@ -23,7 +23,6 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "d1_manipulation/action/drop_object.hpp"
-#include "d1_manipulation/task_lock.hpp"
 
 using namespace std::chrono_literals;
 
@@ -64,8 +63,7 @@ public:
   explicit DropObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
     move_group_(node, parameterOrDeclare(node, "arm_group", std::string("arm"))),
-    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_),
-    task_lock_(parameterOrDeclare(node, "task_lock_path", std::string("/tmp/d1_arm_task.lock")))
+    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_)
   {
     backend_ = parameterOrDeclare(node_, "backend", std::string{});
     if (backend_ != "simulation" && backend_ != "real") {
@@ -97,15 +95,6 @@ public:
       node_, action_name_,
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Drop::Goal> goal) {
         if (goal->target.header.frame_id.empty()) return rclcpp_action::GoalResponse::REJECT;
-        bool expected = false;
-        if (!busy_.compare_exchange_strong(expected, true)) {
-          return rclcpp_action::GoalResponse::REJECT;
-        }
-        if (!task_lock_.tryAcquire()) {
-          busy_.store(false);
-          RCLCPP_WARN(node_->get_logger(), "Rejecting DropObject goal: another public arm task is active");
-          return rclcpp_action::GoalResponse::REJECT;
-        }
         cancel_.store(false); return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [this](const std::shared_ptr<Handle>) {
@@ -160,12 +149,6 @@ private:
     handle->publish_feedback(message);
   }
 
-  void releaseTask()
-  {
-    task_lock_.release();
-    busy_.store(false);
-  }
-
   void requestCancel()
   {
     cancel_.store(true);
@@ -186,7 +169,6 @@ private:
     result->returned_to_stowed = returned;
     const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
     if (was_canceled) handle->canceled(result); else handle->abort(result);
-    releaseTask();
   }
 
   Eigen::Vector3d pointInPlanningFrame(const geometry_msgs::msg::PointStamped& target)
@@ -368,7 +350,7 @@ private:
       result->release_pose.header.frame_id = planning_frame_;
       result->release_pose.header.stamp = node_->now(); result->release_pose.pose = selected_pose;
       result->height_offset_m = selected_height; result->release_yaw_degrees = selected_yaw;
-      handle->succeed(result); releaseTask();
+      handle->succeed(result);
       RCLCPP_INFO(node_->get_logger(), "DROP SUCCEEDED");
     } catch (const std::exception& error) {
       RCLCPP_ERROR(node_->get_logger(), "DropObject error: %s", error.what());
@@ -380,10 +362,9 @@ private:
   moveit::planning_interface::MoveGroupInterface move_group_;
   moveit::planning_interface::PlanningSceneInterface planning_scene_;
   tf2_ros::Buffer tf_buffer_; tf2_ros::TransformListener tf_listener_;
-  TaskLock task_lock_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Server<Drop>::SharedPtr server_;
-  std::atomic<bool> busy_{false}, cancel_{false};
+  std::atomic<bool> cancel_{false};
   std::mutex active_goal_mutex_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
   std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;

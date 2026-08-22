@@ -5,6 +5,54 @@ SCRIPT_DIR=${0:A:h}
 CONFIG_PATH="${SCRIPT_DIR}/d1_bringup/config/real_machine.yaml"
 ARM_SERIAL=""
 LAUNCH_RVIZ=false
+LOCK_FILE=/tmp/d1_real_bringup.lock
+LOCK_FD=""
+GRAVITY_CALIBRATION=""
+LAUNCH_PID=""
+
+launch_process_alive() {
+  [[ -n "${LAUNCH_PID}" ]] || return 1
+  kill -0 "${LAUNCH_PID}" 2>/dev/null || return 1
+  local state
+  state=$(ps -o stat= -p "${LAUNCH_PID}" 2>/dev/null | tr -d ' ')
+  [[ -n "${state}" && "${state[1]}" != Z ]]
+}
+
+cleanup() {
+  local exit_code=$?
+  trap - EXIT INT TERM HUP
+
+  if launch_process_alive; then
+    print "Stopping physical D1 launch process group ${LAUNCH_PID}..."
+    kill -INT -- "-${LAUNCH_PID}" 2>/dev/null || true
+    local attempt=0
+    while launch_process_alive && (( attempt < 100 )); do
+      sleep 0.1
+      (( ++attempt ))
+    done
+    if launch_process_alive; then
+      print -u2 "ROS launch did not stop after SIGINT; sending SIGTERM."
+      kill -TERM -- "-${LAUNCH_PID}" 2>/dev/null || true
+      attempt=0
+      while launch_process_alive && (( attempt < 50 )); do
+        sleep 0.1
+        (( ++attempt ))
+      done
+    fi
+    if launch_process_alive; then
+      print -u2 "ROS launch did not stop after SIGTERM; sending SIGKILL."
+      kill -KILL -- "-${LAUNCH_PID}" 2>/dev/null || true
+    fi
+    wait "${LAUNCH_PID}" 2>/dev/null || true
+  fi
+
+  [[ -z "${GRAVITY_CALIBRATION}" ]] || rm -f "${GRAVITY_CALIBRATION}"
+  exit "${exit_code}"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 usage() {
   print "Usage: ./real_bringup.zsh [--rviz] [--config PATH] [--arm-serial SERIAL]"
@@ -52,6 +100,22 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
   exit 2
 fi
 
+exec {LOCK_FD}<>"${LOCK_FILE}"
+if ! flock -n "${LOCK_FD}"; then
+  LOCK_OWNER=$(head -n 1 "${LOCK_FILE}" 2>/dev/null || true)
+  print -u2 "D1 command ownership is already held${LOCK_OWNER:+ by ${LOCK_OWNER}}."
+  print -u2 "Stop it with Ctrl+C before starting another physical control stack."
+  exit 3
+fi
+print -r -- "real_bringup $$" >"${LOCK_FILE}"
+
+EXISTING_LAUNCH=$(pgrep -f '/opt/ros/humble/bin/ros2 launch d1_bringup real_system.launch.py' || true)
+if [[ -n "${EXISTING_LAUNCH}" ]]; then
+  print -u2 "A physical D1 ROS launch is already running outside this lock: PID(s) ${EXISTING_LAUNCH}."
+  print -u2 "Stop the existing launch cleanly before starting another one."
+  exit 3
+fi
+
 if [[ -f "${SCRIPT_DIR}/setup_dev_env.zsh" ]]; then
   source "${SCRIPT_DIR}/setup_dev_env.zsh"
 else
@@ -79,7 +143,6 @@ export D1_REAL_MACHINE_CONFIG=${CONFIG_PATH}
 mkdir -p "${ROS_LOG_DIR}"
 
 GRAVITY_CALIBRATION=$(mktemp --suffix=.yaml /tmp/d1_gravity_calibration.XXXXXX)
-trap 'rm -f "${GRAVITY_CALIBRATION}"' EXIT
 
 print "[1/2] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
 "${SCRIPT_DIR}/real_preflight.zsh" \
@@ -91,9 +154,18 @@ print "Waiting 2 seconds for the RealSense USB streams to be released..."
 sleep 2
 
 print "[2/2] Preflight passed; starting physical control, MoveIt, perception, and task Actions..."
-print "Press Ctrl+C to stop the stack. No pick/drop motion starts automatically."
-ros2 launch d1_bringup real_system.launch.py \
+print "Press Ctrl+C to stop the stack and all of its child processes."
+print "No pick/drop motion starts automatically."
+setsid ros2 launch d1_bringup real_system.launch.py \
   "config:=${CONFIG_PATH}" \
   "arm_serial:=${ARM_SERIAL}" \
   "gravity_calibration:=${GRAVITY_CALIBRATION}" \
-  "launch_rviz:=${LAUNCH_RVIZ}"
+  "launch_rviz:=${LAUNCH_RVIZ}" &
+LAUNCH_PID=$!
+if wait "${LAUNCH_PID}"; then
+  LAUNCH_STATUS=0
+else
+  LAUNCH_STATUS=$?
+fi
+LAUNCH_PID=""
+exit "${LAUNCH_STATUS}"

@@ -81,7 +81,7 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /wrist_camera/color/image_raw
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Name: Wrist Raw Depth (Plasma)
       Normalize Range: false
       Topic:

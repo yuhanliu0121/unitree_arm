@@ -10,3 +10,5 @@ d1_depth_debug_visualizer:
     display_min_m: 0.20
     display_max_m: 2.0
     publish_rate_limit_hz: 10.0
+    enable_raw_depth_debug: false
+    enable_aligned_depth_debug: true

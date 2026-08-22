@@ -3,6 +3,7 @@
 
 #include "msg/ArmString_.hpp"
 #include "msg/PubServoInfo_.hpp"
+#include "maintenance_lock.hpp"
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -137,7 +138,7 @@ void PrintUsage(const char* program)
         << " --confirm STOWED_MOVE\n"
         << "Moves D1 Joint0..5 to [0, -1.54, 1.55, 0, 0, 0] radians with\n"
         << "one complete funcode=2 command and fully opens Joint6 to 60 degrees.\n"
-        << "Default interface: enp3s0. Stop every other D1 command publisher first.\n";
+        << "Default interface: enp3s0. An active real_bringup is stopped automatically.\n";
 }
 
 std::array<double, 7> WaitForAngles(const std::chrono::milliseconds timeout)
@@ -400,9 +401,11 @@ int main(int argc, char** argv)
             throw std::runtime_error("Publishing requires --confirm STOWED_MOVE");
         }
 
+        d1_tools::ExclusiveHardwareLease lease("arm_stowed_control");
+
         std::cout
-            << "WARNING: this commands the physical D1. Stop real_bringup and every\n"
-            << "other D1 command publisher, support the arm, and clear its workspace.\n"
+            << "WARNING: this directly commands the physical D1 and takes ownership\n"
+            << "from real_bringup if necessary. Support the arm and clear its workspace.\n"
             << std::flush;
         const std::string executable = std::filesystem::absolute(argv[0]).string();
         std::array<char, 64> state_template{};

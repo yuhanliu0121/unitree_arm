@@ -118,6 +118,8 @@ class DepthDebugVisualizer(Node):
             "display_min_m": 0.20,
             "display_max_m": 2.0,
             "publish_rate_limit_hz": 10.0,
+            "enable_raw_depth_debug": False,
+            "enable_aligned_depth_debug": True,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -128,40 +130,52 @@ class DepthDebugVisualizer(Node):
         self._display_min = float(self.get_parameter("display_min_m").value)
         self._display_max = float(self.get_parameter("display_max_m").value)
         rate_hz = float(self.get_parameter("publish_rate_limit_hz").value)
+        enable_raw = bool(self.get_parameter("enable_raw_depth_debug").value)
+        enable_aligned = bool(
+            self.get_parameter("enable_aligned_depth_debug").value
+        )
         if self._scale <= 0.0 or self._sensor_max <= self._sensor_min:
             raise ValueError("invalid physical depth range or scale")
         if self._display_min < self._sensor_min or self._display_max > self._sensor_max:
             raise ValueError("display depth range must lie inside the sensor-valid range")
         if rate_hz <= 0.0:
             raise ValueError("publish_rate_limit_hz must be positive")
+        if not enable_raw and not enable_aligned:
+            raise ValueError("at least one depth debug stream must be enabled")
         self._minimum_period_s = 1.0 / rate_hz
         self._last_publish = {"raw": -float("inf"), "aligned": -float("inf")}
         self._warned_encodings: set[str] = set()
 
-        self._raw_publisher = self.create_publisher(
-            Image,
-            str(self.get_parameter("raw_debug_topic").value),
-            qos_profile_sensor_data,
-        )
-        self._aligned_publisher = self.create_publisher(
-            Image,
-            str(self.get_parameter("aligned_debug_topic").value),
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            Image,
-            str(self.get_parameter("raw_depth_topic").value),
-            self._callback("raw", self._raw_publisher.publish),
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            Image,
-            str(self.get_parameter("aligned_depth_topic").value),
-            self._callback("aligned", self._aligned_publisher.publish),
-            qos_profile_sensor_data,
-        )
+        enabled_streams = []
+        if enable_raw:
+            raw_publisher = self.create_publisher(
+                Image,
+                str(self.get_parameter("raw_debug_topic").value),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                str(self.get_parameter("raw_depth_topic").value),
+                self._callback("raw", raw_publisher.publish),
+                qos_profile_sensor_data,
+            )
+            enabled_streams.append("raw")
+        if enable_aligned:
+            aligned_publisher = self.create_publisher(
+                Image,
+                str(self.get_parameter("aligned_debug_topic").value),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                str(self.get_parameter("aligned_depth_topic").value),
+                self._callback("aligned", aligned_publisher.publish),
+                qos_profile_sensor_data,
+            )
+            enabled_streams.append("aligned")
         self.get_logger().info(
             "Depth diagnostics ready: "
+            f"streams={','.join(enabled_streams)} "
             f"valid={self._sensor_min:.2f}..{self._sensor_max:.2f} m "
             f"display={self._display_min:.2f}..{self._display_max:.2f} m "
             f"rate<={rate_hz:.1f} Hz"

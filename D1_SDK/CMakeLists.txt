@@ -20,4 +20,5 @@ add_executable(
     src/arm_stowed_control.cpp
     src/msg/ArmString_.cpp
     src/msg/PubServoInfo_.cpp)
+add_executable(all_joints_unload src/all_joints_unload.cpp src/msg/ArmString_.cpp)
 add_executable(get_arm_joint_angle src/get_arm_joint_angle.cpp src/msg/ArmString_.cpp src/msg/PubServoInfo_.cpp)

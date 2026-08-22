@@ -56,6 +56,7 @@ d1_pick_object:
     grasp_distance_min_m: -0.040
     grasp_distance_max_m: -0.024
     grasp_distance_step_m: 0.002
+    cube_joint5_motion_weight: 2.0
     lift_distance_m: 0.10
     carry_joint_positions: [0.0, -1.54, 1.546, 0.0, -0.6, 1.57]
     top_observation_distance_m: 0.35
