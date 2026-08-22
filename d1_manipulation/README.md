@@ -49,10 +49,13 @@ The automatic seed-0 regression selected candidate 56 (`beta=0 deg`,
 The `/arm/perception/detect_target` service accepts a coarse
 `geometry_msgs/PointStamped` target hint. Each request clears cached frames,
 waits for a new timestamp-matched RGB-D pair, runs the unchanged arm-profile
-perception runtime, and chooses the depth-verified mask nearest the projected
-hint. Its response contains the class, confidence, mask centre, and the robust
-visible-surface point-cloud centre in both the color optical frame and
-`base_link`.
+perception runtime, filters candidates to the three configured task classes,
+`depth_verified` status, and the configured minimum confidence, then chooses
+the mask nearest the RGB optical centre. The hint remains a 3-D diagnostic but
+does not rank candidates because real-arm URDF error can corrupt its live-TF
+reprojection. Its response contains the class, confidence, mask centre, and
+the robust visible-surface point-cloud centre in both the color optical frame
+and `base_link`.
 
 The reported 3-D point is deliberately named an observation centre: a single
 camera view cannot recover the hidden half of an object, so it is not the full

@@ -62,21 +62,64 @@ def test_project_plumb_bob_and_transform_point() -> None:
     )
 
 
-def test_match_prefers_hint_mask_then_3d_distance() -> None:
+def test_coarse_match_prefers_optical_centre_over_3d_hint_distance() -> None:
     near_mask = np.zeros((20, 20), dtype=bool)
     near_mask[9:12, 9:12] = True
     far_mask = np.zeros((20, 20), dtype=bool)
     far_mask[2:5, 2:5] = True
     detections = [
-        Detection(True, "depth_verified", (0.0, 0.0, 0.6), 0.99, far_mask),
-        Detection(True, "depth_verified", (0.0, 0.0, 0.52), 0.80, near_mask),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.99, far_mask),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.9), 0.80, near_mask),
         Detection(False, "rejected", (0.0, 0.0, 0.5), 1.0, near_mask),
     ]
     match = match_target_detection(detections, (10.0, 10.0), (0.0, 0.0, 0.5), 5.0)
     assert match is not None
     assert match.detection is detections[1]
     assert match.mask_distance_px == 0.0
-    assert np.isclose(match.position_distance_m, 0.02)
+    assert np.isclose(match.position_distance_m, 0.4)
+
+
+def test_coarse_match_rejects_unknown_and_low_confidence_targets() -> None:
+    centered_mask = np.zeros((20, 20), dtype=bool)
+    centered_mask[9:12, 9:12] = True
+    valid_mask = np.zeros((20, 20), dtype=bool)
+    valid_mask[13:16, 13:16] = True
+    detections = [
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.99,
+                  centered_mask, "unknown_object"),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.69,
+                  centered_mask, "bowl"),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.6), 0.91,
+                  valid_mask, "yellow_cube"),
+    ]
+    match = match_target_detection(
+        detections,
+        (10.0, 10.0),
+        (0.0, 0.0, 0.5),
+        10.0,
+        ("yellow_cube", "zucchini", "bowl"),
+        0.70,
+    )
+    assert match is not None
+    assert match.detection is detections[2]
+
+
+def test_coarse_match_fails_closed_when_only_unsafe_candidates_exist() -> None:
+    mask = np.ones((4, 4), dtype=bool)
+    detections = [
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 1.0,
+                  mask, "not_a_task_class"),
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.40,
+                  mask, "yellow_cube"),
+    ]
+    assert match_target_detection(
+        detections,
+        (2.0, 2.0),
+        (0.0, 0.0, 0.5),
+        10.0,
+        ("yellow_cube", "zucchini", "bowl"),
+        0.70,
+    ) is None
 
 
 def test_fine_reacquisition_uses_class_and_optical_centre_not_3d_hint() -> None:

@@ -113,21 +113,34 @@ def _mask_distance(mask: np.ndarray, pixel: tuple[float, float]) -> float:
 
 def match_target_detection(
     detections: Sequence[Any],
-    hint_pixel: tuple[float, float],
+    reference_pixel: tuple[float, float],
     hint_position_camera_m: Sequence[float],
     max_mask_distance_px: float,
+    allowed_class_names: Sequence[str] | None = None,
+    min_confidence: float = 0.0,
 ) -> MatchResult | None:
-    """Choose the depth-verified instance nearest the caller's target hint."""
+    """Choose a safe coarse target nearest the camera reference pixel.
+
+    The caller's 3-D hint remains useful diagnostic information, but it is not
+    used for ranking.  On the physical arm, URDF error can make a live-TF
+    reprojection of that hint less reliable than the optical centre after the
+    camera has deliberately been aimed at the target.
+    """
     hint_position = np.asarray(hint_position_camera_m, dtype=np.float64)
+    allowed_classes = (
+        None if allowed_class_names is None else set(allowed_class_names)
+    )
     candidates: list[MatchResult] = []
     for detection in detections:
         if (
             not bool(detection.accepted)
             or detection.status != "depth_verified"
             or detection.position_camera_m is None
+            or (allowed_classes is not None and detection.class_name not in allowed_classes)
+            or float(detection.confidence) < min_confidence
         ):
             continue
-        mask_distance = _mask_distance(detection.mask, hint_pixel)
+        mask_distance = _mask_distance(detection.mask, reference_pixel)
         if mask_distance > max_mask_distance_px:
             continue
         position_distance = float(
@@ -145,7 +158,6 @@ def match_target_detection(
         candidates,
         key=lambda item: (
             item.mask_distance_px,
-            item.position_distance_m,
             -float(item.detection.confidence),
         ),
     )

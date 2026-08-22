@@ -14,7 +14,9 @@ d1_detect_target:
     fresh_frame_timeout_s: 3.0
     tf_timeout_s: 1.0
     sync_tolerance_s: 0.02
-    max_hint_mask_distance_px: 120.0
+    allowed_target_classes: [yellow_cube, zucchini, bowl]
+    minimum_target_confidence: 0.70
+    max_optical_center_mask_distance_px: 120.0
     depth_scale_m_per_unit: 0.001
     debug_overlay_topic: /arm/perception/debug/overlay
     cube_debug_overlay_topic: /arm/perception/debug/cube_geometry

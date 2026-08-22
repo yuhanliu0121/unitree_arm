@@ -101,8 +101,18 @@ class DetectTargetServer(Node):
         self._sync_tolerance_s = float(
             self.declare_parameter("sync_tolerance_s", 0.02).value
         )
-        self._max_mask_distance_px = float(
-            self.declare_parameter("max_hint_mask_distance_px", 120.0).value
+        self._max_optical_center_mask_distance_px = float(
+            self.declare_parameter(
+                "max_optical_center_mask_distance_px", 120.0
+            ).value
+        )
+        self._allowed_target_classes = tuple(
+            str(name) for name in self.declare_parameter(
+                "allowed_target_classes", ["yellow_cube", "zucchini", "bowl"]
+            ).value
+        )
+        self._minimum_target_confidence = float(
+            self.declare_parameter("minimum_target_confidence", 0.70).value
         )
         self._depth_scale = float(
             self.declare_parameter("depth_scale_m_per_unit", 0.001).value
@@ -580,12 +590,20 @@ class DetectTargetServer(Node):
 
     def _match(self, hint, optical_frame, camera_info, detections):
         hint_camera = self._point_in_frame(hint, optical_frame)
-        hint_pixel = project_plumb_bob(hint_camera, camera_info.k, camera_info.d)
+        optical_center = (float(camera_info.k[2]), float(camera_info.k[5]))
         match = match_target_detection(
-            detections, hint_pixel, hint_camera, self._max_mask_distance_px
+            detections,
+            optical_center,
+            hint_camera,
+            self._max_optical_center_mask_distance_px,
+            self._allowed_target_classes,
+            self._minimum_target_confidence,
         )
         if match is None:
-            raise LookupError("no depth-verified detection matches the projected target hint")
+            raise LookupError(
+                "no allowed depth-verified detection passes the confidence "
+                "gate near the RGB optical centre"
+            )
         return match
 
     def _select_stage_detection(
@@ -1100,7 +1118,9 @@ class DetectTargetServer(Node):
             if not optical_frame:
                 raise ValueError("aligned CameraInfo frame_id is empty")
             hint_camera = self._point_in_frame(request.target_hint, optical_frame)
-            hint_pixel = project_plumb_bob(hint_camera, camera_info.k, camera_info.d)
+            hint_pixel = project_plumb_bob(
+                hint_camera, camera_info.k, camera_info.d
+            )
             intrinsics = self._CameraIntrinsics(
                 fx=float(camera_info.k[0]),
                 fy=float(camera_info.k[4]),
@@ -1110,19 +1130,9 @@ class DetectTargetServer(Node):
                 height=int(camera_info.height),
             )
             detections = self._runtime.process(color_bgr, depth_m, intrinsics)
-            match = match_target_detection(
-                detections,
-                hint_pixel,
-                hint_camera,
-                self._max_mask_distance_px,
+            match = self._match(
+                request.target_hint, optical_frame, camera_info, detections
             )
-            if match is None:
-                self._publish_overlay(color_bgr, detections, None, color_message.header)
-                return self._fail(
-                    response,
-                    DetectTarget.Response.FAILURE_NO_MATCHING_DETECTION,
-                    "no depth-verified detection matches the projected target hint",
-                )
             detection = match.detection
             position_camera = np.asarray(detection.position_camera_m, dtype=np.float64)
             base_transform = self._lookup_transform(
@@ -1131,14 +1141,16 @@ class DetectTargetServer(Node):
             position_base = self._apply_transform(position_camera, base_transform)
             response.success = True
             response.failure_reason = DetectTarget.Response.FAILURE_NONE
-            response.detail = "fresh RGB-D target observation matched"
+            response.detail = "fresh RGB-D target selected near RGB optical centre"
             response.class_name = detection.class_name
             response.confidence = float(detection.confidence)
             response.perception_status = detection.status
             mask_y, mask_x = np.nonzero(detection.mask)
             response.center_u = int(np.median(mask_x))
             response.center_v = int(np.median(mask_y))
-            response.hint_mask_distance_px = float(match.mask_distance_px)
+            response.hint_mask_distance_px = float(np.hypot(
+                mask_x - hint_pixel[0], mask_y - hint_pixel[1]
+            ).min())
             response.hint_position_distance_m = float(match.position_distance_m)
             self._set_point(
                 response.position_camera,
@@ -1156,7 +1168,8 @@ class DetectTargetServer(Node):
                 color_bgr, detections, detection, color_message.header
             )
             self.get_logger().info(
-                "Matched %s conf=%.3f pixel=(%d,%d) mask_distance=%.1fpx position_distance=%.3fm"
+                "Matched %s conf=%.3f pixel=(%d,%d) optical_center_distance=%.1fpx "
+                "hint_position_distance=%.3fm"
                 % (
                     detection.class_name,
                     detection.confidence,
@@ -1167,6 +1180,15 @@ class DetectTargetServer(Node):
                 )
             )
             return response
+        except LookupError as exception:
+            self._publish_overlay(
+                color_bgr, detections, None, color_message.header
+            )
+            return self._fail(
+                response,
+                DetectTarget.Response.FAILURE_NO_MATCHING_DETECTION,
+                str(exception),
+            )
         except (TimeoutError, ValueError, TransformException) as exception:
             return self._fail(
                 response,
