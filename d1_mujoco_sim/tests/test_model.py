@@ -326,7 +326,9 @@ def test_gripper_mimic_and_stowed_arm_hold() -> None:
     )
     np.testing.assert_allclose(
         simulator.sdk_angles_deg[:6],
-        np.rad2deg([0.0, -1.5, 1.5, 0.0, 0.0, 0.0]),
+        # The canonical 1.55-rad Joint2 target is rounded slightly beyond the
+        # base URDF limit, so the physics model correctly holds at that limit.
+        np.rad2deg([0.0, -1.54, 1.546361717267, 0.0, 0.0, 0.0]),
         atol=0.05,
     )
 

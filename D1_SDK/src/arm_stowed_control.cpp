@@ -33,6 +33,7 @@ namespace
 constexpr char kCommandTopic[] = "rt/arm_Command";
 constexpr char kAngleTopic[] = "current_servo_angle";
 constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+constexpr double kOpenGripperDegrees = 60.0;
 constexpr std::array<double, 6> kStowedRadians{0.0, -1.54, 1.55, 0.0, 0.0, 0.0};
 
 struct AngleState
@@ -135,7 +136,7 @@ void PrintUsage(const char* program)
         << " [--interface IFACE] [--timeout SEC] [--tolerance-deg DEG]"
         << " --confirm STOWED_MOVE\n"
         << "Moves D1 Joint0..5 to [0, -1.54, 1.55, 0, 0, 0] radians with\n"
-        << "one complete funcode=2 command and preserves measured Joint6.\n"
+        << "one complete funcode=2 command and fully opens Joint6 to 60 degrees.\n"
         << "Default interface: enp3s0. Stop every other D1 command publisher first.\n";
 }
 
@@ -149,23 +150,23 @@ std::array<double, 7> WaitForAngles(const std::chrono::milliseconds timeout)
     return g_state.angles;
 }
 
-std::array<double, 7> StowedTarget(const double gripper_angle_deg)
+std::array<double, 7> StowedTarget()
 {
     std::array<double, 7> target{};
     for (std::size_t index = 0; index < kStowedRadians.size(); ++index)
     {
         target[index] = kStowedRadians[index] * kRadiansToDegrees;
     }
-    target[6] = gripper_angle_deg;
+    target[6] = kOpenGripperDegrees;
     return target;
 }
 
-double MaximumArmError(
+double MaximumJointError(
     const std::array<double, 7>& actual,
     const std::array<double, 7>& target)
 {
     double maximum = 0.0;
-    for (std::size_t index = 0; index < 6; ++index)
+    for (std::size_t index = 0; index < 7; ++index)
     {
         maximum = std::max(maximum, std::abs(actual[index] - target[index]));
     }
@@ -218,11 +219,11 @@ int CommandPhase(
         throw std::runtime_error("Measured Joint6 is outside the characterized range");
     }
 
-    const auto target = StowedTarget(current[6]);
-    const double maximum_delta = MaximumArmError(current, target);
+    const auto target = StowedTarget();
+    const double maximum_delta = MaximumJointError(current, target);
     if (maximum_delta <= tolerance_deg)
     {
-        std::cout << "Arm is already within " << tolerance_deg
+        std::cout << "Arm and gripper are already within " << tolerance_deg
                   << " deg of STOWED; no command sent.\n";
         return 0;
     }
@@ -248,7 +249,7 @@ int CommandPhase(
     }
     std::cout << "] deg\nMaximum delta: " << maximum_delta
               << " deg; selected mode=" << mode
-              << "; preserving Joint6=" << current[6] << " deg\n";
+              << "; opening Joint6 to " << kOpenGripperDegrees << " deg\n";
 
     unitree::robot::ChannelFactory::Instance()->Init(0, interface);
     unitree::robot::ChannelPublisher<unitree_arm::msg::dds_::ArmString_>
@@ -294,21 +295,21 @@ int VerifyPhase(
         }
         latest = g_state.angles;
         lock.unlock();
-        const auto target = StowedTarget(latest[6]);
-        const double error = MaximumArmError(latest, target);
+        const auto target = StowedTarget();
+        const double error = MaximumJointError(latest, target);
         stable_samples = error <= tolerance_deg ? stable_samples + 1 : 0;
         if (stable_samples >= 3)
         {
             std::cout << std::fixed << std::setprecision(3)
-                      << "STOWED reached: max Joint0..5 error=" << error
+                      << "STOWED reached: max Joint0..6 error=" << error
                       << " deg; Joint6=" << latest[6] << " deg.\n";
             return 0;
         }
     }
-    const auto target = StowedTarget(latest[6]);
+    const auto target = StowedTarget();
     std::cerr << std::fixed << std::setprecision(3)
-              << "STOWED verification timed out: max Joint0..5 error="
-              << MaximumArmError(latest, target) << " deg.\n";
+              << "STOWED verification timed out: max Joint0..6 error="
+              << MaximumJointError(latest, target) << " deg.\n";
     return 2;
 }
 

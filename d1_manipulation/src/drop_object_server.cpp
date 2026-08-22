@@ -18,7 +18,6 @@
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
-#include <shape_msgs/msg/solid_primitive.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -76,19 +75,10 @@ public:
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
-    carry_ = parameterOrDeclare(
-      node_, "carry_joint_positions", std::vector<double>{0, -1.54, 1.546, 0, -0.6, 1.57});
-    stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
-    carry_tolerance_ = parameterOrDeclare(node_, "carry_tolerance_rad", 0.08);
-    stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
-    min_distance_ = parameterOrDeclare(node_, "min_bin_distance_m", 0.35);
-    max_distance_ = parameterOrDeclare(node_, "max_bin_distance_m", 0.45);
+    stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.54, 1.55, 0, 0, 0});
+    stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.034906585);
     height_offsets_ = parameterOrDeclare(node_, "height_offsets_m", std::vector<double>{0, -0.025, -0.05, 0.025, 0.05});
     yaw_offsets_ = parameterOrDeclare(node_, "yaw_offsets_degrees", std::vector<double>{0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90});
-    bin_radius_ = parameterOrDeclare(node_, "trash_bin_radius_m", 0.15);
-    bin_height_ = parameterOrDeclare(node_, "trash_bin_height_m", 0.10);
-    bin_wall_ = parameterOrDeclare(node_, "trash_bin_wall_thickness_m", 0.01);
-    bin_segments_ = parameterOrDeclare(node_, "trash_bin_wall_segments", 16);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
     gripper_open_hold_ = parameterOrDeclare(node_, "gripper_open_hold_s", 0.5);
 
@@ -149,6 +139,19 @@ private:
       move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
   }
 
+  bool moveToStowed()
+  {
+    auto bounded_stowed = stowed_;
+    const auto robot_model = move_group_.getRobotModel();
+    const auto* joint_group = robot_model->getJointModelGroup(move_group_.getName());
+    const auto& variable_names = joint_group->getVariableNames();
+    for (std::size_t i = 0; i < bounded_stowed.size(); ++i) {
+      const auto& bounds = robot_model->getVariableBounds(variable_names.at(i));
+      bounded_stowed[i] = std::clamp(bounded_stowed[i], bounds.min_position_, bounds.max_position_);
+    }
+    return moveTo(bounded_stowed);
+  }
+
   void feedback(const std::shared_ptr<Handle>& handle, const std::string& state,
     float progress, const std::string& detail)
   {
@@ -176,7 +179,6 @@ private:
   {
     move_group_.stop();
     const bool returned = nearPose(stowed_, stowed_tolerance_);
-    planning_scene_.removeCollisionObjects({"drop_trash_bin"});
     auto result = std::make_shared<Drop::Result>();
     result->success = false; result->failure_category = category;
     result->failed_state = state;
@@ -234,36 +236,6 @@ private:
       wrapped.result && wrapped.result->reached_goal;
   }
 
-  bool applyTrashBin(const Eigen::Vector3d& bottom, const Eigen::Vector3d& up)
-  {
-    moveit_msgs::msg::CollisionObject object;
-    object.header.frame_id = planning_frame_; object.id = "drop_trash_bin";
-    Eigen::Vector3d radial_reference = Eigen::Vector3d::UnitX() -
-      Eigen::Vector3d::UnitX().dot(up) * up;
-    if (radial_reference.norm() < 1e-6) radial_reference = Eigen::Vector3d::UnitY();
-    radial_reference.normalize();
-    const Eigen::Vector3d tangent_reference = up.cross(radial_reference).normalized();
-    const double wall_radius = bin_radius_ - 0.5 * bin_wall_;
-    const double tangent_half = wall_radius * std::tan(M_PI / bin_segments_) + 0.001;
-    for (int i = 0; i < bin_segments_; ++i) {
-      const double theta = 2.0 * M_PI * i / bin_segments_;
-      const Eigen::Vector3d radial =
-        std::cos(theta) * radial_reference + std::sin(theta) * tangent_reference;
-      const Eigen::Vector3d tangent = up.cross(radial).normalized();
-      Eigen::Matrix3d rotation;
-      rotation.col(0) = tangent; rotation.col(1) = -radial; rotation.col(2) = up;
-      Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-      pose.linear() = rotation;
-      pose.translation() = bottom + wall_radius * radial + 0.5 * bin_height_ * up;
-      shape_msgs::msg::SolidPrimitive wall;
-      wall.type = shape_msgs::msg::SolidPrimitive::BOX;
-      wall.dimensions = {2.0 * tangent_half, bin_wall_, bin_height_};
-      object.primitives.push_back(wall); object.primitive_poses.push_back(poseMessage(pose));
-    }
-    object.operation = moveit_msgs::msg::CollisionObject::ADD;
-    return planning_scene_.applyCollisionObject(object);
-  }
-
   std::vector<std::string> heldObjectIds()
   {
     std::vector<std::string> ids;
@@ -303,36 +275,21 @@ private:
   void execute(const std::shared_ptr<Handle>& handle)
   {
     try {
-      feedback(handle, "CHECK_PRECONDITIONS", 0.05F, "Resolving bin target, gravity and CARRY state");
-      if (!nearPose(carry_, carry_tolerance_)) {
-        fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
-          "CHECK_PRECONDITIONS", "arm is not in CARRY pose"); return;
-      }
+      feedback(handle, "CHECK_PRECONDITIONS", 0.05F, "Resolving bin target, gravity and held object state");
       const auto held_ids = heldObjectIds();
-      if (held_ids.size() != 1) {
+      if (held_ids.size() > 1) {
         fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
-          "CHECK_PRECONDITIONS",
-          held_ids.empty() ? "no held object is attached in MoveIt" :
-          "multiple held objects are attached in MoveIt"); return;
+          "CHECK_PRECONDITIONS", "multiple held objects are attached in MoveIt"); return;
       }
       const Eigen::Vector3d bottom = pointInPlanningFrame(handle->get_goal()->target);
       const Eigen::Vector3d up = gravityUp();
       const Eigen::Vector3d horizontal = bottom - bottom.dot(up) * up;
-      const double distance = horizontal.norm();
-      if (distance < min_distance_ || distance > max_distance_) {
-        fail(handle, Drop::Result::FAILURE_REPOSITION_REQUIRED,
-          "CHECK_PRECONDITIONS", "trash-bin horizontal distance is outside 0.35..0.45 m"); return;
-      }
-      if (!applyTrashBin(bottom, up)) {
-        fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
-          "PLAN_RELEASE", "failed to add trash-bin walls to MoveIt"); return;
-      }
-
       const Eigen::Isometry3d current_tcp = tf2::transformToEigen(
         tf_buffer_.lookupTransform(planning_frame_, tcp_frame_, tf2::TimePointZero, 3s));
       Eigen::Vector3d reference = current_tcp.rotation().col(0) -
         current_tcp.rotation().col(0).dot(up) * up;
-      if (reference.norm() < 1e-6) reference = horizontal.normalized();
+      if (reference.norm() < 1e-6) reference = horizontal;
+      if (reference.norm() < 1e-6) reference = up.unitOrthogonal();
       reference.normalize();
 
       moveit::planning_interface::MoveGroupInterface::Plan release_plan;
@@ -380,7 +337,7 @@ private:
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "RELEASE", "gripper did not reach its fully open target"); return;
       }
-      if (!detachAndForgetHeldObject(held_ids.front())) {
+      if (!held_ids.empty() && !detachAndForgetHeldObject(held_ids.front())) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "RELEASE", "failed to detach and remove held object from MoveIt"); return;
       }
@@ -398,14 +355,15 @@ private:
         std::this_thread::sleep_for(20ms);
       }
       feedback(handle, "STOWED", 0.85F, "Planning directly from release pose to STOWED");
-      if (!moveTo(stowed_)) {
+      if (!moveToStowed()) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "STOWED", "failed to return to STOWED"); return;
       }
-      planning_scene_.removeCollisionObjects({"drop_trash_bin"});
       auto result = std::make_shared<Drop::Result>();
       result->success = true; result->failure_category = Drop::Result::FAILURE_NONE;
-      result->detail = "held object released above trash bin and arm returned to STOWED";
+      result->detail = held_ids.empty() ?
+        "empty-gripper release motion completed and arm returned to STOWED" :
+        "held object released above trash bin and arm returned to STOWED";
       result->returned_to_stowed = true;
       result->release_pose.header.frame_id = planning_frame_;
       result->release_pose.header.stamp = node_->now(); result->release_pose.pose = selected_pose;
@@ -429,10 +387,9 @@ private:
   std::mutex active_goal_mutex_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
   std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;
-  std::vector<double> carry_, stowed_, height_offsets_, yaw_offsets_;
-  double carry_tolerance_{}, stowed_tolerance_{}, min_distance_{}, max_distance_;
-  double bin_radius_{}, bin_height_{}, bin_wall_{};
-  int bin_segments_{}; double gripper_open_{}, gripper_open_hold_{};
+  std::vector<double> stowed_, height_offsets_, yaw_offsets_;
+  double stowed_tolerance_{};
+  double gripper_open_{}, gripper_open_hold_{};
 };
 }  // namespace d1_manipulation
 

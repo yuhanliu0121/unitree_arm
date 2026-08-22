@@ -125,6 +125,14 @@ controller holding the current measured position. Failures also hold position;
 they do not automatically command STOWED. A successful `DropObject` still
 returns to STOWED as part of its normal task sequence.
 
+Every `PickObject` starts with `ENSURE_STOWED`. If the current pose is within
+45 degrees per joint of `[0, -1.54, 1.55, 0, 0, 0]`, the server sends that
+complete endpoint directly to `arm_controller`. The real backend executes it
+as one D1 `funcode=2, mode=1` target while retaining a single command owner.
+This initial near-STOWED recovery deliberately bypasses MoveIt's conservative
+collision check. Larger deviations are held for manual recovery with the
+standalone native-DDS `arm_stowed_control` utility.
+
 The bundled pick/drop command-line clients convert `Ctrl+C` into an Action
 cancel request before shutting down. This is a software stop and does not
 replace the physical emergency stop during real-machine tests.
@@ -132,12 +140,21 @@ replace the physical emergency stop during real-machine tests.
 ## Gravity-aligned object release
 
 The external release Action is `/arm/tasks/drop_object`. Its stamped target is
-the trash-bin bottom centre estimated by Go2. The server requires the arm to be
-in CARRY with an attached MoveIt object and requires the bin centre to be
-0.35--0.45 m horizontally from `base_link`.
+the trash-bin bottom centre estimated by Go2. It plans from the arm's current
+pose and supports both a held MoveIt object and an empty gripper. When one held
+object exists it is detached after release; with none, the same release motion
+is executed without detachment. More than one attached object is treated as an
+invalid planning-scene state. For reliable reachability and Go2 body clearance,
+navigation should place the bin centre approximately 0.35--0.45 m
+horizontally from `base_link`; this is a recommendation rather than an Action
+precondition. The server searches the configured release candidates and only
+requests repositioning when no collision-free IK/trajectory plan is available.
 
-The server adds the open bin side walls to MoveIt, fixes `tcp_link` +Z along
-gravity, and searches the configured candidates in strict order. Height
+The trash bin is deliberately not added to MoveIt's planning scene: its target
+point is a release reference, while the real low-profile bin is outside the
+collision model used by this task. MuJoCo may still render and physically
+simulate the bin independently. The server fixes `tcp_link` +Z along gravity
+and searches the configured candidates in strict order. Height
 offsets relative to the `base_link` gravity height are `0, -25, -50, +25,
 +50 mm`; each height uses yaw offsets `0, +15, -15, ..., +90, -90 deg` from
 the projected CARRY TCP x-axis. The first release pose with a complete plan is

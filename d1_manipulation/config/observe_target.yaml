@@ -23,8 +23,6 @@ d1_observe_target:
     orientation_tolerance_rad: 0.03
     camera_settle_s: 0.5
     max_target_pixel_error: 30.0
-    stowed_tolerance_rad: 0.08
-    stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
     real_joint_goal_tolerance_rad: 0.034906585
     real_joint_goal_stable_samples: 3
     real_joint_goal_assumed_speed_deg_s: 10.0
@@ -93,8 +91,6 @@ d1_pick_object:
     acceleration_scaling: 0.10
     position_tolerance_m: 0.005
     orientation_tolerance_rad: 0.03
-    stowed_tolerance_rad: 0.08
-    stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
 
 d1_drop_object:
   ros__parameters:
@@ -103,18 +99,8 @@ d1_drop_object:
     gravity_frame: world
     arm_group: arm
     tcp_frame: tcp_link
-    carry_joint_positions: [0.0, -1.54, 1.546, 0.0, -0.6, 1.57]
-    stowed_joint_positions: [0.0, -1.5, 1.5, 0.0, 0.0, 0.0]
-    carry_tolerance_rad: 0.08
-    stowed_tolerance_rad: 0.08
-    min_bin_distance_m: 0.35
-    max_bin_distance_m: 0.45
     height_offsets_m: [0.0, -0.025, -0.050, 0.025, 0.050]
     yaw_offsets_degrees: [0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 75.0, -75.0, 90.0, -90.0]
-    trash_bin_radius_m: 0.15
-    trash_bin_height_m: 0.10
-    trash_bin_wall_thickness_m: 0.01
-    trash_bin_wall_segments: 16
     gripper_open_m: 0.03
     gripper_open_hold_s: 0.5
     planning_time_s: 5.0

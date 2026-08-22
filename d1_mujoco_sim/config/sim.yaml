@@ -10,9 +10,9 @@ simulation:
   # Rendering is diagnostic only. Synchronizing the viewer at every 1 kHz
   # physics step can make simulation time lag behind ROS wall time.
   viewer_sync_rate_hz: 60.0
-  # Limit-safe stowed pose: arm radians [0, -1.5, 1.5, 0, 0, 0],
+  # Canonical stowed pose: arm radians [0, -1.54, 1.55, 0, 0, 0],
   # with the gripper SDK angle left at neutral zero degrees.
-  initial_sdk_angles_deg: [0.0, -85.943669270, 85.943669270, 0.0, 0.0, 0.0, 0.0]
+  initial_sdk_angles_deg: [0.0, -88.235500450, 88.808458245, 0.0, 0.0, 0.0, 0.0]
 
 dds:
   # Keep simulation isolated from a physical D1, whose examples use domain 0.

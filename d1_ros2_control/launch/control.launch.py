@@ -214,6 +214,9 @@ def launch_setup(context):
                 "command_start_timeout_s": float(
                     LaunchConfiguration("command_start_timeout_s").perform(context)
                 ),
+                "arm_motion_start_progress_deg": float(
+                    LaunchConfiguration("arm_motion_start_progress_deg").perform(context)
+                ),
                 "no_motion_max_retries": int(
                     LaunchConfiguration("no_motion_max_retries").perform(context)
                 ),
@@ -290,6 +293,7 @@ def generate_launch_description():
             DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
             DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
             DeclareLaunchArgument("command_start_timeout_s", default_value="2.0"),
+            DeclareLaunchArgument("arm_motion_start_progress_deg", default_value="1.0"),
             DeclareLaunchArgument("no_motion_max_retries", default_value="4"),
             DeclareLaunchArgument(
                 "rviz",

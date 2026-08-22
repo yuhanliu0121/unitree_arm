@@ -161,13 +161,13 @@ Action 再转发一次。
 
 ## 4. 固定姿态
 
-固定姿态由 `d1_manipulation` 中唯一的配置文件维护。夹爪状态单独控制，
+ROS 任务运行时固定姿态由 `d1_manipulation/config/fixed_poses.yaml` 维护。夹爪状态单独控制，
 不写入六关节姿态数组。
 
 ```yaml
-STOWED:      [0.0, -1.5, 1.5,   0.0,  0.0, 0.0]
+STOWED:      [0.0, -1.54, 1.55, 0.0,  0.0, 0.0]
 HOME:        [0.0, -1.0, 1.047, 0.0,  0.0, 0.0]
-CARRY:       [0.0, -1.5, 1.5,   0.0, -0.6, 0.0]
+CARRY:       [0.0, -1.54, 1.55, 0.0, -0.6, 1.57]
 PLACE_READY: [0.0, -1.0, 1.047, 0.0,  0.0, 0.0]
 ```
 
@@ -186,7 +186,9 @@ PLACE_READY: [0.0, -1.0, 1.047, 0.0,  0.0, 0.0]
 ## 5. PickObject 完整状态
 
 ```text
-STOWED
+CURRENT_POSE
+→ ENSURE_STOWED
+→ STOWED
 → CHECK_PRECONDITIONS
 → PLAN_OBSERVE
 → MOVE_OBSERVE
@@ -204,6 +206,8 @@ STOWED
 
 状态语义：
 
+- `ENSURE_STOWED`：若当前各关节距统一 STOWED 不超过 45°，绕过 MoveIt
+  初始碰撞检查并通过 `arm_controller` 直接下发完整 STOWED 关节目标；
 - `CHECK_PRECONDITIONS`：检查任务输入、TF、关节状态、控制器和相机；
 - `PLAN_OBSERVE`：搜索并规划相机观测姿态；
 - `MOVE_OBSERVE`：执行观测轨迹；

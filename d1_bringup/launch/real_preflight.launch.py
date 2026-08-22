@@ -177,7 +177,12 @@ def _launch_setup(context):
             "gravity_frame": gravity["frame"],
             "expected_acceleration_mps2": gravity["expected_acceleration_mps2"],
             "acceleration_norm_tolerance_mps2": gravity["norm_tolerance_mps2"],
-            "acceleration_max_component_stddev_mps2": gravity["max_component_stddev_mps2"],
+            "acceleration_max_component_standard_error_mps2": gravity[
+                "max_component_standard_error_mps2"
+            ],
+            "angular_velocity_max_rms_rad_s": gravity[
+                "max_angular_velocity_rms_rad_s"
+            ],
             "gravity_required_samples": gravity["required_samples"],
             "gravity_output_path": LaunchConfiguration("gravity_output_path"),
             "timeout_s": preflight_config["timeout_s"],

@@ -25,3 +25,10 @@ must still send `/arm/tasks/pick_object` or `/arm/tasks/drop_object` goals.
 Use `--config PATH` for a site-specific deployment file and
 `--arm-serial SERIAL` only when intentionally overriding the serial recorded
 in that file.
+`real_bringup.zsh` runs the motionless preflight before starting physical
+control, MoveIt, perception, and the task Actions. A read-only readiness monitor
+then waits for fresh D1 joint feedback, RGB and aligned-depth CameraInfo, MoveIt,
+the arm/gripper command Actions, and `pick_object`/`drop_object`. Once every
+dependency is live it prints a prominent green `D1 REAL CONTROL STACK READY`
+banner. If readiness takes longer than 60 seconds it prints the missing items in
+red and continues waiting; no task is sent automatically.

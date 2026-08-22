@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "real_preflight = d1_bringup.real_preflight:main",
+            "stack_readiness = d1_bringup.stack_readiness:main",
         ],
     },
 )

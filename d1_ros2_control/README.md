@@ -41,10 +41,12 @@ two controllers to command one arm.
   adjacent-frame velocity estimates or the ROS joint-state publication rate.
 - Completion is evaluated from joint feedback; D1 execution ACK is not used.
 - If a mode=1 absolute target is written but fresh joint feedback shows
-  no physical motion for 2.0 seconds while the endpoint remains outside its
-  tolerance, the controller resends the same absolute target with a fresh
-  sequence number every two seconds. It stops retrying as soon as motion starts
-  and aborts after four retries. This applies to both arm and gripper goals.
+  less than 1 degree of target-directed joint-space progress for 2.0 seconds
+  while the endpoint remains outside its tolerance, the controller resends the
+  same absolute target with a fresh sequence number every two seconds. This
+  rejects feedback noise and motion opposite to the commanded direction. It
+  stops retrying after meaningful progress and aborts after four retries. This
+  applies to both arm and gripper goals.
 - Simulation hardware deactivation sends a measured-position hold. Physical
   Action cancellation sends a measured-position hold through the unique
   command owner. Neither mechanism is an emergency stop or a replacement for

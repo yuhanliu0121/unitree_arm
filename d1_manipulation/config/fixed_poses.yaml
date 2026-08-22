@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    # Canonical arm-only STOWED pose. Keep this as the single runtime source
+    # shared by observation, pick and drop servers.
+    stowed_joint_positions: [0.0, -1.54, 1.55, 0.0, 0.0, 0.0]
+    stowed_tolerance_rad: 0.034906585
+    stowed_recovery_max_delta_rad: 0.785398163
+    stowed_recovery_duration_s: 8.0
+    stowed_recovery_timeout_s: 45.0

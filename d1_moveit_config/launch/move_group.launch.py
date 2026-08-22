@@ -44,6 +44,14 @@ def _launch_setup(context):
     requested_arm_serial = LaunchConfiguration("arm_serial").perform(context).strip()
     arm_serial = requested_arm_serial if backend == "real" else ""
     moveit_config = build_moveit_config(arm_serial)
+    move_group_parameters = moveit_config.to_dict()
+    if backend == "real":
+        # The D1 mode=1 endpoint controller may need several bounded retries
+        # before the firmware begins physical motion.  Keep MoveIt's outer
+        # execution watchdog wider than that feedback-verified retry window.
+        move_group_parameters["trajectory_execution"][
+            "allowed_goal_duration_margin"
+        ] = 12.0
     control_launch = Path(
         get_package_share_directory("d1_ros2_control")
     ) / "launch" / "control.launch.py"
@@ -81,7 +89,7 @@ def _launch_setup(context):
                 package="moveit_ros_move_group",
                 executable="move_group",
                 output="screen",
-                parameters=[moveit_config.to_dict()],
+                parameters=[move_group_parameters],
             ),
             Node(
                 package="d1_camera_visualization",

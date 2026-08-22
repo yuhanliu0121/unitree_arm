@@ -54,8 +54,12 @@ site:
     # D435i acceleration is usable as gravity only while stationary/slow.
     expected_acceleration_mps2: 9.80665
     norm_tolerance_mps2: 1.5
-    max_component_stddev_mps2: 0.35
-    required_samples: 30
+    # D1095's uncalibrated D435i accel has about 0.95 m/s^2 raw X-axis
+    # standard deviation while stationary. Average a one-second window and
+    # bound its uncertainty; use the gyro RMS to reject actual motion.
+    max_component_standard_error_mps2: 0.10
+    max_angular_velocity_rms_rad_s: 0.15
+    required_samples: 200
 
 preflight:
   timeout_s: 20.0

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <Eigen/Geometry>
+#include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <control_msgs/action/gripper_command.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
@@ -29,6 +30,7 @@
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+#include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
 #include "d1_manipulation/action/observe_target.hpp"
 #include "d1_manipulation/action/pick_object.hpp"
@@ -78,6 +80,7 @@ public:
   using Pick = action::PickObject;
   using PickHandle = rclcpp_action::ServerGoalHandle<Pick>;
   using Observe = action::ObserveTarget;
+  using Arm = control_msgs::action::FollowJointTrajectory;
   using Gripper = control_msgs::action::GripperCommand;
 
   explicit PickObjectServer(const rclcpp::Node::SharedPtr& node)
@@ -105,8 +108,14 @@ public:
     camera_settle_ = parameterOrDeclare(node_, "camera_settle_s", 0.5);
     cartesian_step_ = parameterOrDeclare(node_, "cartesian_step_m", 0.005);
     minimum_fraction_ = parameterOrDeclare(node_, "minimum_cartesian_fraction", 0.999);
-    stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.08);
-    stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.5, 1.5, 0, 0, 0});
+    stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.034906585);
+    stowed_recovery_max_delta_ = parameterOrDeclare(
+      node_, "stowed_recovery_max_delta_rad", 0.785398163);
+    stowed_recovery_duration_ = parameterOrDeclare(
+      node_, "stowed_recovery_duration_s", 8.0);
+    stowed_recovery_timeout_ = parameterOrDeclare(
+      node_, "stowed_recovery_timeout_s", 45.0);
+    stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.54, 1.55, 0, 0, 0});
     gripper_verify_settle_ = parameterOrDeclare(node_, "gripper_verify_settle_s", 0.5);
     gripper_verify_sample_ = parameterOrDeclare(node_, "gripper_verify_sample_s", 1.0);
     gripper_verify_min_samples_ = parameterOrDeclare(node_, "gripper_verify_min_samples", 5);
@@ -117,6 +126,12 @@ public:
     gripper_safe_open_angle_deg_ = parameterOrDeclare(
       node_, "gripper_safe_open_angle_deg", 60.0);
     gripper_travel_m_ = parameterOrDeclare(node_, "gripper_travel_m", 0.03);
+    if (stowed_.size() != 6 || stowed_tolerance_ <= 0.0 ||
+      stowed_recovery_max_delta_ <= stowed_tolerance_ ||
+      stowed_recovery_duration_ <= 0.0 || stowed_recovery_timeout_ <= 0.0)
+    {
+      throw std::invalid_argument("invalid STOWED recovery parameters");
+    }
     if (gripper_verify_settle_ < 0.0 || gripper_verify_sample_ <= 0.0 ||
       gripper_verify_min_samples_ <= 0 || gripper_verify_min_pass_ratio_ <= 0.0 ||
       gripper_verify_min_pass_ratio_ > 1.0 || gripper_travel_m_ <= 0.0 ||
@@ -137,7 +152,10 @@ public:
 
     observe_client_ = rclcpp_action::create_client<Observe>(node_, observe_name_);
     detect_client_ = node_->create_client<srv::DetectTarget>(detect_name_);
-    gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
+    arm_client_ = rclcpp_action::create_client<Arm>(
+      node_, "/arm_controller/follow_joint_trajectory");
+    gripper_client_ = rclcpp_action::create_client<Gripper>(
+      node_, "/gripper_controller/gripper_cmd");
     joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
       "/joint_states", rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::JointState::SharedPtr message) {
@@ -209,6 +227,110 @@ private:
     return true;
   }
 
+  bool ensureStowed(std::string& detail)
+  {
+    if (isStowed()) {
+      detail = "arm already satisfies the canonical STOWED pose";
+      return true;
+    }
+    if (cancel_.load()) {
+      detail = "canceled before STOWED recovery";
+      return false;
+    }
+
+    auto bounded_stowed = stowed_;
+    const auto robot_model = move_group_.getRobotModel();
+    const auto* joint_group = robot_model->getJointModelGroup(move_group_.getName());
+    const auto& variable_names = joint_group->getVariableNames();
+    for (std::size_t i = 0; i < bounded_stowed.size(); ++i) {
+      const auto& bounds = robot_model->getVariableBounds(variable_names.at(i));
+      bounded_stowed[i] = std::clamp(bounded_stowed[i], bounds.min_position_, bounds.max_position_);
+    }
+
+    const auto current = move_group_.getCurrentJointValues();
+    if (current.size() != bounded_stowed.size()) {
+      detail = "current arm joint feedback is unavailable";
+      return false;
+    }
+    double maximum_delta = 0.0;
+    for (std::size_t i = 0; i < current.size(); ++i) {
+      maximum_delta = std::max(maximum_delta, std::abs(current[i] - bounded_stowed[i]));
+    }
+    if (maximum_delta > stowed_recovery_max_delta_) {
+      std::ostringstream message;
+      message << std::fixed << std::setprecision(1)
+              << "automatic STOWED recovery rejected: maximum joint delta "
+              << maximum_delta * 180.0 / M_PI << " deg exceeds "
+              << stowed_recovery_max_delta_ * 180.0 / M_PI << " deg";
+      detail = message.str();
+      return false;
+    }
+
+    if (!arm_client_->wait_for_action_server(5s)) {
+      detail = "arm trajectory controller is unavailable";
+      return false;
+    }
+    Arm::Goal goal;
+    goal.trajectory.joint_names = variable_names;
+    trajectory_msgs::msg::JointTrajectoryPoint point;
+    point.positions = bounded_stowed;
+    const auto recovery_nanoseconds = static_cast<std::int64_t>(
+      std::llround(stowed_recovery_duration_ * 1.0e9));
+    point.time_from_start.sec = static_cast<std::int32_t>(recovery_nanoseconds / 1000000000LL);
+    point.time_from_start.nanosec = static_cast<std::uint32_t>(
+      recovery_nanoseconds % 1000000000LL);
+    goal.trajectory.points.push_back(std::move(point));
+    auto sent = arm_client_->async_send_goal(goal);
+    if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) {
+      detail = "arm trajectory controller rejected STOWED recovery";
+      return false;
+    }
+    const auto arm_goal = sent.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_arm_goal_ = arm_goal;
+    }
+    auto result = arm_client_->async_get_result(arm_goal);
+    const auto action_deadline = std::chrono::steady_clock::now() +
+      std::chrono::duration<double>(stowed_recovery_timeout_);
+    while (result.wait_for(50ms) != std::future_status::ready) {
+      if (cancel_.load() || std::chrono::steady_clock::now() >= action_deadline) {
+        arm_client_->async_cancel_goal(arm_goal);
+        std::lock_guard<std::mutex> lock(active_goals_mutex_);
+        active_arm_goal_.reset();
+        detail = cancel_.load() ?
+          "canceled during STOWED recovery" : "STOWED recovery timed out";
+        return false;
+      }
+    }
+    const auto wrapped = result.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_arm_goal_.reset();
+    }
+    if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED ||
+      wrapped.result->error_code != Arm::Result::SUCCESSFUL)
+    {
+      detail = "STOWED recovery controller failed: " + wrapped.result->error_string;
+      return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (!isStowed() && std::chrono::steady_clock::now() < deadline) {
+      if (cancel_.load()) {
+        detail = "canceled while verifying STOWED recovery";
+        return false;
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    if (!isStowed()) {
+      detail = "arm feedback did not converge to canonical STOWED";
+      return false;
+    }
+    detail = "arm recovered directly to canonical STOWED through the joint controller";
+    return true;
+  }
+
   void releaseTask()
   {
     task_lock_.release();
@@ -220,6 +342,7 @@ private:
     cancel_.store(true);
     move_group_.stop();
     std::lock_guard<std::mutex> lock(active_goals_mutex_);
+    if (active_arm_goal_) arm_client_->async_cancel_goal(active_arm_goal_);
     if (active_observe_goal_) observe_client_->async_cancel_goal(active_observe_goal_);
     if (active_gripper_goal_) gripper_client_->async_cancel_goal(active_gripper_goal_);
   }
@@ -630,6 +753,15 @@ private:
   {
     try {
       const auto goal = handle->get_goal();
+      feedback(handle, "ENSURE_STOWED", 0.02F, "Validating or recovering the canonical STOWED pose");
+      std::string stowed_detail;
+      if (!ensureStowed(stowed_detail)) {
+        const bool canceled = cancel_.load() || handle->is_canceling();
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR,
+          "ENSURE_STOWED", stowed_detail, canceled);
+        return;
+      }
+      RCLCPP_INFO(node_->get_logger(), "ENSURE_STOWED succeeded: %s", stowed_detail.c_str());
       feedback(handle, "PLAN_OBSERVE", 0.05F, "Moving to oblique observation pose");
       if (!observe(goal->target)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_OBSERVE", "oblique observation failed"); return;
@@ -778,6 +910,7 @@ private:
   tf2_ros::TransformListener tf_listener_;
   TaskLock task_lock_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
+  rclcpp_action::Client<Arm>::SharedPtr arm_client_;
   rclcpp::Client<srv::DetectTarget>::SharedPtr detect_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
@@ -785,6 +918,7 @@ private:
   std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> busy_{false}, cancel_{false};
   std::mutex active_goals_mutex_;
+  rclcpp_action::ClientGoalHandle<Arm>::SharedPtr active_arm_goal_;
   rclcpp_action::ClientGoalHandle<Observe>::SharedPtr active_observe_goal_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
   std::string backend_, action_name_, observe_name_, detect_name_, planning_frame_;
@@ -794,6 +928,8 @@ private:
   std::vector<double> top_distances_, top_rolls_;
   double camera_settle_{};
   double cartesian_step_{}, minimum_fraction_{}, stowed_tolerance_{};
+  double stowed_recovery_max_delta_{}, stowed_recovery_duration_{};
+  double stowed_recovery_timeout_{};
   double gripper_verify_settle_{}, gripper_verify_sample_{};
   double gripper_verify_min_pass_ratio_{};
   double gripper_safe_closed_angle_deg_{}, gripper_safe_open_angle_deg_{};

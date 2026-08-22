@@ -37,7 +37,24 @@ namespace d1_ros2_control
 namespace
 {
 constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
-constexpr double kMotionStartThresholdRadians = 0.25 / kRadiansToDegrees;
+
+double targetDirectedProgress(
+  const std::array<double, 7> & initial,
+  const std::array<double, 7> & current,
+  const std::array<double, 6> & target)
+{
+  double target_norm_squared = 0.0;
+  double projected_motion = 0.0;
+  for (std::size_t joint = 0; joint < target.size(); ++joint) {
+    const double target_delta = target[joint] - initial[joint];
+    target_norm_squared += target_delta * target_delta;
+    projected_motion += (current[joint] - initial[joint]) * target_delta;
+  }
+  if (target_norm_squared <= 1e-12) {
+    return 0.0;
+  }
+  return projected_motion / std::sqrt(target_norm_squared);
+}
 
 template<typename T>
 bool finiteVector(const std::vector<T> & values)
@@ -91,6 +108,8 @@ public:
     minimum_timeout_s_ = declare_parameter<double>("minimum_timeout_s", 5.0);
     command_start_timeout_s_ = declare_parameter<double>(
       "command_start_timeout_s", 2.0);
+    arm_motion_start_progress_deg_ = declare_parameter<double>(
+      "arm_motion_start_progress_deg", 1.0);
     no_motion_max_retries_ = declare_parameter<int>(
       "no_motion_max_retries", 4);
     gripper_closed_angle_deg_ = declare_parameter<double>(
@@ -118,7 +137,8 @@ public:
       position_tolerance_rad_ <= 0.0 || stable_samples_ <= 0 ||
       assumed_speed_deg_s_ <= 0.0 || timeout_padding_s_ < 0.0 ||
       minimum_timeout_s_ <= 0.0 || command_start_timeout_s_ <= 0.0 ||
-      no_motion_max_retries_ < 0 || gripper_travel_m_ <= 0.0 ||
+      arm_motion_start_progress_deg_ <= 0.0 || no_motion_max_retries_ < 0 ||
+      gripper_travel_m_ <= 0.0 ||
       gripper_open_angle_deg_ <= gripper_closed_angle_deg_ ||
       gripper_goal_tolerance_deg_ <= 0.0 || gripper_stable_range_deg_ <= 0.0 ||
       gripper_stable_duration_s_ <= 0.0 || gripper_motion_start_deg_ <= 0.0 ||
@@ -464,6 +484,7 @@ private:
       int stable = 0;
       std::uint64_t observed = 0U;
       bool motion_started = false;
+      double directed_progress_rad = 0.0;
       std::array<double, 7> last = initial;
       while (std::chrono::steady_clock::now() < deadline) {
         if (handle->is_canceling()) {
@@ -481,13 +502,15 @@ private:
         }
         last = current;
         if (!motion_started) {
-          for (std::size_t joint = 0; joint < target.size(); ++joint) {
-            motion_started = motion_started ||
-              std::abs(current[joint] - initial[joint]) >= kMotionStartThresholdRadians;
-          }
+          directed_progress_rad = targetDirectedProgress(initial, current, target);
+          motion_started = directed_progress_rad * kRadiansToDegrees >=
+            arm_motion_start_progress_deg_;
           if (motion_started) {
             RCLCPP_INFO(
-              get_logger(), "Arm feedback first moved after %.3f s: current_deg=%s",
+              get_logger(),
+              "Arm feedback made %.2f deg target-directed progress after %.3f s: "
+              "current_deg=%s",
+              directed_progress_rad * kRadiansToDegrees,
               std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - started).count(),
               degreesString(armPositions(current)).c_str());
@@ -526,8 +549,10 @@ private:
           ++no_motion_retries;
           RCLCPP_WARN(
             get_logger(),
-            "Arm has not started %.3f s after send; retrying absolute target (%d/%d)",
-            command_start_timeout_s_, no_motion_retries, no_motion_max_retries_);
+            "Arm has only %.2f deg target-directed progress %.3f s after send; "
+            "retrying absolute target (%d/%d)",
+            directed_progress_rad * kRadiansToDegrees, command_start_timeout_s_,
+            no_motion_retries, no_motion_max_retries_);
           if (!sendSnapshot(snapshot)) {
             result->error_code = Arm::Result::PATH_TOLERANCE_VIOLATED;
             result->error_string = "failed to retry D1 mode=1 arm target";
@@ -710,6 +735,7 @@ private:
   double timeout_padding_s_{3.0};
   double minimum_timeout_s_{5.0};
   double command_start_timeout_s_{2.0};
+  double arm_motion_start_progress_deg_{1.0};
   int no_motion_max_retries_{4};
   double gripper_closed_angle_deg_{-30.0};
   double gripper_open_angle_deg_{60.0};

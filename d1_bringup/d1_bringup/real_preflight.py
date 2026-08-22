@@ -92,8 +92,9 @@ class RealPreflight(Node):
             "gravity_frame": "gravity_frame",
             "expected_acceleration_mps2": 9.80665,
             "acceleration_norm_tolerance_mps2": 1.5,
-            "acceleration_max_component_stddev_mps2": 0.35,
-            "gravity_required_samples": 30,
+            "acceleration_max_component_standard_error_mps2": 0.10,
+            "angular_velocity_max_rms_rad_s": 0.15,
+            "gravity_required_samples": 200,
             "gravity_output_path": "",
             "timeout_s": 20.0,
             "minimum_arm_feedback_samples": 5,
@@ -125,6 +126,9 @@ class RealPreflight(Node):
         self.depth_info_time = None
         self.imu_frame = None
         self.acceleration_samples = deque(
+            maxlen=int(self.get_parameter("gravity_required_samples").value)
+        )
+        self.angular_velocity_samples = deque(
             maxlen=int(self.get_parameter("gravity_required_samples").value)
         )
         self.gravity_published = False
@@ -174,8 +178,11 @@ class RealPreflight(Node):
     def _on_imu(self, message):
         vector = message.linear_acceleration
         sample = (vector.x, vector.y, vector.z)
-        if all(math.isfinite(value) for value in sample):
+        angular = message.angular_velocity
+        angular_sample = (angular.x, angular.y, angular.z)
+        if all(math.isfinite(value) for value in sample + angular_sample):
             self.acceleration_samples.append(sample)
+            self.angular_velocity_samples.append(angular_sample)
             self.imu_frame = message.header.frame_id
 
     def _receive_feedback(self):
@@ -217,18 +224,32 @@ class RealPreflight(Node):
         if self.get_parameter("gravity_source").value != "realsense_accel":
             return False, "unsupported gravity source"
         required = int(self.get_parameter("gravity_required_samples").value)
-        if len(self.acceleration_samples) < required:
-            return False, f"IMU samples {len(self.acceleration_samples)}/{required}"
+        sample_count = min(len(self.acceleration_samples), len(self.angular_velocity_samples))
+        if sample_count < required:
+            return False, f"IMU samples {sample_count}/{required}"
         means = tuple(statistics.fmean(sample[i] for sample in self.acceleration_samples) for i in range(3))
         stddev = tuple(statistics.pstdev(sample[i] for sample in self.acceleration_samples) for i in range(3))
+        standard_error = tuple(value / math.sqrt(sample_count) for value in stddev)
+        angular_rms = tuple(
+            math.sqrt(statistics.fmean(sample[i] ** 2 for sample in self.angular_velocity_samples))
+            for i in range(3)
+        )
         norm = math.sqrt(sum(value * value for value in means))
         expected = float(self.get_parameter("expected_acceleration_mps2").value)
         tolerance = float(self.get_parameter("acceleration_norm_tolerance_mps2").value)
-        max_stddev = float(self.get_parameter("acceleration_max_component_stddev_mps2").value)
+        max_standard_error = float(
+            self.get_parameter("acceleration_max_component_standard_error_mps2").value
+        )
+        max_angular_rms = float(self.get_parameter("angular_velocity_max_rms_rad_s").value)
         if abs(norm - expected) > tolerance:
             return False, f"acceleration norm {norm:.3f} m/s^2 outside {expected:.3f}+/-{tolerance:.3f}"
-        if max(stddev) > max_stddev:
-            return False, f"arm/camera moving: acceleration stddev {max(stddev):.3f} m/s^2"
+        if max(standard_error) > max_standard_error:
+            return False, (
+                "gravity estimate noisy: acceleration standard error "
+                f"{max(standard_error):.3f} m/s^2"
+            )
+        if max(angular_rms) > max_angular_rms:
+            return False, f"arm/camera moving: angular RMS {max(angular_rms):.3f} rad/s"
         parent = str(self.get_parameter("gravity_parent_frame").value)
         if not self.imu_frame:
             return False, "IMU frame_id is empty"
@@ -277,7 +298,11 @@ class RealPreflight(Node):
             except OSError as error:
                 return False, f"cannot persist gravity calibration: {error}"
         self.gravity_published = True
-        return True, f"stationary acceleration norm={norm:.3f} m/s^2, up(base)={up}"
+        return True, (
+            f"stationary acceleration norm={norm:.3f} m/s^2, "
+            f"max_sem={max(standard_error):.3f} m/s^2, "
+            f"max_gyro_rms={max(angular_rms):.3f} rad/s, up(base)={up}"
+        )
 
     def _network_result(self):
         interface = str(self.get_parameter("network_interface").value)

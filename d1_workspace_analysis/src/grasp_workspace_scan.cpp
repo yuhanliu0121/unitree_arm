@@ -206,7 +206,7 @@ public:
       node_, "scan_grasp_distances_m", {-0.040, -0.032, -0.024});
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     stowed_ = parameterOrDeclare<std::vector<double>>(node_,
-      "stowed_joint_positions", {0.0, -1.5, 1.5, 0.0, 0.0, 0.0});
+      "stowed_joint_positions", {0.0, -1.54, 1.55, 0.0, 0.0, 0.0});
     carry_ = parameterOrDeclare<std::vector<double>>(node_,
       "carry_joint_positions", {0.0, -1.54, 1.546, 0.0, -0.6, 1.57});
     const auto link6_from_camera_values = parameterOrDeclare<std::vector<double>>(

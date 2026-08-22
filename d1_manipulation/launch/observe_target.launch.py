@@ -50,6 +50,9 @@ def _launch_setup(context):
     observe_config = Path(
         get_package_share_directory("d1_manipulation")
     ) / "config" / "observe_target.yaml"
+    fixed_poses_config = Path(
+        get_package_share_directory("d1_manipulation")
+    ) / "config" / "fixed_poses.yaml"
     perception_config = Path(
         get_package_share_directory("d1_manipulation")
     ) / "config" / "perception_adapter.yaml"
@@ -82,7 +85,8 @@ def _launch_setup(context):
                 executable="observe_target_server",
                 output="screen",
                 parameters=[
-                    moveit_config.to_dict(), str(observe_config), str(gripper_config),
+                    moveit_config.to_dict(), str(fixed_poses_config),
+                    str(observe_config), str(gripper_config),
                     {"backend": backend, "gravity_frame": gravity_frame},
                 ],
         ),
@@ -91,7 +95,8 @@ def _launch_setup(context):
                 executable="pick_object_server",
                 output="screen",
                 parameters=[
-                    moveit_config.to_dict(), str(observe_config), str(gripper_config),
+                    moveit_config.to_dict(), str(fixed_poses_config),
+                    str(observe_config), str(gripper_config),
                     {
                         "backend": backend,
                         "gravity_frame": gravity_frame,
@@ -103,7 +108,8 @@ def _launch_setup(context):
                 executable="drop_object_server",
                 output="screen",
                 parameters=[
-                    moveit_config.to_dict(), str(observe_config), str(gripper_config),
+                    moveit_config.to_dict(), str(fixed_poses_config),
+                    str(observe_config), str(gripper_config),
                     {"backend": backend, "gravity_frame": gravity_frame},
                 ],
         ),

@@ -262,7 +262,7 @@ def main() -> None:
     # visible on first open. The user must replace this transform manually.
     d1_root.location = (0.0, 0.0, 0.10)
     d1_root["frame"] = "D1 URDF base_link; edit only this object's transform"
-    d1_root["pose_rad"] = "[0, -1.5, 1.5, 0, 0, 0]"
+    d1_root["pose_rad"] = "[0, -1.54, 1.55, 0, 0, 0]"
     d1_root["mount_transform_status"] = "PROVISIONAL - USER MUST ALIGN"
     add_robot(
         name="D1",

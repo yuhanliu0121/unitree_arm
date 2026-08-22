@@ -143,6 +143,19 @@ def _launch_setup(context):
         }.items(),
     )
 
+    readiness = Node(
+        package="d1_bringup",
+        executable="stack_readiness",
+        name="d1_stack_readiness",
+        parameters=[{
+            "color_camera_info_topic": camera["color_camera_info_topic"],
+            "aligned_depth_camera_info_topic": camera[
+                "aligned_depth_camera_info_topic"
+            ],
+        }],
+        output="screen",
+    )
+
     return [
         LogInfo(msg=f"Starting REAL D1 system: serial={arm_serial} config={config_path}"),
         realsense,
@@ -155,6 +168,7 @@ def _launch_setup(context):
             quaternion,
         ),
         manipulation,
+        readiness,
     ]
 
 
