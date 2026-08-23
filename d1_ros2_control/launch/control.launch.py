@@ -22,6 +22,8 @@ def make_control_block(
     command_port: str,
     feedback_port: str,
     joint_limits,
+    command_rate_hz: float,
+    command_duration_ms: int,
     prepare_hardware: bool,
     send_repeated_commands: bool,
     command_output_enabled: bool,
@@ -49,8 +51,10 @@ def make_control_block(
       <param name="gateway_host">127.0.0.1</param>
       <param name="command_port">{command_port}</param>
       <param name="feedback_port">{feedback_port}</param>
-      <param name="command_rate_hz">10.0</param>
+      <param name="command_rate_hz">{command_rate_hz}</param>
+      <param name="command_duration_ms">{command_duration_ms}</param>
       <param name="feedback_timeout_s">1.5</param>
+      <param name="command_limit_tolerance_rad">0.01</param>
       <param name="initial_feedback_timeout_s">10.0</param>
       <param name="hardware_prepare_timeout_s">5.0</param>
       <param name="prepare_hardware">{'true' if prepare_hardware else 'false'}</param>
@@ -95,15 +99,19 @@ def launch_setup(context):
     joint_limits = joint_limits_from_urdf(
         robot_description, [f"Joint{index}" for index in range(7)]
     )
+    command_rate_hz = float(
+        LaunchConfiguration("real_command_rate_hz").perform(context)
+    ) if backend == "real" else 10.0
+    command_duration_ms = int(round(1000.0 / command_rate_hz))
     control_block = make_control_block(
         LaunchConfiguration("command_port").perform(context),
         LaunchConfiguration("feedback_port").perform(context),
         joint_limits,
+        command_rate_hz,
+        command_duration_ms,
         backend == "real",
-        backend != "real",
-        backend != "real",
-        # The hardware plugin publishes commands only in simulation. Real
-        # motion is owned by d1_mode1_controller and always uses mode=1.
+        True,
+        True,
         0,
         LaunchConfiguration("gripper_closed_angle_deg").perform(context),
         LaunchConfiguration("gripper_open_angle_deg").perform(context),
@@ -125,7 +133,9 @@ def launch_setup(context):
         gateway_common.extend(["--interface", interface])
     command_gateway_cmd = gateway_common + [
         "--direction", "command",
+        "--command-transport", "servo_angle" if backend == "real" else "arm_command",
         "--command-topic", LaunchConfiguration("command_topic").perform(context),
+        "--servo-command-topic", LaunchConfiguration("servo_command_topic").perform(context),
         "--command-port", LaunchConfiguration("command_port").perform(context),
         "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
     ]
@@ -178,50 +188,20 @@ def launch_setup(context):
             output="screen",
         )
     ]
-    if backend == "simulation":
-        controller_actions.extend([
-            Node(
-                package="controller_manager",
-                executable="spawner",
-                arguments=["arm_controller", "--controller-manager", "/controller_manager"],
-                output="screen",
-            ),
-            Node(
-                package="controller_manager",
-                executable="spawner",
-                arguments=["gripper_controller", "--controller-manager", "/controller_manager"],
-                output="screen",
-            ),
-        ])
-    else:
-        controller_actions.append(Node(
-            package="d1_ros2_control",
-            executable="d1_mode1_controller",
+    controller_actions.extend([
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=["arm_controller", "--controller-manager", "/controller_manager"],
             output="screen",
-            parameters=[{
-                "command_port": int(LaunchConfiguration("command_port").perform(context)),
-                "lower_limits": [limits[0] for limits in joint_limits],
-                "upper_limits": [limits[1] for limits in joint_limits],
-                "gripper_closed_angle_deg": float(
-                    LaunchConfiguration("gripper_closed_angle_deg").perform(context)
-                ),
-                "gripper_open_angle_deg": float(
-                    LaunchConfiguration("gripper_open_angle_deg").perform(context)
-                ),
-                "gripper_travel_m": float(
-                    LaunchConfiguration("gripper_travel_m").perform(context)
-                ),
-                "command_start_timeout_s": float(
-                    LaunchConfiguration("command_start_timeout_s").perform(context)
-                ),
-                "arm_motion_start_progress_deg": float(
-                    LaunchConfiguration("arm_motion_start_progress_deg").perform(context)
-                ),
-                "no_motion_max_retries": int(
-                    LaunchConfiguration("no_motion_max_retries").perform(context)
-                ),
-            }],
-        ))
+        ),
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=["gripper_controller", "--controller-manager", "/controller_manager"],
+            output="screen",
+        ),
+    ])
 
     return gateway_actions + [
         Node(
@@ -288,13 +268,16 @@ def generate_launch_description():
                 description="D1 native hardware status/ACK topic",
             ),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
+            DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
             DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
+            DeclareLaunchArgument(
+                "real_command_rate_hz",
+                default_value="20.0",
+                description="Physical D1 streamed setpoint rate; validate before increasing",
+            ),
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
             DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
             DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
-            DeclareLaunchArgument("command_start_timeout_s", default_value="2.0"),
-            DeclareLaunchArgument("arm_motion_start_progress_deg", default_value="1.0"),
-            DeclareLaunchArgument("no_motion_max_retries", default_value="4"),
             DeclareLaunchArgument(
                 "rviz",
                 default_value="true",

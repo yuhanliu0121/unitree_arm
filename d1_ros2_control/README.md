@@ -33,51 +33,31 @@ two controllers to command one arm.
   the D1 when necessary, requests the validated `mode=65535` full enable, and
   verifies a fresh powered/enabled status before controllers become active.
 - Simulation commands are range-checked and limited to 10 Hz. Physical motion
-  bypasses the ros2_control write interface and is emitted only by the
-  dedicated mode=1 Action controller.
-- Joint6 completion uses a 2 degree target tolerance. Contact stop is detected
-  only after at least 1 degree of commanded motion, when a 0.55 second rolling
-  window spans no more than 0.3 degree; it does not depend on noisy
-  adjacent-frame velocity estimates or the ROS joint-state publication rate.
-- Completion is evaluated from joint feedback; D1 execution ACK is not used.
-- If a mode=1 absolute target is written but fresh joint feedback shows
-  less than 1 degree of target-directed joint-space progress for 2.0 seconds
-  while the endpoint remains outside its tolerance, the controller resends the
-  same absolute target with a fresh sequence number every two seconds. This
-  rejects feedback noise and motion opposite to the commanded direction. It
-  stops retrying after meaningful progress and aborts after four retries. This
-  applies to both arm and gripper goals.
-- Simulation hardware deactivation sends a measured-position hold. Physical
-  Action cancellation sends a measured-position hold through the unique
-  command owner. Neither mechanism is an emergency stop or a replacement for
-  a vendor-approved hardware stop.
+  uses the standard `joint_trajectory_controller` and
+  `GripperActionController`, with the hardware interface rate-adapting their
+  100 Hz command interfaces to a configurable physical stream (20 Hz by
+  default).
+- Every physical stream sample is a coherent Joint0--6 snapshot. The isolated
+  DDS gateway converts it into seven typed `SetServoAngle_` messages carrying
+  the same sequence number and interpolation duration; it does not use the
+  vendor `funcode=2, mode=1` endpoint wrapper.
+- The gateway drains its local UDP input and forwards only the newest sampled
+  command, preventing old trajectory samples from accumulating after a host
+  scheduling delay.
+- Joint feedback remains authoritative for motion and completion. The 100 Hz
+  ros2_control loop may read the most recent sample repeatedly, while freshness
+  and velocity calculations use the native feedback arrival time.
+- Physical deployment is paired with `unitree-d1-streaming-control`'s onboard dispatcher, which assembles a
+  complete seven-message group and gives one I/O thread exclusive ownership of
+  the D1 serial protocol. This prevents feedback queries from interleaving a
+  seven-servo command burst.
+- Hardware deactivation emits one short measured-position target. This is not
+  an emergency stop or a replacement for a vendor-approved hardware stop.
 
-On physical hardware, `d1_mode1_controller` is the sole motion-command owner.
-It implements the standard arm and gripper Action names expected by MoveIt,
-keeps one coherent seven-joint target, and emits complete D1
-`funcode=2, mode=1` snapshots. Arm goals update Joint0--5 while preserving the
-commanded gripper target; gripper goals update Joint6 while preserving the arm
-target. The ros2_control hardware plugin remains responsible for preparation
-and feedback publication but its physical command output is disabled.
-
-Simulation continues to use the standard ros2_control trajectory and gripper
-controllers. Canceling a physical arm goal holds measured Joint0--5 while
-preserving the active gripper target; canceling a gripper goal holds its
-measured opening.
-
-The physical arm Action currently sends the final MoveIt trajectory endpoint
-as one vendor-smoothed joint goal. It does not replay every planned waypoint;
-real collision avoidance therefore remains a staged-validation boundary until
-the D1 interface exposes trajectory timing or sparse waypoint execution is
-added and validated.
-
-For physical-command diagnosis, the controller logs the initial and requested
-Joint0--5 angles, preserved Joint6 target, local UDP sequence, first observed
-motion, final feedback, and timeout error. The command gateway logs every
-native JSON payload and its local/native sequence pair. The status gateway logs
-matching D1 receive and execution acknowledgements from `rt/arm_Feedback`.
-`DDS Write accepted` only means the message entered the DDS writer; joint
-feedback remains the authority for motion start and endpoint completion.
+The former `d1_mode1_controller` executable remains installed only as a
+rollback/debugging artifact. Normal launch no longer starts it; both simulation
+and real hardware use the community `ros2_control` controllers configured in
+`controllers.yaml`.
 
 `d1_mode1_gripper_goal.py` is a low-level diagnostic helper, not a normal task
 interface. It bypasses the Action controller, so stop and restart the real

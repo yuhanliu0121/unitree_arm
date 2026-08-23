@@ -31,7 +31,7 @@ class JointPacket(ctypes.Structure):
         ("kind", ctypes.c_uint16),
         ("sequence", ctypes.c_uint64),
         ("smoothing_mode", ctypes.c_uint32),
-        ("reserved", ctypes.c_uint32),
+        ("duration_ms", ctypes.c_uint32),
         ("angle_deg", ctypes.c_double * 7),
     ]
 

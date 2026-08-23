@@ -45,13 +45,6 @@ def _launch_setup(context):
     arm_serial = requested_arm_serial if backend == "real" else ""
     moveit_config = build_moveit_config(arm_serial)
     move_group_parameters = moveit_config.to_dict()
-    if backend == "real":
-        # The D1 mode=1 endpoint controller may need several bounded retries
-        # before the firmware begins physical motion.  Keep MoveIt's outer
-        # execution watchdog wider than that feedback-verified retry window.
-        move_group_parameters["trajectory_execution"][
-            "allowed_goal_duration_margin"
-        ] = 12.0
     control_launch = Path(
         get_package_share_directory("d1_ros2_control")
     ) / "launch" / "control.launch.py"
@@ -78,6 +71,7 @@ def _launch_setup(context):
                     "command_port": LaunchConfiguration("command_port"),
                     "feedback_port": LaunchConfiguration("feedback_port"),
                     "command_topic": LaunchConfiguration("command_topic"),
+                    "servo_command_topic": LaunchConfiguration("servo_command_topic"),
                     "feedback_topic": LaunchConfiguration("feedback_topic"),
                     "status_topic": LaunchConfiguration("status_topic"),
                     "gripper_closed_angle_deg": LaunchConfiguration("gripper_closed_angle_deg"),
@@ -134,6 +128,7 @@ def generate_launch_description():
             DeclareLaunchArgument("command_port", default_value="15000"),
             DeclareLaunchArgument("feedback_port", default_value="15001"),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
+            DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
             DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
             DeclareLaunchArgument("status_topic", default_value="rt/arm_Feedback"),
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),

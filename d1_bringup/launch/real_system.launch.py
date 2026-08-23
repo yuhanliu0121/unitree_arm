@@ -66,6 +66,11 @@ def _launch_setup(context):
         )
 
     arm = config["arm"]
+    if not bool(arm.get("onboard_streaming_deployed", False)):
+        raise RuntimeError(
+            "real_system requires the grouped D1 onboard streaming controller; "
+            "deploy and verify it before setting arm.onboard_streaming_deployed: true"
+        )
     camera = config["wrist_camera"]
     site = config["site"]
     gravity_config = site["gravity"]
@@ -135,6 +140,8 @@ def _launch_setup(context):
             "command_port": str(arm["loopback_command_port"]),
             "feedback_port": str(arm["loopback_feedback_port"]),
             "command_topic": arm["command_topic"],
+            "servo_command_topic": arm["servo_command_topic"],
+            "real_command_rate_hz": str(arm["command_rate_hz"]),
             "feedback_topic": arm["feedback_topic"],
             "status_topic": arm["status_topic"],
             "gripper_closed_angle_deg": str(arm["gripper_closed_angle_deg"]),

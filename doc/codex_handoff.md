@@ -8,7 +8,18 @@
 
 当前工作区已经实现并验证：
 
-- 真机控制链已统一：`d1_mode1_controller` 同时实现 MoveIt 使用的
+- 2026-08-23 已实现新的真机关节流式执行链：MoveIt 继续使用标准
+  `joint_trajectory_controller` 与 `gripper_action_controller`，
+  `D1SystemHardware` 以 20 Hz 采样控制器目标，隔离 DDS gateway 把每个完整
+  七关节快照转换成同序列号的 `set_servo_angle` 消息；新增板端
+  `unitree-d1-streaming-control` 板端执行器将七条消息成组后交给唯一串口线程连续下发，并在
+  同一线程发布约 10 Hz 反馈。该设计复用 ROS 2 Control 的轨迹插值、容差、
+  Action 和取消语义，只自行实现 D1 SDK 缺失的批量关节传输部分。
+- 主机代码已编译，仿真固定方块抓取回归通过；板端程序已在 D1 计算机的
+  `/tmp` 中编译通过，但**尚未替换厂商 `marm_controller.service`，也尚未做
+  真机运动验证**。部署前必须备份厂商程序并准备一键回滚。
+
+- 以下为上一版真机控制链记录，现仅作为回滚背景：`d1_mode1_controller` 同时实现 MoveIt 使用的
   `/arm_controller/follow_joint_trajectory` 与
   `/gripper_controller/gripper_cmd`，是 Joint0～6 唯一运动命令所有者；
   所有真机动作均发送完整 `funcode=2, mode=1` 七关节快照。机械臂目标只

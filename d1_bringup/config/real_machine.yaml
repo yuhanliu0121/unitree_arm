@@ -16,6 +16,13 @@ arm:
   # Unitree native DDS domain, independent of ROS_DOMAIN_ID.
   d1_native_domain_id: 0
   command_topic: rt/arm_Command
+  # Physical streaming path. The onboard dispatcher assembles all seven
+  # messages sharing one sequence number before touching the serial bus.
+  servo_command_topic: set_servo_angle
+  command_rate_hz: 20.0
+  # Keep false until d1_streaming_controller_node has replaced the vendor
+  # marm_controller service and its rollback path has been verified.
+  onboard_streaming_deployed: false
   feedback_topic: current_servo_angle
   status_topic: rt/arm_Feedback
   loopback_command_port: 15100

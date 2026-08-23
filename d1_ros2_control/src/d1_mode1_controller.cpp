@@ -1,4 +1,4 @@
-#include "d1_ros2_control/local_protocol.hpp"
+#include "d1_streaming_control/local_protocol.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -34,6 +34,9 @@ using namespace std::chrono_literals;
 
 namespace d1_ros2_control
 {
+using d1_streaming_control::JointPacket;
+using d1_streaming_control::PacketKind;
+
 namespace
 {
 constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;

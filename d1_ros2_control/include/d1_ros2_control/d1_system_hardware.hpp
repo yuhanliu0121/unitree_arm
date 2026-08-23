@@ -70,12 +70,15 @@ private:
   std::array<double, 7> last_published_command_{};
   std::array<double, 7> lower_limits_{};
   std::array<double, 7> upper_limits_{};
+  std::array<bool, 7> limit_clamp_reported_{};
 
   std::string gateway_host_{"127.0.0.1"};
   int command_port_{15000};
   int feedback_port_{15001};
   double command_rate_hz_{10.0};
+  int command_duration_ms_{0};
   double feedback_timeout_s_{0.5};
+  double command_limit_tolerance_rad_{0.01};
   double initial_feedback_timeout_s_{10.0};
   double hardware_prepare_timeout_s_{5.0};
   int smoothing_mode_{0};

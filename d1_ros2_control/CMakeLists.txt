@@ -55,8 +55,12 @@ foreach(required_value
 endforeach()
 
 set(D1_SDK_MSG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../D1_SDK/src/msg")
+set(D1_STREAMING_CONTROL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../unitree-d1-streaming-control")
 if(NOT EXISTS "${D1_SDK_MSG_DIR}/ArmString_.hpp")
   message(FATAL_ERROR "Expected D1 SDK messages at ${D1_SDK_MSG_DIR}")
+endif()
+if(NOT EXISTS "${D1_STREAMING_CONTROL_DIR}/host/src/d1_dds_gateway.cpp")
+  message(FATAL_ERROR "Expected unitree-d1-streaming-control at ${D1_STREAMING_CONTROL_DIR}")
 endif()
 
 add_library(
@@ -71,6 +75,7 @@ target_include_directories(
   ${PROJECT_NAME}
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${D1_STREAMING_CONTROL_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(
@@ -83,15 +88,17 @@ ament_target_dependencies(
 
 add_executable(
   d1_dds_gateway
-  src/d1_dds_gateway.cpp
+  ${D1_STREAMING_CONTROL_DIR}/host/src/d1_dds_gateway.cpp
   ${D1_SDK_MSG_DIR}/ArmString_.cpp
   ${D1_SDK_MSG_DIR}/PubServoInfo_.cpp
+  ${D1_SDK_MSG_DIR}/SetServoAngle_.cpp
 )
 target_compile_features(d1_dds_gateway PUBLIC cxx_std_17)
 target_include_directories(
   d1_dds_gateway
   PRIVATE
     include
+    ${D1_STREAMING_CONTROL_DIR}/include
     ${D1_SDK_MSG_DIR}
     ${UNITREE_SDK2_INCLUDE_DIR}
     ${CYCLONEDDS_CXX_INCLUDE_DIR}
@@ -115,7 +122,8 @@ target_link_options(
 
 add_executable(d1_mode1_controller src/d1_mode1_controller.cpp)
 target_compile_features(d1_mode1_controller PUBLIC cxx_std_17)
-target_include_directories(d1_mode1_controller PRIVATE include)
+target_include_directories(
+  d1_mode1_controller PRIVATE include ${D1_STREAMING_CONTROL_DIR}/include)
 ament_target_dependencies(
   d1_mode1_controller
   control_msgs
@@ -131,6 +139,10 @@ pluginlib_export_plugin_description_file(
 
 install(
   DIRECTORY include/
+  DESTINATION include
+)
+install(
+  DIRECTORY ${D1_STREAMING_CONTROL_DIR}/include/d1_streaming_control
   DESTINATION include
 )
 install(

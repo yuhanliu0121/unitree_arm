@@ -10,6 +10,8 @@ wrist-mounted RealSense D435i, and a fixed-cube grasp acceptance flow.
 - `d1_constrained_description_20260728`: calibrated URDF, meshes and display.
 - `d1_mujoco_sim`: physics scene, D1 DDS protocol and wrist RGB-D publishers.
 - `d1_ros2_control`: D1 hardware interface and trajectory controllers.
+- `unitree-d1-streaming-control`: unofficial Unitree D1 robotic-arm streaming-control extension with the host gateway and D1-computer serial dispatcher for complete
+  seven-joint streamed setpoints; built and deployed separately from ROS 2.
 - `d1_moveit_config`: MoveIt planning and RViz configuration.
 - `d1_grasp_demo`: grasp baseline and application-level fixed poses.
 - `d1_manipulation`: gravity-aligned eye-in-hand observation Action and

@@ -1,6 +1,6 @@
 #include "d1_ros2_control/d1_system_hardware.hpp"
 
-#include "d1_ros2_control/local_protocol.hpp"
+#include "d1_streaming_control/local_protocol.hpp"
 
 #include <hardware_interface/types/hardware_interface_type_values.hpp>
 #include <pluginlib/class_list_macros.hpp>
@@ -21,6 +21,11 @@
 
 namespace d1_ros2_control
 {
+using d1_streaming_control::JointPacket;
+using d1_streaming_control::PacketKind;
+using d1_streaming_control::kD1JointCount;
+using d1_streaming_control::packet_header_is_valid;
+
 namespace
 {
 
@@ -207,7 +212,10 @@ hardware_interface::CallbackReturn D1SystemHardware::on_init(
     command_port_ = parameter_as_int(info, "command_port", 15000);
     feedback_port_ = parameter_as_int(info, "feedback_port", 15001);
     command_rate_hz_ = parameter_as_double(info, "command_rate_hz", 10.0);
+    command_duration_ms_ = parameter_as_int(info, "command_duration_ms", 0);
     feedback_timeout_s_ = parameter_as_double(info, "feedback_timeout_s", 0.5);
+    command_limit_tolerance_rad_ = parameter_as_double(
+      info, "command_limit_tolerance_rad", 0.01);
     initial_feedback_timeout_s_ = parameter_as_double(
       info, "initial_feedback_timeout_s", 10.0);
     hardware_prepare_timeout_s_ = parameter_as_double(
@@ -231,11 +239,14 @@ hardware_interface::CallbackReturn D1SystemHardware::on_init(
   }
 
   if (info.joints.size() != kJointCount || command_rate_hz_ <= 0.0 ||
-      feedback_timeout_s_ <= 0.0 || initial_feedback_timeout_s_ <= 0.0 ||
+      feedback_timeout_s_ <= 0.0 || command_limit_tolerance_rad_ < 0.0 ||
+      initial_feedback_timeout_s_ <= 0.0 ||
       hardware_prepare_timeout_s_ <= 0.0 ||
       command_port_ <= 0 || command_port_ > 65535 ||
       feedback_port_ <= 0 || feedback_port_ > 65535 ||
-      command_port_ == feedback_port_ || gripper_travel_m_ <= 0.0 ||
+      command_port_ == feedback_port_ || command_duration_ms_ < 0 ||
+      command_duration_ms_ > std::numeric_limits<std::int16_t>::max() ||
+      gripper_travel_m_ <= 0.0 ||
       gripper_open_angle_deg_ <= gripper_closed_angle_deg_ ||
       (smoothing_mode_ != 0 && smoothing_mode_ != 1))
   {
@@ -275,8 +286,9 @@ hardware_interface::CallbackReturn D1SystemHardware::on_init(
   }
 
   RCLCPP_INFO(
-    kLogger, "Initialized D1 hardware contract: gateway %s:%d, command %.2f Hz",
-    gateway_host_.c_str(), command_port_, command_rate_hz_);
+    kLogger,
+    "Initialized D1 hardware contract: gateway %s:%d, command %.2f Hz, duration %d ms",
+    gateway_host_.c_str(), command_port_, command_rate_hz_, command_duration_ms_);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -621,7 +633,7 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
     return true;
   }
 
-  std::array<double, kJointCount> clamped{};
+  std::array<double, kJointCount> validated{};
   for (std::size_t index = 0; index < kJointCount; ++index)
   {
     if (!std::isfinite(command_position_[index]))
@@ -629,7 +641,36 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
       RCLCPP_ERROR(kLogger, "Non-finite command for Joint%zu", index);
       return false;
     }
-    clamped[index] = std::clamp(
+    constexpr double kLimitEpsilon = 1e-9;
+    if (command_position_[index] <
+          lower_limits_[index] - command_limit_tolerance_rad_ - kLimitEpsilon ||
+        command_position_[index] >
+          upper_limits_[index] + command_limit_tolerance_rad_ + kLimitEpsilon)
+    {
+      RCLCPP_ERROR(
+        kLogger, "Rejected out-of-range command for Joint%zu: %.9f not in [%.9f, %.9f]",
+        index, command_position_[index], lower_limits_[index], upper_limits_[index]);
+      return false;
+    }
+    const bool needs_clamp = command_position_[index] < lower_limits_[index] ||
+      command_position_[index] > upper_limits_[index];
+    if (needs_clamp && !limit_clamp_reported_[index])
+    {
+      RCLCPP_WARN(
+        kLogger,
+        "Clamping Joint%zu by %.4f deg inside the configured %.4f deg calibration margin",
+        index,
+        std::min(
+          std::abs(command_position_[index] - lower_limits_[index]),
+          std::abs(command_position_[index] - upper_limits_[index])) * 180.0 / kPi,
+        command_limit_tolerance_rad_ * 180.0 / kPi);
+      limit_clamp_reported_[index] = true;
+    }
+    else if (!needs_clamp)
+    {
+      limit_clamp_reported_[index] = false;
+    }
+    validated[index] = std::clamp(
       command_position_[index], lower_limits_[index], upper_limits_[index]);
   }
 
@@ -638,7 +679,7 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
   {
     constexpr double kCommandChangeEpsilon = 1e-7;
     const bool changed = std::equal(
-      clamped.begin(), clamped.end(), last_published_command_.begin(),
+      validated.begin(), validated.end(), last_published_command_.begin(),
       [](const double current, const double previous)
       {
         return std::abs(current - previous) <= kCommandChangeEpsilon;
@@ -653,12 +694,18 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
   packet.kind = PacketKind::command;
   packet.sequence = sequence_++;
   packet.smoothing_mode = static_cast<std::uint32_t>(smoothing_mode_);
+  double duration_ms = command_duration_ms_ > 0
+    ? static_cast<double>(command_duration_ms_)
+    : minimum_period * 1000.0;
+  packet.duration_ms = static_cast<std::uint32_t>(std::clamp(
+      std::lround(duration_ms), 1L,
+      static_cast<long>(std::numeric_limits<std::int16_t>::max())));
   for (std::size_t index = 0; index < 6; ++index)
   {
-    packet.angle_deg[index] = clamped[index] * 180.0 / kPi;
+    packet.angle_deg[index] = validated[index] * 180.0 / kPi;
   }
   const double gripper_ratio = std::clamp(
-    clamped[6] / gripper_travel_m_, 0.0, 1.0);
+    validated[6] / gripper_travel_m_, 0.0, 1.0);
   packet.angle_deg[6] = gripper_closed_angle_deg_ + gripper_ratio *
     (gripper_open_angle_deg_ - gripper_closed_angle_deg_);
 
@@ -666,7 +713,7 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
   {
     return false;
   }
-  last_published_command_ = clamped;
+  last_published_command_ = validated;
   last_published_command_valid_ = true;
   last_write_time_ = now;
   return true;
