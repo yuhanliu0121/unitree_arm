@@ -12,7 +12,12 @@ find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(sensor_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/ExecuteJointSegment.action"
+)
 
 find_path(
   UNITREE_SDK2_INCLUDE_DIR
@@ -63,23 +68,25 @@ if(NOT EXISTS "${D1_STREAMING_CONTROL_DIR}/host/src/d1_dds_gateway.cpp")
   message(FATAL_ERROR "Expected unitree-d1-streaming-control at ${D1_STREAMING_CONTROL_DIR}")
 endif()
 
+set(D1_HARDWARE_TARGET ${PROJECT_NAME}_hardware)
 add_library(
-  ${PROJECT_NAME}
+  ${D1_HARDWARE_TARGET}
   SHARED
   src/d1_system_hardware.cpp
 )
 
-target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
-target_compile_definitions(${PROJECT_NAME} PRIVATE D1_ROS2_CONTROL_BUILDING_DLL)
+set_target_properties(${D1_HARDWARE_TARGET} PROPERTIES OUTPUT_NAME ${PROJECT_NAME})
+target_compile_features(${D1_HARDWARE_TARGET} PUBLIC cxx_std_17)
+target_compile_definitions(${D1_HARDWARE_TARGET} PRIVATE D1_ROS2_CONTROL_BUILDING_DLL)
 target_include_directories(
-  ${PROJECT_NAME}
+  ${D1_HARDWARE_TARGET}
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${D1_STREAMING_CONTROL_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(
-  ${PROJECT_NAME}
+  ${D1_HARDWARE_TARGET}
   hardware_interface
   pluginlib
   rclcpp
@@ -120,17 +127,20 @@ target_link_options(
   PRIVATE "-Wl,--disable-new-dtags,-rpath,/usr/local/lib"
 )
 
-add_executable(d1_mode1_controller src/d1_mode1_controller.cpp)
-target_compile_features(d1_mode1_controller PUBLIC cxx_std_17)
+add_executable(d1_native_segment_controller src/d1_mode1_controller.cpp)
+target_compile_features(d1_native_segment_controller PUBLIC cxx_std_17)
 target_include_directories(
-  d1_mode1_controller PRIVATE include ${D1_STREAMING_CONTROL_DIR}/include)
+  d1_native_segment_controller PRIVATE include ${D1_STREAMING_CONTROL_DIR}/include)
 ament_target_dependencies(
-  d1_mode1_controller
+  d1_native_segment_controller
   control_msgs
   rclcpp
   rclcpp_action
   sensor_msgs
 )
+rosidl_get_typesupport_target(d1_controller_typesupport_target
+  ${PROJECT_NAME} rosidl_typesupport_cpp)
+target_link_libraries(d1_native_segment_controller "${d1_controller_typesupport_target}")
 
 pluginlib_export_plugin_description_file(
   hardware_interface
@@ -154,13 +164,13 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 install(
-  TARGETS ${PROJECT_NAME}
+  TARGETS ${D1_HARDWARE_TARGET}
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
 )
 install(
-  TARGETS d1_dds_gateway d1_mode1_controller
+  TARGETS d1_dds_gateway d1_native_segment_controller
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(
@@ -169,5 +179,6 @@ install(
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+ament_export_dependencies(
+  hardware_interface pluginlib rclcpp rclcpp_lifecycle rosidl_default_runtime)
 ament_package()

@@ -72,6 +72,14 @@ def _launch_setup(context):
                     "feedback_port": LaunchConfiguration("feedback_port"),
                     "command_topic": LaunchConfiguration("command_topic"),
                     "servo_command_topic": LaunchConfiguration("servo_command_topic"),
+                    "native_segment_topic": LaunchConfiguration("native_segment_topic"),
+                    "native_joint_speed_deg_s": LaunchConfiguration(
+                        "native_joint_speed_deg_s"
+                    ),
+                    "real_command_rate_hz": LaunchConfiguration("real_command_rate_hz"),
+                    "real_command_duration_ms": LaunchConfiguration(
+                        "real_command_duration_ms"
+                    ),
                     "feedback_topic": LaunchConfiguration("feedback_topic"),
                     "status_topic": LaunchConfiguration("status_topic"),
                     "gripper_closed_angle_deg": LaunchConfiguration("gripper_closed_angle_deg"),
@@ -129,6 +137,12 @@ def generate_launch_description():
             DeclareLaunchArgument("feedback_port", default_value="15001"),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
             DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
+            DeclareLaunchArgument(
+                "native_segment_topic", default_value="d1_native_joint_segment"
+            ),
+            DeclareLaunchArgument("native_joint_speed_deg_s", default_value="15.0"),
+            DeclareLaunchArgument("real_command_rate_hz", default_value="20.0"),
+            DeclareLaunchArgument("real_command_duration_ms", default_value="0"),
             DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
             DeclareLaunchArgument("status_topic", default_value="rt/arm_Feedback"),
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),

@@ -92,7 +92,7 @@ private:
   bool configured_{false};
   bool active_{false};
   bool last_published_command_valid_{false};
-  std::chrono::steady_clock::time_point last_write_time_{};
+  double command_time_budget_s_{0.0};
   std::chrono::steady_clock::time_point last_state_sample_time_{};
 };
 

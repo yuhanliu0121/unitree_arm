@@ -80,12 +80,16 @@ d1_pick_object:
     zucchini_pregrasp_distance_max_m: 0.080
     zucchini_pregrasp_distance_min_m: 0.015
     zucchini_pregrasp_distance_step_m: 0.005
-    zucchini_tcp_ground_clearance_m: 0.015
+    zucchini_tcp_ground_clearance_m: 0.001
+    zucchini_tcp_ground_clearance_max_m: 0.015
+    zucchini_tcp_ground_clearance_step_m: 0.002
+    zucchini_joint5_motion_weight: 2.0
     bowl_pregrasp_distance_max_m: 0.080
     bowl_pregrasp_distance_min_m: 0.015
     bowl_pregrasp_distance_step_m: 0.005
     bowl_radius_m: 0.058
     bowl_height_m: 0.05001143
+    bowl_joint5_motion_weight: 2.0
     planning_time_s: 5.0
     planning_attempts: 6
     velocity_scaling: 0.10

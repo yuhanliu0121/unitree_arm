@@ -32,3 +32,16 @@ the arm/gripper command Actions, and `pick_object`/`drop_object`. Once every
 dependency is live it prints a prominent green `D1 REAL CONTROL STACK READY`
 banner. If readiness takes longer than 60 seconds it prints the missing items in
 red and continues waiting; no task is sent automatically.
+# Streaming STOWED recovery
+
+With `real_bringup.zsh` already running, recover the arm without switching back
+to the vendor controller:
+
+```bash
+./arm_stowed_streaming.zsh --confirm STOWED_MOVE
+```
+
+The command first sends Joint0--5 to the canonical STOWED pose while preserving
+the current gripper target, then fully opens Joint6. It refuses to run when the
+streaming Action servers are unavailable. Ctrl+C cancels the active Action and
+asks the controller to hold the measured position.

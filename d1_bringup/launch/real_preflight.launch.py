@@ -100,7 +100,8 @@ def _launch_setup(context):
         },
         output="screen",
     )
-    status_gateway = ExecuteProcess(
+    onboard_executor = bool(arm.get("onboard_streaming_deployed", False))
+    status_gateway = None if onboard_executor else ExecuteProcess(
         cmd=[str(gateway),
             "--domain", str(arm["d1_native_domain_id"]),
             "--interface", arm["network_interface"],
@@ -190,6 +191,7 @@ def _launch_setup(context):
             "feedback_max_age_s": preflight_config["feedback_max_age_s"],
             "camera_info_max_age_s": preflight_config["camera_info_max_age_s"],
             "joint_limit_tolerance_rad": preflight_config["joint_limit_tolerance_rad"],
+            "require_arm_hardware_status": not onboard_executor,
             "joint_limits": limits,
         }],
         output="screen",
@@ -202,7 +204,7 @@ def _launch_setup(context):
     )
     return [
         feedback_gateway,
-        status_gateway,
+        *([] if status_gateway is None else [status_gateway]),
         realsense,
         robot_state_publisher,
         mount_tf,

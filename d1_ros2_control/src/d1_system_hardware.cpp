@@ -398,7 +398,7 @@ hardware_interface::CallbackReturn D1SystemHardware::on_activate(
         return hardware_interface::CallbackReturn::ERROR;
       }
       command_position_ = state_position_;
-      last_write_time_ = {};
+      command_time_budget_s_ = 0.0;
       last_published_command_valid_ = false;
       active_ = true;
       RCLCPP_INFO(kLogger, "Activated D1 hardware from live joint feedback");
@@ -524,7 +524,7 @@ hardware_interface::return_type D1SystemHardware::read(
 }
 
 hardware_interface::return_type D1SystemHardware::write(
-  const rclcpp::Time &, const rclcpp::Duration &)
+  const rclcpp::Time &, const rclcpp::Duration & period)
 {
   if (!active_)
   {
@@ -533,6 +533,11 @@ hardware_interface::return_type D1SystemHardware::write(
   if (!command_output_enabled_)
   {
     return hardware_interface::return_type::OK;
+  }
+  const double elapsed_s = period.seconds();
+  if (std::isfinite(elapsed_s) && elapsed_s > 0.0)
+  {
+    command_time_budget_s_ += elapsed_s;
   }
   return publish_command(false)
            ? hardware_interface::return_type::OK
@@ -625,10 +630,9 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
   {
     return false;
   }
-  const auto now = std::chrono::steady_clock::now();
   const double minimum_period = 1.0 / command_rate_hz_;
-  if (!ignore_rate_limit && last_write_time_.time_since_epoch().count() != 0 &&
-      std::chrono::duration<double>(now - last_write_time_).count() < minimum_period)
+  if (!ignore_rate_limit && last_published_command_valid_ &&
+      command_time_budget_s_ + 1e-9 < minimum_period)
   {
     return true;
   }
@@ -715,7 +719,16 @@ bool D1SystemHardware::publish_command(bool ignore_rate_limit)
   }
   last_published_command_ = validated;
   last_published_command_valid_ = true;
-  last_write_time_ = now;
+  if (ignore_rate_limit)
+  {
+    command_time_budget_s_ = 0.0;
+  }
+  else
+  {
+    command_time_budget_s_ = std::max(0.0, command_time_budget_s_ - minimum_period);
+    // Do not accumulate an unbounded burst after a delayed controller cycle.
+    command_time_budget_s_ = std::min(command_time_budget_s_, minimum_period);
+  }
   return true;
 }
 
@@ -725,6 +738,7 @@ void D1SystemHardware::shutdown_transport()
   configured_ = false;
   last_published_command_valid_ = false;
   last_state_sample_time_ = {};
+  command_time_budget_s_ = 0.0;
   impl_.reset();
 }
 

@@ -102,16 +102,21 @@ def launch_setup(context):
     command_rate_hz = float(
         LaunchConfiguration("real_command_rate_hz").perform(context)
     ) if backend == "real" else 10.0
-    command_duration_ms = int(round(1000.0 / command_rate_hz))
+    requested_duration_ms = int(
+        LaunchConfiguration("real_command_duration_ms").perform(context)
+    ) if backend == "real" else 0
+    if requested_duration_ms < 0 or requested_duration_ms > 32767:
+        raise RuntimeError("real_command_duration_ms must be in [0, 32767]")
+    command_duration_ms = requested_duration_ms or int(round(1000.0 / command_rate_hz))
     control_block = make_control_block(
         LaunchConfiguration("command_port").perform(context),
         LaunchConfiguration("feedback_port").perform(context),
         joint_limits,
         command_rate_hz,
         command_duration_ms,
-        backend == "real",
-        True,
-        True,
+        False,
+        backend != "real",
+        backend != "real",
         0,
         LaunchConfiguration("gripper_closed_angle_deg").perform(context),
         LaunchConfiguration("gripper_open_angle_deg").perform(context),
@@ -136,6 +141,7 @@ def launch_setup(context):
         "--command-transport", "servo_angle" if backend == "real" else "arm_command",
         "--command-topic", LaunchConfiguration("command_topic").perform(context),
         "--servo-command-topic", LaunchConfiguration("servo_command_topic").perform(context),
+        "--native-segment-topic", LaunchConfiguration("native_segment_topic").perform(context),
         "--command-port", LaunchConfiguration("command_port").perform(context),
         "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
     ]
@@ -170,15 +176,9 @@ def launch_setup(context):
             output="screen",
         ),
     ]
-    if backend == "real":
-        gateway_actions.append(ExecuteProcess(
-            cmd=status_gateway_cmd,
-            additional_env={
-                "LD_LIBRARY_PATH": "/usr/local/lib:"
-                + os.environ.get("LD_LIBRARY_PATH", "")
-            },
-            output="screen",
-        ))
+    # The enhanced onboard executor publishes measured joints directly and
+    # owns serial preparation. The vendor rt/arm_Feedback status publisher is
+    # intentionally absent in this real backend.
 
     controller_actions = [
         Node(
@@ -188,20 +188,48 @@ def launch_setup(context):
             output="screen",
         )
     ]
-    controller_actions.extend([
-        Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=["arm_controller", "--controller-manager", "/controller_manager"],
+    if backend == "simulation":
+        controller_actions.extend([
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=["arm_controller", "--controller-manager", "/controller_manager"],
+                output="screen",
+            ),
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=["gripper_controller", "--controller-manager", "/controller_manager"],
+                output="screen",
+            ),
+        ])
+    else:
+        controller_actions.append(Node(
+            package="d1_ros2_control",
+            executable="d1_native_segment_controller",
+            name="d1_native_segment_controller",
+            parameters=[{
+                "gateway_host": "127.0.0.1",
+                "command_port": int(LaunchConfiguration("command_port").perform(context)),
+                "native_joint_speed_deg_s": float(
+                    LaunchConfiguration("native_joint_speed_deg_s").perform(context)
+                ),
+                "gripper_closed_angle_deg": float(
+                    LaunchConfiguration("gripper_closed_angle_deg").perform(context)
+                ),
+                "gripper_open_angle_deg": float(
+                    LaunchConfiguration("gripper_open_angle_deg").perform(context)
+                ),
+                "gripper_travel_m": float(
+                    LaunchConfiguration("gripper_travel_m").perform(context)
+                ),
+                "lower_limits": [float(value[0]) for value in joint_limits[:6]] + [0.0],
+                "upper_limits": [float(value[1]) for value in joint_limits[:6]] + [
+                    float(LaunchConfiguration("gripper_travel_m").perform(context))
+                ],
+            }],
             output="screen",
-        ),
-        Node(
-            package="controller_manager",
-            executable="spawner",
-            arguments=["gripper_controller", "--controller-manager", "/controller_manager"],
-            output="screen",
-        ),
-    ])
+        ))
 
     return gateway_actions + [
         Node(
@@ -269,11 +297,27 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
             DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
+            DeclareLaunchArgument(
+                "native_segment_topic", default_value="d1_native_joint_segment"
+            ),
+            DeclareLaunchArgument(
+                "native_joint_speed_deg_s",
+                default_value="15.0",
+                description="Nominal physical D1 arm-joint speed in degrees/second",
+            ),
             DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
             DeclareLaunchArgument(
                 "real_command_rate_hz",
                 default_value="20.0",
                 description="Physical D1 streamed setpoint rate; validate before increasing",
+            ),
+            DeclareLaunchArgument(
+                "real_command_duration_ms",
+                default_value="0",
+                description=(
+                    "Physical servo interpolation duration in milliseconds; "
+                    "0 derives it from real_command_rate_hz"
+                ),
             ),
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
             DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),

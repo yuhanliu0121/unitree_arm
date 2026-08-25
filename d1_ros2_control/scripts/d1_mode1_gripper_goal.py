@@ -20,7 +20,7 @@ from sensor_msgs.msg import JointState
 
 
 MAGIC = 0x44314350
-VERSION = 1
+VERSION = 2
 COMMAND_KIND = 1
 
 
@@ -32,11 +32,13 @@ class JointPacket(ctypes.Structure):
         ("sequence", ctypes.c_uint64),
         ("smoothing_mode", ctypes.c_uint32),
         ("duration_ms", ctypes.c_uint32),
+        ("acceleration_ms", ctypes.c_uint32),
+        ("deceleration_ms", ctypes.c_uint32),
         ("angle_deg", ctypes.c_double * 7),
     ]
 
 
-assert ctypes.sizeof(JointPacket) == 80
+assert ctypes.sizeof(JointPacket) == 88
 
 
 class FeedbackReader(Node):

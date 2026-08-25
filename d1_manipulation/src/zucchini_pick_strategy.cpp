@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <future>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -52,11 +53,43 @@ std_msgs::msg::ColorRGBA color(float r, float g, float b, float a = 1.0F)
   return value;
 }
 
+bool jointMotionCost(
+  const std::vector<std::string>& joint_names,
+  const std::vector<double>& start,
+  const std::vector<double>& goal,
+  double joint5_weight, double& cost)
+{
+  if (start.size() != goal.size() || start.size() != joint_names.size()) return false;
+  cost = 0.0;
+  for (std::size_t index = 0; index < goal.size(); ++index) {
+    const double delta = goal[index] - start[index];
+    const double weight = joint_names[index] == "Joint5" ? joint5_weight : 1.0;
+    cost += weight * delta * delta;
+  }
+  return true;
+}
+
+struct ZucchiniCandidate
+{
+  geometry_msgs::msg::Pose pregrasp_pose;
+  geometry_msgs::msg::Pose grasp_pose;
+  Eigen::Matrix3d rotation{Eigen::Matrix3d::Identity()};
+  Eigen::Vector3d closing{Eigen::Vector3d::UnitY()};
+  std::vector<double> joint_target;
+  double pregrasp_distance{0.0};
+  double grasp_clearance{0.0};
+  double yaw_degrees{0.0};
+  double motion_cost{std::numeric_limits<double>::infinity()};
+  bool grasp_feasible{false};
+};
+
 struct ZucchiniState final : PickStrategyState
 {
   Eigen::Vector3d grasp_point{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d gravity_up{Eigen::Vector3d::UnitZ()};
   Eigen::Matrix3d grasp_rotation{Eigen::Matrix3d::Identity()};
   Eigen::Matrix3d object_rotation{Eigen::Matrix3d::Identity()};
+  std::vector<double> grasp_clearances;
   std::vector<std::string> target_collision_ids;
 };
 
@@ -130,6 +163,12 @@ public:
     pregrasp_step_ = parameterOrDeclare(node_, "zucchini_pregrasp_distance_step_m", 0.005);
     tcp_ground_clearance_ = parameterOrDeclare(
       node_, "zucchini_tcp_ground_clearance_m", 0.015);
+    tcp_ground_clearance_max_ = parameterOrDeclare(
+      node_, "zucchini_tcp_ground_clearance_max_m", 0.025);
+    tcp_ground_clearance_step_ = parameterOrDeclare(
+      node_, "zucchini_tcp_ground_clearance_step_m", 0.002);
+    joint5_motion_weight_ = parameterOrDeclare(
+      node_, "zucchini_joint5_motion_weight", 2.0);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
     gripper_closed_ = parameterOrDeclare(node_, "zucchini_gripper_closed_m", 0.01);
     gripper_held_threshold_ = parameterOrDeclare(
@@ -138,7 +177,10 @@ public:
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     if (length_ <= 0.0 || width_ <= 0.0 || height_ <= 0.0 ||
       pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ || pregrasp_step_ <= 0.0 ||
-      tcp_ground_clearance_ < 0.0 || gripper_closed_ < 0.0 ||
+      tcp_ground_clearance_ < 0.0 ||
+      tcp_ground_clearance_max_ < tcp_ground_clearance_ ||
+      tcp_ground_clearance_step_ <= 0.0 || joint5_motion_weight_ <= 0.0 ||
+      gripper_closed_ < 0.0 ||
       gripper_held_threshold_ <= gripper_closed_ || gripper_held_threshold_ > gripper_open_)
     {
       throw std::invalid_argument("invalid zucchini geometry or grasp search parameters");
@@ -206,12 +248,11 @@ public:
         "ESTIMATE_POSE", "zucchini local axis is invalid"};
       return false;
     }
-    // The zucchini has no reliable planar top surface. Preserve the
-    // fine-estimated tangent-plane position, but derive TCP height directly
-    // from the ground plane refitted during the fine observation.
+    // Project the perceived centre along gravity onto the fine-observation
+    // ground plane, then place the preferred TCP point 5 mm above that plane.
     const double center_ground_distance = up.dot(center) + fine->ground_offset;
-    const Eigen::Vector3d grasp_point =
-      center + (tcp_ground_clearance_ - center_ground_distance) * up;
+    const Eigen::Vector3d ground_point = center - center_ground_distance * up;
+    const Eigen::Vector3d grasp_point = ground_point + tcp_ground_clearance_ * up;
     RCLCPP_INFO(node_->get_logger(),
       "Zucchini fine geometry: center=(%.3f, %.3f, %.3f) axis=(%.3f, %.3f, %.3f) "
       "visible=(%.3f x %.3f) tcp_ground_clearance=%.0f mm",
@@ -221,16 +262,35 @@ public:
     const std::vector<std::string> target_ids{"zucchini", "observe_target"};
     const auto target_objects = runtime_.planningScene().getObjects(target_ids);
     const auto pregrasp_distances = descending(pregrasp_max_, pregrasp_min_, pregrasp_step_);
+    const auto grasp_clearances = ascending(
+      tcp_ground_clearance_, tcp_ground_clearance_max_, tcp_ground_clearance_step_);
 
-    geometry_msgs::msg::Pose grasp, pregrasp;
+    ZucchiniCandidate selected;
     moveit::planning_interface::MoveGroupInterface::Plan selected_plan;
-    Eigen::Matrix3d selected_rotation = Eigen::Matrix3d::Identity();
-    Eigen::Vector3d selected_closing = up.cross(axis).normalized();
-    double selected_pregrasp = 0.0, selected_grasp = 0.0;
-    double selected_yaw = 0.0, selected_tilt = 0.0;
+    std::size_t selected_ik_candidates = 0;
+    std::size_t selected_descent_candidates = 0;
+    std::size_t full_plan_attempts = 0;
     bool found = false;
     auto& move_group = runtime_.moveGroup();
+    move_group.setEndEffectorLink(runtime_.tcpFrame());
     for (const double pregrasp_distance : pregrasp_distances) {
+      const auto current_state = move_group.getCurrentState();
+      if (!current_state) {
+        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+          "PLAN_PREGRASP", "current robot state is unavailable for zucchini candidate ranking"};
+        return false;
+      }
+      const auto* joint_group = current_state->getJointModelGroup(move_group.getName());
+      if (!joint_group) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "PLAN_PREGRASP", "MoveIt arm joint model group is unavailable"};
+        return false;
+      }
+      std::vector<double> current_joints;
+      current_state->copyJointGroupPositions(joint_group, current_joints);
+      const auto joint_names = joint_group->getVariableNames();
+      std::vector<ZucchiniCandidate> candidates;
+
       for (const double direction_sign : {1.0, -1.0}) {
         const Eigen::Vector3d closing = direction_sign * up.cross(axis).normalized();
         const Eigen::Vector3d z = -up;
@@ -241,42 +301,121 @@ public:
         const Eigen::Vector3d x = y.cross(z).normalized();
         Eigen::Matrix3d vertical;
         vertical.col(0) = x; vertical.col(1) = y; vertical.col(2) = z;
-        for (const double tilt_deg : {2.0, -2.0, 4.0, -4.0}) {
-          Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-          transform.linear() = vertical *
-            Eigen::AngleAxisd(tilt_deg * M_PI / 180.0, Eigen::Vector3d::UnitX());
-          transform.translation() = grasp_point + pregrasp_distance * up;
-          pregrasp = poseMessage(transform);
-          move_group.setEndEffectorLink(runtime_.tcpFrame());
-          move_group.setStartStateToCurrentState();
-          if (!move_group.setJointValueTarget(pregrasp, runtime_.tcpFrame())) continue;
-          moveit::planning_interface::MoveGroupInterface::Plan plan;
-          if (move_group.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
-          if (!runtime_.removeTargetCollision(target_ids)) {
-            failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
-              "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
-            return false;
-          }
-          transform.translation() = grasp_point;
-          moveit_msgs::msg::RobotTrajectory descent;
-          if (runtime_.computeCartesianFromPlanEnd(
-              plan, poseMessage(transform), true, descent) >= runtime_.minimumCartesianFraction())
-          {
-            grasp = poseMessage(transform); selected_plan = plan;
-            selected_rotation = transform.rotation(); selected_closing = closing;
-            selected_pregrasp = pregrasp_distance;
-            selected_grasp = tcp_ground_clearance_;
-            selected_yaw = std::atan2(closing.y(), closing.x()) * 180.0 / M_PI;
-            selected_tilt = tilt_deg; found = true;
-          }
-          if (!runtime_.restoreTargetCollision(target_objects)) {
-            failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
-              "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
-            return false;
-          }
-          if (found) break;
+        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+        transform.linear() = vertical;
+        transform.translation() = grasp_point + pregrasp_distance * up;
+        const auto pregrasp_pose = poseMessage(transform);
+        move_group.setStartStateToCurrentState();
+        if (!move_group.setJointValueTarget(pregrasp_pose, runtime_.tcpFrame())) continue;
+        std::vector<double> joint_target;
+        move_group.getJointValueTarget(joint_target);
+        auto endpoint_state = *current_state;
+        endpoint_state.setJointGroupPositions(joint_group, joint_target);
+        endpoint_state.update();
+        if (!endpoint_state.satisfiesBounds(joint_group)) continue;
+        double motion_cost = 0.0;
+        if (!jointMotionCost(
+            joint_names, current_joints, joint_target, joint5_motion_weight_, motion_cost))
+        {
+          continue;
         }
-        if (found) break;
+        ZucchiniCandidate candidate;
+        candidate.pregrasp_pose = pregrasp_pose;
+        candidate.rotation = vertical;
+        candidate.closing = closing;
+        candidate.joint_target = std::move(joint_target);
+        candidate.pregrasp_distance = pregrasp_distance;
+        candidate.yaw_degrees = std::atan2(closing.y(), closing.x()) * 180.0 / M_PI;
+        candidate.motion_cost = motion_cost;
+        candidates.push_back(std::move(candidate));
+      }
+
+      if (!runtime_.removeTargetCollision(target_ids)) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
+        return false;
+      }
+      for (auto& candidate : candidates) {
+        auto endpoint_state = *current_state;
+        endpoint_state.setJointGroupPositions(joint_group, candidate.joint_target);
+        endpoint_state.update();
+        move_group.setStartState(endpoint_state);
+        for (const double clearance : grasp_clearances) {
+          Eigen::Isometry3d grasp_transform = Eigen::Isometry3d::Identity();
+          grasp_transform.linear() = candidate.rotation;
+          grasp_transform.translation() = ground_point + clearance * up;
+          moveit_msgs::msg::RobotTrajectory descent;
+          const auto grasp_pose = poseMessage(grasp_transform);
+          const double fraction = move_group.computeCartesianPath(
+            {grasp_pose}, runtime_.cartesianStep(), 0.0, descent, true);
+          if (fraction < runtime_.minimumCartesianFraction()) continue;
+          candidate.grasp_pose = grasp_pose;
+          candidate.grasp_clearance = clearance;
+          candidate.grasp_feasible = true;
+          break;
+        }
+      }
+      if (!runtime_.restoreTargetCollision(target_objects)) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
+        return false;
+      }
+
+      const std::size_t ik_candidates = candidates.size();
+      candidates.erase(
+        std::remove_if(candidates.begin(), candidates.end(), [](const auto& candidate) {
+          return !candidate.grasp_feasible;
+        }),
+        candidates.end());
+      const std::size_t descent_candidates = candidates.size();
+      std::stable_sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
+        constexpr double kTolerance = 1e-9;
+        if (std::abs(lhs.grasp_clearance - rhs.grasp_clearance) > kTolerance) {
+          return lhs.grasp_clearance < rhs.grasp_clearance;
+        }
+        return lhs.motion_cost < rhs.motion_cost;
+      });
+      RCLCPP_INFO(node_->get_logger(),
+        "Zucchini candidate ranking: pregrasp=%+.0f mm feasible=%zu/%zu; "
+        "policy=lowest_ground_clearance_first, then minimum_weighted_joint_motion "
+        "(Joint5 weight %.1f)",
+        1000.0 * pregrasp_distance, descent_candidates, ik_candidates,
+        joint5_motion_weight_);
+
+      for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
+        const auto& candidate = candidates[rank];
+        ++full_plan_attempts;
+        RCLCPP_INFO(node_->get_logger(),
+          "Zucchini candidate attempt rank=%zu/%zu pregrasp=%+.0f mm "
+          "tcp_ground_clearance=%.0f mm yaw=%.1f deg tilt=0.0 deg "
+          "joint_motion_cost=%.4f",
+          rank + 1, candidates.size(), 1000.0 * candidate.pregrasp_distance,
+          1000.0 * candidate.grasp_clearance, candidate.yaw_degrees,
+          candidate.motion_cost);
+        move_group.setStartStateToCurrentState();
+        if (!move_group.setJointValueTarget(candidate.joint_target)) continue;
+        moveit::planning_interface::MoveGroupInterface::Plan plan;
+        if (move_group.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
+        if (!runtime_.removeTargetCollision(target_ids)) {
+          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+            "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
+          return false;
+        }
+        moveit_msgs::msg::RobotTrajectory verified_descent;
+        const double fraction = runtime_.computeCartesianFromPlanEnd(
+          plan, candidate.grasp_pose, true, verified_descent);
+        if (!runtime_.restoreTargetCollision(target_objects)) {
+          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+            "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
+          return false;
+        }
+        if (fraction < runtime_.minimumCartesianFraction()) continue;
+        selected = candidate;
+        selected_plan = std::move(plan);
+        selected_ik_candidates = ik_candidates;
+        selected_descent_candidates = descent_candidates;
+        found = true;
+        break;
       }
       if (found) break;
     }
@@ -287,27 +426,32 @@ public:
     }
 
     output.class_name = class_name_; output.estimated_center = fine->center;
-    output.grasp_pose = grasp; output.pregrasp_pose = pregrasp;
+    output.grasp_pose = selected.grasp_pose; output.pregrasp_pose = selected.pregrasp_pose;
     output.pregrasp_plan = std::move(selected_plan); output.lift_direction = up;
-    output.pregrasp_distance_m = selected_pregrasp;
-    output.grasp_distance_m = selected_grasp;
-    output.grasp_yaw_degrees = selected_yaw;
-    output.approach_tilt_degrees = selected_tilt;
+    output.pregrasp_distance_m = selected.pregrasp_distance;
+    output.grasp_distance_m = selected.grasp_clearance;
+    output.grasp_yaw_degrees = selected.yaw_degrees;
+    output.approach_tilt_degrees = 0.0;
     output.gripper_open_m = gripper_open_; output.gripper_closed_m = gripper_closed_;
     output.gripper_held_threshold_m = gripper_held_threshold_;
     output.grasp_settle_s = grasp_settle_; output.lift_distance_m = lift_distance_;
     auto state = std::make_shared<ZucchiniState>();
-    state->grasp_point = grasp_point; state->grasp_rotation = selected_rotation;
+    state->grasp_point = grasp_point; state->gravity_up = up;
+    state->grasp_rotation = selected.rotation;
+    state->grasp_clearances = grasp_clearances;
     state->object_rotation.col(0) = axis;
-    state->object_rotation.col(1) = selected_closing;
+    state->object_rotation.col(1) = selected.closing;
     state->object_rotation.col(2) = up;
     state->target_collision_ids = target_ids;
     output.strategy_state = std::move(state);
-    publishMarkers(*coarse, *fine, output, axis, selected_closing);
+    publishMarkers(*coarse, *fine, output, axis, selected.closing);
     RCLCPP_INFO(node_->get_logger(),
       "Zucchini strategy selected pregrasp=%+.0f mm tcp_ground_clearance=%.0f mm "
-      "yaw=%.1f deg tilt=%.1f deg",
-      1000.0 * selected_pregrasp, 1000.0 * selected_grasp, selected_yaw, selected_tilt);
+      "yaw=%.1f deg tilt=0.0 deg joint_motion_cost=%.4f "
+      "IK_candidates=%zu descent_candidates=%zu full_plan_attempts=%zu",
+      1000.0 * selected.pregrasp_distance, 1000.0 * selected.grasp_clearance,
+      selected.yaw_degrees, selected.motion_cost, selected_ik_candidates,
+      selected_descent_candidates, full_plan_attempts);
     return true;
   }
 
@@ -325,22 +469,44 @@ public:
       return false;
     }
     auto& move_group = runtime_.moveGroup();
-    Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-    transform.linear() = state->grasp_rotation;
-    transform.translation() = state->grasp_point;
-    move_group.setStartStateToCurrentState();
-    moveit_msgs::msg::RobotTrajectory descent;
-    if (move_group.computeCartesianPath(
-        {poseMessage(transform)}, runtime_.cartesianStep(), 0.0, descent, true) >=
-      runtime_.minimumCartesianFraction())
-    {
+    const auto descent_start = move_group.getCurrentState(2.0);
+    if (!descent_start) {
+      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        "DESCEND", "current robot state is unavailable at the actual zucchini pregrasp"};
+      return false;
+    }
+    std::size_t rejected_clearances = 0;
+    for (const double clearance : state->grasp_clearances) {
+      Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+      transform.linear() = state->grasp_rotation;
+      transform.translation() = state->grasp_point +
+        (clearance - tcp_ground_clearance_) * state->gravity_up;
+      move_group.setStartState(*descent_start);
+      moveit_msgs::msg::RobotTrajectory descent;
+      const double fraction = move_group.computeCartesianPath(
+        {poseMessage(transform)}, runtime_.cartesianStep(), 0.0, descent, true);
+      if (fraction < runtime_.minimumCartesianFraction()) {
+        RCLCPP_WARN(node_->get_logger(),
+          "Zucchini live descent rejected: tcp_ground_clearance=%.0f mm "
+          "fraction=%.1f%% required=%.1f%%",
+          1000.0 * clearance, 100.0 * fraction,
+          100.0 * runtime_.minimumCartesianFraction());
+        ++rejected_clearances;
+        continue;
+      }
+      RCLCPP_INFO(node_->get_logger(),
+        "Zucchini live descent selected: tcp_ground_clearance=%.0f mm "
+        "fraction=%.1f%% after_rejecting_deeper_targets=%zu "
+        "reason=first_complete_live_cartesian_path",
+        1000.0 * clearance, 100.0 * fraction, rejected_clearances);
       plan.grasp_pose = poseMessage(transform);
-      plan.grasp_distance_m = tcp_ground_clearance_;
+      plan.grasp_distance_m = clearance;
       plan.descent_trajectory = std::move(descent);
       return true;
     }
     failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
-      "DESCEND", "ground-referenced zucchini grasp is unreachable from pregrasp; reposition Go2"};
+      "DESCEND", "no ground-referenced zucchini grasp height is reachable from the actual "
+      "pregrasp; reposition Go2"};
     return false;
   }
 
@@ -399,6 +565,13 @@ private:
   {
     std::vector<double> values;
     for (double value = first; value >= last - 1e-9; value -= step) values.push_back(value);
+    return values;
+  }
+
+  static std::vector<double> ascending(double first, double last, double step)
+  {
+    std::vector<double> values;
+    for (double value = first; value <= last + 1e-9; value += step) values.push_back(value);
     return values;
   }
 
@@ -476,7 +649,8 @@ private:
   std::string estimate_name_;
   double length_{}, width_{}, height_{};
   double pregrasp_max_{}, pregrasp_min_{}, pregrasp_step_{};
-  double tcp_ground_clearance_{};
+  double tcp_ground_clearance_{}, tcp_ground_clearance_max_{}, tcp_ground_clearance_step_{};
+  double joint5_motion_weight_{};
   double gripper_open_{}, gripper_closed_{}, gripper_held_threshold_{};
   double grasp_settle_{}, lift_distance_{};
 };

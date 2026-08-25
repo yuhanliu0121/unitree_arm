@@ -1,0 +1,13 @@
+uint8 UNIFORM_JOINT_SPEED=0
+uint8 COMMON_ARRIVAL=1
+
+string[] joint_names
+float64[] positions
+uint8 motion_profile
+float64 speed_deg_s
+---
+bool success
+string detail
+float64 maximum_error_rad
+---
+float64 maximum_error_rad

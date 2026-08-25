@@ -103,6 +103,8 @@ configs/                 相机、模型、类别尺寸和 dog/arm 配置
 perception_runtime/      可复用 Python 包
 tests/                   深度过滤回归测试
 weights/best.pt          冻结发布权重
+weights/paper_objects_dev_best.pt
+                         纸制物体真机开发权重；不作为正式发布权重
 captures/                按 S 后生成的快照（运行时创建）
 run_visualization.cmd    Windows 可视化入口
 run_visualization.sh     Linux 可视化入口

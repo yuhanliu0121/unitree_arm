@@ -60,7 +60,17 @@ def _launch_setup(context):
         get_package_share_directory("d1_manipulation")
     ) / "config" / f"gripper_{backend}.yaml"
     workspace_root = Path(get_package_prefix("d1_manipulation")).parents[1]
-
+    runtime_root = workspace_root / "perception_runtime_v1"
+    requested_model = LaunchConfiguration("perception_model_path").perform(context).strip()
+    if requested_model:
+        perception_model = Path(requested_model).expanduser()
+        if not perception_model.is_absolute():
+            perception_model = runtime_root / perception_model
+    else:
+        model_name = "paper_objects_dev_best.pt" if backend == "real" else "best.pt"
+        perception_model = runtime_root / "weights" / model_name
+    if not perception_model.is_file():
+        raise RuntimeError(f"perception model is unavailable: {perception_model}")
     return [
         IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(str(move_group_launch)),
@@ -74,7 +84,14 @@ def _launch_setup(context):
                     "feedback_port": LaunchConfiguration("feedback_port"),
                     "command_topic": LaunchConfiguration("command_topic"),
                     "servo_command_topic": LaunchConfiguration("servo_command_topic"),
+                    "native_segment_topic": LaunchConfiguration("native_segment_topic"),
+                    "native_joint_speed_deg_s": LaunchConfiguration(
+                        "native_joint_speed_deg_s"
+                    ),
                     "real_command_rate_hz": LaunchConfiguration("real_command_rate_hz"),
+                    "real_command_duration_ms": LaunchConfiguration(
+                        "real_command_duration_ms"
+                    ),
                     "feedback_topic": LaunchConfiguration("feedback_topic"),
                     "status_topic": LaunchConfiguration("status_topic"),
                     "gripper_closed_angle_deg": LaunchConfiguration("gripper_closed_angle_deg"),
@@ -89,7 +106,10 @@ def _launch_setup(context):
                 parameters=[
                     moveit_config.to_dict(), str(fixed_poses_config),
                     str(observe_config), str(gripper_config),
-                    {"backend": backend, "gravity_frame": gravity_frame},
+                    {
+                        "backend": backend,
+                        "gravity_frame": gravity_frame,
+                    },
                 ],
         ),
         Node(
@@ -112,7 +132,10 @@ def _launch_setup(context):
                 parameters=[
                     moveit_config.to_dict(), str(fixed_poses_config),
                     str(observe_config), str(gripper_config),
-                    {"backend": backend, "gravity_frame": gravity_frame},
+                    {
+                        "backend": backend,
+                        "gravity_frame": gravity_frame,
+                    },
                 ],
         ),
         Node(
@@ -123,9 +146,8 @@ def _launch_setup(context):
                     str(perception_config),
                     str(gripper_config),
                     {
-                        "perception_runtime_root": str(
-                            workspace_root / "perception_runtime_v1"
-                        ),
+                        "perception_runtime_root": str(runtime_root),
+                        "model_path": str(perception_model),
                         "gravity_frame": gravity_frame,
                     },
                 ],
@@ -148,13 +170,26 @@ def generate_launch_description():
                 description="Explicit physical D1 serial for per-unit URDF adjustments",
             ),
             DeclareLaunchArgument("gravity_frame", default_value="world"),
+            DeclareLaunchArgument(
+                "perception_model_path",
+                default_value="",
+                description=(
+                    "Optional perception weight path. Relative paths are resolved "
+                    "under perception_runtime_v1; empty selects the backend default."
+                ),
+            ),
             DeclareLaunchArgument("dds_domain_id", default_value="42"),
             DeclareLaunchArgument("interface", default_value=""),
             DeclareLaunchArgument("command_port", default_value="15000"),
             DeclareLaunchArgument("feedback_port", default_value="15001"),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
             DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
+            DeclareLaunchArgument(
+                "native_segment_topic", default_value="d1_native_joint_segment"
+            ),
+            DeclareLaunchArgument("native_joint_speed_deg_s", default_value="15.0"),
             DeclareLaunchArgument("real_command_rate_hz", default_value="20.0"),
+            DeclareLaunchArgument("real_command_duration_ms", default_value="0"),
             DeclareLaunchArgument("feedback_topic", default_value="current_servo_angle"),
             DeclareLaunchArgument("status_topic", default_value="rt/arm_Feedback"),
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),

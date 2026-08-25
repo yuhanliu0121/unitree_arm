@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 import logging
 import time
 from typing import Callable
@@ -283,7 +282,7 @@ class D1Simulator:
         command_period = 1.0 / float(
             self.config["controller"]["command_rate_limit_hz"]
         )
-        pending_payloads: deque[str] = deque()
+        pending_payload: str | None = None
         last_scene_state_time = -np.inf
         scene_state_period = 1.0 / float(
             self.config.get("scene_state", {}).get("publish_rate_hz", 25.0)
@@ -301,14 +300,19 @@ class D1Simulator:
             if viewer is not None and not viewer.is_running():
                 break
             for payload in take_commands():
-                pending_payloads.append(payload)
+                # Joint position streaming has latest-value semantics.  A FIFO
+                # would replay stale setpoints after even a brief scheduling
+                # delay and make physical state lag progressively behind the
+                # current ros2_control trajectory.
+                pending_payload = payload
 
             now = time.monotonic()
             if (
-                pending_payloads
+                pending_payload is not None
                 and now - self.last_command_time >= command_period
             ):
-                _, responses = self.handle_payload(pending_payloads.popleft())
+                _, responses = self.handle_payload(pending_payload)
+                pending_payload = None
                 for response in responses:
                     write_feedback(response)
                 self.last_command_time = now

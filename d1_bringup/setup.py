@@ -15,6 +15,7 @@ setup(
         ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools"],
+    tests_require=["pytest"],
     zip_safe=True,
     maintainer="D1 Bringup Maintainers",
     maintainer_email="maintainer@example.com",
@@ -23,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "real_preflight = d1_bringup.real_preflight:main",
+            "recover_stowed = d1_bringup.recover_stowed:main",
             "stack_readiness = d1_bringup.stack_readiness:main",
         ],
     },

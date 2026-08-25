@@ -16,13 +16,20 @@ arm:
   # Unitree native DDS domain, independent of ROS_DOMAIN_ID.
   d1_native_domain_id: 0
   command_topic: rt/arm_Command
-  # Physical streaming path. The onboard dispatcher assembles all seven
-  # messages sharing one sequence number before touching the serial bus.
+  # Complete seven-joint native long segments.
+  native_segment_topic: d1_native_joint_segment
+  # Default speed for the standard FollowJointTrajectory compatibility path.
+  # Task-specific execution requests carry their profile and speed explicitly.
+  native_joint_speed_deg_s: 15.0
+  # High-rate SetServoAngle remains available only for diagnostics.
   servo_command_topic: set_servo_angle
   command_rate_hz: 20.0
-  # Keep false until d1_streaming_controller_node has replaced the vendor
-  # marm_controller service and its rollback path has been verified.
-  onboard_streaming_deployed: false
+  # 0 derives the servo interpolation duration from command_rate_hz. A
+  # positive value is an explicit real-machine tuning override.
+  command_duration_ms: 0
+  # The thin onboard native-segment executor is deployed as its own systemd service; the
+  # untouched vendor service has been exercised as the rollback path.
+  onboard_streaming_deployed: true
   feedback_topic: current_servo_angle
   status_topic: rt/arm_Feedback
   loopback_command_port: 15100

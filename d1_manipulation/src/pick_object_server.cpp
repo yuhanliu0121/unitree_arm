@@ -22,11 +22,11 @@
 #include <moveit/robot_trajectory/robot_trajectory.h>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <moveit_msgs/msg/object_color.hpp>
-#include <moveit/trajectory_processing/iterative_time_parameterization.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -36,6 +36,8 @@
 #include "d1_manipulation/action/pick_object.hpp"
 #include "d1_manipulation/pick_strategy.hpp"
 #include "d1_manipulation/srv/detect_target.hpp"
+#include "d1_manipulation/trajectory_smoothing.hpp"
+#include "d1_ros2_control/action/execute_joint_segment.hpp"
 
 using namespace std::chrono_literals;
 
@@ -80,7 +82,19 @@ public:
   using PickHandle = rclcpp_action::ServerGoalHandle<Pick>;
   using Observe = action::ObserveTarget;
   using Arm = control_msgs::action::FollowJointTrajectory;
+  using Segment = d1_ros2_control::action::ExecuteJointSegment;
   using Gripper = control_msgs::action::GripperCommand;
+
+  struct ExecutionOptions
+  {
+    uint8_t motion_profile{Segment::Goal::UNIFORM_JOINT_SPEED};
+    double speed_deg_s{15.0};
+
+    static ExecutionOptions commonArrival(double speed_deg_s = 15.0)
+    {
+      return {Segment::Goal::COMMON_ARRIVAL, speed_deg_s};
+    }
+  };
 
   explicit PickObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
@@ -96,6 +110,7 @@ public:
     detect_name_ = parameterOrDeclare(
       node_, "target_detection_service_name", std::string("/arm/perception/detect_target"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
+    gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     link6_frame_ = parameterOrDeclare(node_, "link6_frame", std::string("Link6"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
     camera_frame_ = parameterOrDeclare(node_, "color_optical_frame", std::string("wrist_camera_color_optical_frame"));
@@ -124,6 +139,8 @@ public:
     gripper_safe_open_angle_deg_ = parameterOrDeclare(
       node_, "gripper_safe_open_angle_deg", 60.0);
     gripper_travel_m_ = parameterOrDeclare(node_, "gripper_travel_m", 0.03);
+    debug_resume_joint_tolerance_ = parameterOrDeclare(
+      node_, "debug_resume_joint_tolerance_rad", 0.087266463);
     if (stowed_.size() != 6 || stowed_tolerance_ <= 0.0 ||
       stowed_recovery_max_delta_ <= stowed_tolerance_ ||
       stowed_recovery_duration_ <= 0.0 || stowed_recovery_timeout_ <= 0.0)
@@ -136,6 +153,9 @@ public:
       gripper_safe_open_angle_deg_ <= gripper_safe_closed_angle_deg_)
     {
       throw std::invalid_argument("invalid gripper verification parameters");
+    }
+    if (debug_resume_joint_tolerance_ <= 0.0) {
+      throw std::invalid_argument("debug_resume_joint_tolerance_rad must be positive");
     }
 
     move_group_.setEndEffectorLink(tcp_frame_);
@@ -152,6 +172,8 @@ public:
     detect_client_ = node_->create_client<srv::DetectTarget>(detect_name_);
     arm_client_ = rclcpp_action::create_client<Arm>(
       node_, "/arm_controller/follow_joint_trajectory");
+    segment_client_ = rclcpp_action::create_client<Segment>(
+      node_, "/arm_controller/execute_joint_segment");
     gripper_client_ = rclcpp_action::create_client<Gripper>(
       node_, "/gripper_controller/gripper_cmd");
     joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
@@ -192,12 +214,132 @@ public:
       [this](const std::shared_ptr<PickHandle> handle) {
         std::thread([this, handle]() { execute(handle); }).detach();
       });
+    debug_service_callback_group_ = node_->create_callback_group(
+      rclcpp::CallbackGroupType::MutuallyExclusive);
+    continue_descend_service_ = node_->create_service<std_srvs::srv::Trigger>(
+      "/arm/debug/continue_descend",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+      {
+        continueDescend(response);
+      }, rmw_qos_profile_services_default, debug_service_callback_group_);
     RCLCPP_INFO(
-      node_->get_logger(), "PickObject action server ready: %s backend=%s",
+      node_->get_logger(),
+      "PickObject action server ready: %s backend=%s debug_resume=/arm/debug/continue_descend",
       action_name_.c_str(), backend_.c_str());
   }
 
 private:
+  void clearDebugPregrasp()
+  {
+    std::lock_guard<std::mutex> lock(debug_pregrasp_mutex_);
+    debug_pregrasp_.reset();
+    debug_pregrasp_class_.clear();
+  }
+
+  bool stillAtDebugPregrasp(const PreparedPick& prepared, std::string& detail)
+  {
+    const auto& trajectory = prepared.pregrasp_plan.trajectory_.joint_trajectory;
+    if (trajectory.points.empty()) {
+      detail = "cached pregrasp trajectory has no endpoint";
+      return false;
+    }
+    const auto state = move_group_.getCurrentState(2.0);
+    if (!state) {
+      detail = "current arm joint feedback is unavailable";
+      return false;
+    }
+    const auto& endpoint = trajectory.points.back();
+    if (endpoint.positions.size() != trajectory.joint_names.size()) {
+      detail = "cached pregrasp endpoint is malformed";
+      return false;
+    }
+    double maximum_error = 0.0;
+    std::string worst_joint;
+    for (std::size_t i = 0; i < trajectory.joint_names.size(); ++i) {
+      const double error = std::abs(
+        state->getVariablePosition(trajectory.joint_names[i]) - endpoint.positions[i]);
+      if (error > maximum_error) {
+        maximum_error = error;
+        worst_joint = trajectory.joint_names[i];
+      }
+    }
+    if (maximum_error > debug_resume_joint_tolerance_) {
+      std::ostringstream message;
+      message << std::fixed << std::setprecision(1)
+              << "arm moved away from cached pregrasp: " << worst_joint
+              << " error=" << maximum_error * 180.0 / M_PI
+              << " deg, limit=" << debug_resume_joint_tolerance_ * 180.0 / M_PI << " deg";
+      detail = message.str();
+      return false;
+    }
+    detail = "current arm remains at cached pregrasp";
+    return true;
+  }
+
+  void continueDescend(const std::shared_ptr<std_srvs::srv::Trigger::Response>& response)
+  {
+    if (pick_executing_.load()) {
+      response->success = false;
+      response->message = "pick action is still executing";
+      return;
+    }
+
+    std::shared_ptr<PreparedPick> prepared;
+    std::string class_name;
+    {
+      std::lock_guard<std::mutex> lock(debug_pregrasp_mutex_);
+      prepared = debug_pregrasp_;
+      class_name = debug_pregrasp_class_;
+    }
+    if (!prepared) {
+      response->success = false;
+      response->message = "no cached pregrasp; first run pick_object with stop_after: 1";
+      return;
+    }
+
+    std::string pregrasp_detail;
+    if (!stillAtDebugPregrasp(*prepared, pregrasp_detail)) {
+      clearDebugPregrasp();
+      response->success = false;
+      response->message = pregrasp_detail + "; cached plan discarded";
+      return;
+    }
+    const auto strategy_entry = strategies_.find(class_name);
+    if (strategy_entry == strategies_.end()) {
+      clearDebugPregrasp();
+      response->success = false;
+      response->message = "cached grasp strategy is unavailable";
+      return;
+    }
+
+    // A cached pregrasp is deliberately single-use. Re-run the staged pick if
+    // descent planning or execution fails instead of replaying stale geometry.
+    clearDebugPregrasp();
+    cancel_.store(false);
+    StrategyFailure failure;
+    if (!strategy_entry->second->confirmDescent(*prepared, failure)) {
+      response->success = false;
+      response->message = failure.state + ": " + failure.detail;
+      return;
+    }
+    RCLCPP_INFO(
+      node_->get_logger(), "DEBUG DESCEND confirmed: class=%s distance=%+.0f mm",
+      class_name.c_str(), 1000.0 * prepared->grasp_distance_m);
+    if (!executeTrajectory(
+        prepared->descent_trajectory, ExecutionOptions::commonArrival()))
+    {
+      response->success = false;
+      response->message = "DESCEND execution failed; motion stopped with gripper open";
+      return;
+    }
+    response->success = true;
+    std::ostringstream message;
+    message << class_name << " DESCEND reached " << std::fixed << std::setprecision(0)
+            << prepared->grasp_distance_m * 1000.0 << " mm with gripper open";
+    response->message = message.str();
+  }
+
   void feedback(const std::shared_ptr<PickHandle>& handle, const std::string& state,
     float progress, const std::string& detail)
   {
@@ -326,6 +468,7 @@ private:
     move_group_.stop();
     std::lock_guard<std::mutex> lock(active_goals_mutex_);
     if (active_arm_goal_) arm_client_->async_cancel_goal(active_arm_goal_);
+    if (active_segment_goal_) segment_client_->async_cancel_goal(active_segment_goal_);
     if (active_observe_goal_) observe_client_->async_cancel_goal(active_observe_goal_);
     if (active_gripper_goal_) gripper_client_->async_cancel_goal(active_gripper_goal_);
   }
@@ -410,6 +553,15 @@ public:
   const std::string& planningFrame() const override { return planning_frame_; }
   const std::string& tcpFrame() const override { return tcp_frame_; }
   const std::string& link6Frame() const override { return link6_frame_; }
+  Eigen::Vector3d gravityUp() override
+  {
+    const auto transform = lookup(planning_frame_, gravity_frame_);
+    const Eigen::Vector3d up = transform.rotation() * Eigen::Vector3d::UnitZ();
+    if (!up.allFinite() || up.norm() < 0.9) {
+      throw std::runtime_error("gravity-frame up direction is invalid");
+    }
+    return up.normalized();
+  }
   double cartesianStep() const override { return cartesian_step_; }
   double minimumCartesianFraction() const override { return minimum_fraction_; }
 
@@ -444,7 +596,7 @@ public:
         moveit::planning_interface::MoveGroupInterface::Plan plan;
         if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
         RCLCPP_INFO(node_->get_logger(), "Top observation candidate: distance=%.2f roll=%.1f deg", distance, roll_deg);
-        if (move_group_.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) return false;
+        if (!executePlan(plan)) return false;
         move_group_.setEndEffectorLink(tcp_frame_);
         std::this_thread::sleep_for(std::chrono::duration<double>(camera_settle_));
         return true;
@@ -486,7 +638,80 @@ private:
     return result.get().code == rclcpp_action::ResultCode::SUCCEEDED;
   }
 
+  bool executePlan(const moveit::planning_interface::MoveGroupInterface::Plan& plan)
+  {
+    return executePlan(plan, ExecutionOptions{});
+  }
+
+  bool executePlan(
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan,
+    const ExecutionOptions& options)
+  {
+    if (backend_ == "simulation") {
+      return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    }
+    const auto& trajectory = plan.trajectory_.joint_trajectory;
+    if (trajectory.joint_names.size() != 6 || trajectory.points.empty() ||
+      trajectory.points.back().positions.size() != trajectory.joint_names.size())
+    {
+      RCLCPP_ERROR(node_->get_logger(), "Cannot execute malformed real-arm endpoint");
+      return false;
+    }
+    if (!segment_client_->wait_for_action_server(5s)) {
+      RCLCPP_ERROR(node_->get_logger(), "Explicit D1 joint-segment action is unavailable");
+      return false;
+    }
+    Segment::Goal goal;
+    goal.joint_names = trajectory.joint_names;
+    goal.positions = trajectory.points.back().positions;
+    goal.motion_profile = options.motion_profile;
+    goal.speed_deg_s = options.speed_deg_s;
+    RCLCPP_INFO(
+      node_->get_logger(), "Executing real-arm endpoint: profile=%s speed=%.1f deg/s",
+      options.motion_profile == Segment::Goal::COMMON_ARRIVAL ?
+      "common_arrival" : "uniform_joint_speed", options.speed_deg_s);
+    auto sent = segment_client_->async_send_goal(goal);
+    if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) {
+      RCLCPP_ERROR(node_->get_logger(), "Explicit D1 joint segment was rejected");
+      return false;
+    }
+    const auto segment_goal = sent.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_segment_goal_ = segment_goal;
+    }
+    auto result = segment_client_->async_get_result(segment_goal);
+    while (result.wait_for(50ms) != std::future_status::ready) {
+      if (cancel_.load()) {
+        segment_client_->async_cancel_goal(segment_goal);
+        std::lock_guard<std::mutex> lock(active_goals_mutex_);
+        active_segment_goal_.reset();
+        return false;
+      }
+    }
+    const auto wrapped = result.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goals_mutex_);
+      active_segment_goal_.reset();
+    }
+    if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED ||
+      !wrapped.result || !wrapped.result->success)
+    {
+      RCLCPP_ERROR(
+        node_->get_logger(), "Explicit D1 joint segment failed: %s",
+        wrapped.result ? wrapped.result->detail.c_str() : "no result");
+      return false;
+    }
+    return true;
+  }
+
   bool executeTrajectory(moveit_msgs::msg::RobotTrajectory message)
+  {
+    return executeTrajectory(std::move(message), ExecutionOptions{});
+  }
+
+  bool executeTrajectory(
+    moveit_msgs::msg::RobotTrajectory message, const ExecutionOptions& options)
   {
     auto state = move_group_.getCurrentState(2.0);
     if (!state) return false;
@@ -501,12 +726,12 @@ private:
     }
     robot_trajectory::RobotTrajectory trajectory(move_group_.getRobotModel(), "arm");
     trajectory.setRobotTrajectoryMsg(*state, message);
-    trajectory_processing::IterativeParabolicTimeParameterization timing;
-    if (!timing.computeTimeStamps(trajectory, 0.15, 0.15)) return false;
+    if (!retimeAndSmoothTrajectory(
+        trajectory, 0.15, 0.15, node_->get_logger(), "pick_cartesian")) return false;
     trajectory.getRobotTrajectoryMsg(message);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     plan.trajectory_ = std::move(message);
-    return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    return executePlan(plan, options);
   }
 
   moveit_msgs::msg::RobotTrajectory reverseLiftTrajectory(
@@ -649,7 +874,7 @@ private:
     if (!move_group_.setJointValueTarget(carry_)) return false;
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     return move_group_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
-      move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+      executePlan(plan);
   }
 
   double gripperPositionToDegrees(double position_m) const
@@ -733,6 +958,16 @@ private:
 
   void execute(const std::shared_ptr<PickHandle>& handle)
   {
+    struct ExecutionGuard
+    {
+      explicit ExecutionGuard(std::atomic<bool>& executing) : executing_(executing)
+      {
+        executing_.store(true);
+      }
+      ~ExecutionGuard() {executing_.store(false);}
+      std::atomic<bool>& executing_;
+    } execution_guard(pick_executing_);
+    clearDebugPregrasp();
     try {
       const auto goal = handle->get_goal();
       feedback(handle, "ENSURE_STOWED", 0.02F, "Validating or recovering the canonical STOWED pose");
@@ -802,7 +1037,7 @@ private:
       }
       feedback(handle, "MOVE_PREGRASP", 0.65F, "Executing selected pregrasp plan");
       if (!commandGripper(prepared.gripper_open_m) ||
-        move_group_.execute(prepared.pregrasp_plan) != moveit::core::MoveItErrorCode::SUCCESS)
+        !executePlan(prepared.pregrasp_plan))
       {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "pregrasp execution failed"); return;
       }
@@ -810,7 +1045,18 @@ private:
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "canceled", true); return;
       }
       if (goal->stop_after == Pick::Goal::MOVE_PREGRASP) {
-        result->success = true; result->detail = "pregrasp pose reached"; handle->succeed(result); return;
+        {
+          std::lock_guard<std::mutex> lock(debug_pregrasp_mutex_);
+          debug_pregrasp_ = std::make_shared<PreparedPick>(std::move(prepared));
+          debug_pregrasp_class_ = class_name;
+        }
+        result->success = true;
+        result->detail = "pregrasp pose reached; /arm/debug/continue_descend is armed once";
+        handle->succeed(result);
+        RCLCPP_INFO(
+          node_->get_logger(), "DEBUG PREGRASP cached for %s; gripper remains open",
+          class_name.c_str());
+        return;
       }
       if (!strategy.confirmDescent(prepared, strategy_failure)) {
         fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
@@ -823,7 +1069,9 @@ private:
         node_->get_logger(), "Confirmed grasp from live pregrasp: distance=%+.0f mm",
         1000.0 * prepared.grasp_distance_m);
       feedback(handle, "DESCEND", 0.78F, "Executing strategy approach trajectory");
-      if (!executeTrajectory(prepared.descent_trajectory)) {
+      if (!executeTrajectory(
+          prepared.descent_trajectory, ExecutionOptions::commonArrival()))
+      {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND", "Cartesian descent failed"); return;
       }
       if (cancel_.load() || handle->is_canceling()) {
@@ -892,17 +1140,25 @@ private:
   tf2_ros::TransformListener tf_listener_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
   rclcpp_action::Client<Arm>::SharedPtr arm_client_;
+  rclcpp_action::Client<Segment>::SharedPtr segment_client_;
   rclcpp::Client<srv::DetectTarget>::SharedPtr detect_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
   rclcpp_action::Server<Pick>::SharedPtr server_;
+  rclcpp::CallbackGroup::SharedPtr debug_service_callback_group_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr continue_descend_service_;
   std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> cancel_{false};
+  std::atomic<bool> pick_executing_{false};
+  std::mutex debug_pregrasp_mutex_;
+  std::shared_ptr<PreparedPick> debug_pregrasp_;
+  std::string debug_pregrasp_class_;
   std::mutex active_goals_mutex_;
   rclcpp_action::ClientGoalHandle<Arm>::SharedPtr active_arm_goal_;
+  rclcpp_action::ClientGoalHandle<Segment>::SharedPtr active_segment_goal_;
   rclcpp_action::ClientGoalHandle<Observe>::SharedPtr active_observe_goal_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
-  std::string backend_, action_name_, observe_name_, detect_name_, planning_frame_;
+  std::string backend_, action_name_, observe_name_, detect_name_, planning_frame_, gravity_frame_;
   std::string link6_frame_, tcp_frame_, camera_frame_;
   std::vector<double> stowed_;
   std::vector<double> carry_;
@@ -915,6 +1171,7 @@ private:
   double gripper_verify_min_pass_ratio_{};
   double gripper_safe_closed_angle_deg_{}, gripper_safe_open_angle_deg_{};
   double gripper_travel_m_{};
+  double debug_resume_joint_tolerance_{};
   int gripper_verify_min_samples_{};
   std::mutex gripper_samples_mutex_;
   std::vector<std::pair<std::chrono::steady_clock::time_point, double>> gripper_samples_;

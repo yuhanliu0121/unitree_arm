@@ -26,7 +26,7 @@ def _degrees(position_m):
             "real",
             {
                 "cube": (35.0, 37.5),
-                "zucchini": (0.0, 3.0),
+                "zucchini": (-10.0, 0.0),
                 "bowl": (-30.0, -28.0),
             },
         ),

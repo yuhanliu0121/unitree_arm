@@ -45,6 +45,7 @@ from d1_perception_adapter import (
     project_plumb_bob,
     ros_depth_to_meters,
     select_class_mask_near_pixel,
+    target_detection_diagnostics,
     transform_point,
     transform_rotation,
     undistorted_rays,
@@ -91,6 +92,14 @@ class DetectTargetServer(Node):
         self._runtime_root = Path(
             self.declare_parameter("perception_runtime_root", "").value
         ).expanduser()
+        configured_model_path = str(
+            self.declare_parameter("model_path", "").value
+        ).strip()
+        self._model_path = (
+            Path(configured_model_path).expanduser()
+            if configured_model_path
+            else None
+        )
         self._profile = self.declare_parameter("profile", "arm").value
         self._frame_timeout_s = float(
             self.declare_parameter("fresh_frame_timeout_s", 3.0).value
@@ -201,7 +210,9 @@ class DetectTargetServer(Node):
         self._runtime = PerceptionRuntime(
             self._runtime_root / "configs" / "runtime.yaml",
             profile=str(self._profile),
+            model_path=self._model_path,
         )
+        self.get_logger().info(f"Perception model: {self._runtime.model_path}")
 
         self._condition = threading.Condition()
         self._color_frames: deque[tuple[float, Image]] = deque(maxlen=8)
@@ -591,6 +602,28 @@ class DetectTargetServer(Node):
     def _match(self, hint, optical_frame, camera_info, detections):
         hint_camera = self._point_in_frame(hint, optical_frame)
         optical_center = (float(camera_info.k[2]), float(camera_info.k[5]))
+        diagnostics = target_detection_diagnostics(
+            detections,
+            optical_center,
+            self._max_optical_center_mask_distance_px,
+            self._allowed_target_classes,
+            self._minimum_target_confidence,
+        )
+        if diagnostics:
+            self.get_logger().info(
+                "Coarse detection candidates: count=%d allowed=%s "
+                "minimum_confidence=%.3f max_optical_center_distance=%.1fpx"
+                % (
+                    len(diagnostics),
+                    ",".join(self._allowed_target_classes),
+                    self._minimum_target_confidence,
+                    self._max_optical_center_mask_distance_px,
+                )
+            )
+            for diagnostic in diagnostics:
+                self.get_logger().info(diagnostic)
+        else:
+            self.get_logger().warning("Coarse detection candidates: none returned by YOLO")
         match = match_target_detection(
             detections,
             optical_center,

@@ -20,6 +20,7 @@ from d1_perception_adapter import (  # noqa: E402
     project_plumb_bob,
     ros_depth_to_meters,
     select_class_mask_near_pixel,
+    target_detection_diagnostics,
     transform_point,
     undistorted_rays,
 )
@@ -120,6 +121,35 @@ def test_coarse_match_fails_closed_when_only_unsafe_candidates_exist() -> None:
         ("yellow_cube", "zucchini", "bowl"),
         0.70,
     ) is None
+
+
+def test_coarse_candidate_diagnostics_report_every_rejection_gate() -> None:
+    centered_mask = np.zeros((20, 20), dtype=bool)
+    centered_mask[9:12, 9:12] = True
+    far_mask = np.zeros((20, 20), dtype=bool)
+    far_mask[0:2, 0:2] = True
+    detections = [
+        Detection(True, "depth_verified", (0.0, 0.0, 0.5), 0.62,
+                  centered_mask, "zucchini"),
+        Detection(False, "rejected", None, 0.95,
+                  far_mask, "unknown_object"),
+    ]
+    diagnostics = target_detection_diagnostics(
+        detections,
+        (10.0, 10.0),
+        5.0,
+        ("yellow_cube", "zucchini", "bowl"),
+        0.70,
+    )
+    assert len(diagnostics) == 2
+    assert "class=zucchini" in diagnostics[0]
+    assert "confidence=0.620" in diagnostics[0]
+    assert "confidence_below_min(0.620<0.700)" in diagnostics[0]
+    assert "runtime_rejected" in diagnostics[1]
+    assert "status=rejected" in diagnostics[1]
+    assert "missing_3d_position" in diagnostics[1]
+    assert "class_not_allowed" in diagnostics[1]
+    assert "mask_too_far" in diagnostics[1]
 
 
 def test_fine_reacquisition_uses_class_and_optical_centre_not_3d_hint() -> None:

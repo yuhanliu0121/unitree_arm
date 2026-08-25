@@ -1,8 +1,10 @@
 #include "d1_manipulation/pick_strategy.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <future>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -60,6 +62,35 @@ std::vector<double> orderedAzimuths()
   return values;
 }
 
+bool jointMotionCost(
+  const std::vector<std::string>& joint_names,
+  const std::vector<double>& start,
+  const std::vector<double>& goal,
+  double joint5_weight, double& cost)
+{
+  if (start.size() != goal.size() || start.size() != joint_names.size()) return false;
+  cost = 0.0;
+  for (std::size_t index = 0; index < goal.size(); ++index) {
+    const double delta = goal[index] - start[index];
+    const double weight = joint_names[index] == "Joint5" ? joint5_weight : 1.0;
+    cost += weight * delta * delta;
+  }
+  return true;
+}
+
+struct BowlCandidate
+{
+  geometry_msgs::msg::Pose pregrasp_pose;
+  geometry_msgs::msg::Pose grasp_pose;
+  Eigen::Isometry3d grasp_transform{Eigen::Isometry3d::Identity()};
+  std::vector<double> joint_target;
+  double pregrasp_distance{0.0};
+  double azimuth_degrees{0.0};
+  double flip_degrees{0.0};
+  double motion_cost{std::numeric_limits<double>::infinity()};
+  bool grasp_feasible{false};
+};
+
 struct BowlState final : PickStrategyState
 {
   Eigen::Vector3d bottom_center{Eigen::Vector3d::Zero()};
@@ -82,6 +113,7 @@ public:
     pregrasp_step_ = parameterOrDeclare(node_, "bowl_pregrasp_distance_step_m", 0.005);
     radius_ = parameterOrDeclare(node_, "bowl_radius_m", 0.058);
     height_ = parameterOrDeclare(node_, "bowl_height_m", 0.05001143);
+    joint5_motion_weight_ = parameterOrDeclare(node_, "bowl_joint5_motion_weight", 2.0);
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
     gripper_closed_ = parameterOrDeclare(node_, "bowl_gripper_closed_m", 0.0);
     gripper_held_threshold_ = parameterOrDeclare(
@@ -90,6 +122,7 @@ public:
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     if (pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ ||
       pregrasp_step_ <= 0.0 || radius_ <= 0.0 || height_ <= 0.0 ||
+      joint5_motion_weight_ <= 0.0 ||
       gripper_closed_ < 0.0 || gripper_held_threshold_ <= gripper_closed_ ||
       gripper_held_threshold_ > gripper_open_)
     {
@@ -176,12 +209,30 @@ public:
     const auto target_objects = runtime_.planningScene().getObjects(target_ids);
     auto& move_group = runtime_.moveGroup();
     bool found = false;
-    double selected_pregrasp = 0.0, selected_azimuth = 0.0, selected_flip = 0.0;
-    geometry_msgs::msg::Pose grasp, pregrasp;
-    Eigen::Isometry3d selected_grasp = Eigen::Isometry3d::Identity();
+    BowlCandidate selected;
     moveit::planning_interface::MoveGroupInterface::Plan selected_plan;
+    std::size_t selected_ik_candidates = 0;
+    std::size_t selected_descent_candidates = 0;
+    std::size_t full_plan_attempts = 0;
 
     for (const double pregrasp_distance : descending()) {
+      const auto current_state = move_group.getCurrentState();
+      if (!current_state) {
+        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+          "PLAN_PREGRASP", "current robot state is unavailable for bowl candidate ranking"};
+        return false;
+      }
+      const auto* joint_group = current_state->getJointModelGroup(move_group.getName());
+      if (!joint_group) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "PLAN_PREGRASP", "MoveIt arm joint model group is unavailable"};
+        return false;
+      }
+      std::vector<double> current_joints;
+      current_state->copyJointGroupPositions(joint_group, current_joints);
+      const auto joint_names = joint_group->getVariableNames();
+      std::vector<BowlCandidate> candidates;
+
       for (const double azimuth_deg : orderedAzimuths()) {
         for (const double flip_deg : {0.0, 180.0}) {
           const Eigen::Isometry3d grasp_tf =
@@ -191,33 +242,118 @@ public:
             Eigen::AngleAxisd(flip_deg * M_PI / 180.0, Eigen::Vector3d::UnitZ());
           Eigen::Isometry3d pregrasp_tf = grasp_tf;
           pregrasp_tf.translation() += pregrasp_distance * up;
-          pregrasp = poseMessage(pregrasp_tf);
+          const auto pregrasp = poseMessage(pregrasp_tf);
           move_group.setEndEffectorLink(runtime_.tcpFrame());
           move_group.setStartStateToCurrentState();
           if (!move_group.setJointValueTarget(pregrasp, runtime_.tcpFrame())) continue;
-          moveit::planning_interface::MoveGroupInterface::Plan plan;
-          if (move_group.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
-          if (!runtime_.removeTargetCollision(target_ids)) {
-            failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
-              "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
-            return false;
-          }
-          moveit_msgs::msg::RobotTrajectory descent;
-          if (runtime_.computeCartesianFromPlanEnd(
-              plan, poseMessage(grasp_tf), true, descent) >= runtime_.minimumCartesianFraction())
+          std::vector<double> joint_target;
+          move_group.getJointValueTarget(joint_target);
+          auto endpoint_state = *current_state;
+          endpoint_state.setJointGroupPositions(joint_group, joint_target);
+          endpoint_state.update();
+          if (!endpoint_state.satisfiesBounds(joint_group)) continue;
+          double motion_cost = 0.0;
+          if (!jointMotionCost(
+              joint_names, current_joints, joint_target, joint5_motion_weight_, motion_cost))
           {
-            grasp = poseMessage(grasp_tf); selected_grasp = grasp_tf;
-            selected_plan = plan; selected_pregrasp = pregrasp_distance;
-            selected_azimuth = azimuth_deg; selected_flip = flip_deg; found = true;
+            continue;
           }
-          if (!runtime_.restoreTargetCollision(target_objects)) {
-            failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
-              "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
-            return false;
-          }
-          if (found) break;
+          BowlCandidate candidate;
+          candidate.pregrasp_pose = pregrasp;
+          candidate.grasp_pose = poseMessage(grasp_tf);
+          candidate.grasp_transform = grasp_tf;
+          candidate.joint_target = std::move(joint_target);
+          candidate.pregrasp_distance = pregrasp_distance;
+          candidate.azimuth_degrees = azimuth_deg;
+          candidate.flip_degrees = flip_deg;
+          candidate.motion_cost = motion_cost;
+          candidates.push_back(std::move(candidate));
         }
-        if (found) break;
+      }
+
+      if (!runtime_.removeTargetCollision(target_ids)) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
+        return false;
+      }
+      for (auto& candidate : candidates) {
+        auto endpoint_state = *current_state;
+        endpoint_state.setJointGroupPositions(joint_group, candidate.joint_target);
+        endpoint_state.update();
+        move_group.setStartState(endpoint_state);
+        moveit_msgs::msg::RobotTrajectory descent;
+        const double fraction = move_group.computeCartesianPath(
+          {candidate.grasp_pose}, runtime_.cartesianStep(), 0.0, descent, true);
+        candidate.grasp_feasible = fraction >= runtime_.minimumCartesianFraction();
+      }
+      if (!runtime_.restoreTargetCollision(target_objects)) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
+        return false;
+      }
+
+      const std::size_t ik_candidates = candidates.size();
+      candidates.erase(
+        std::remove_if(candidates.begin(), candidates.end(), [](const BowlCandidate& candidate) {
+          return !candidate.grasp_feasible;
+        }),
+        candidates.end());
+      const std::size_t descent_candidates = candidates.size();
+      std::stable_sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.motion_cost < rhs.motion_cost;
+      });
+      RCLCPP_INFO(node_->get_logger(),
+        "Bowl candidate ranking: pregrasp=+%.0f mm feasible=%zu/%zu; "
+        "policy=minimum_weighted_joint_motion (Joint5 weight %.1f)",
+        1000.0 * pregrasp_distance, descent_candidates, ik_candidates,
+        joint5_motion_weight_);
+
+      for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
+        const auto& candidate = candidates[rank];
+        ++full_plan_attempts;
+        RCLCPP_INFO(node_->get_logger(),
+          "Bowl candidate attempt rank=%zu/%zu pregrasp=+%.0f mm rim_azimuth=%.1f deg "
+          "finger_flip=%.0f deg tilt=0.0 deg joint_motion_cost=%.4f",
+          rank + 1, candidates.size(), 1000.0 * candidate.pregrasp_distance,
+          candidate.azimuth_degrees, candidate.flip_degrees, candidate.motion_cost);
+        move_group.setStartStateToCurrentState();
+        if (!move_group.setJointValueTarget(candidate.joint_target)) {
+          RCLCPP_WARN(node_->get_logger(),
+            "Bowl candidate rejected rank=%zu reason=JOINT_TARGET_REJECTED", rank + 1);
+          continue;
+        }
+        moveit::planning_interface::MoveGroupInterface::Plan plan;
+        if (move_group.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+          RCLCPP_WARN(node_->get_logger(),
+            "Bowl candidate rejected rank=%zu reason=PREGRASP_OMPL_PLAN_FAILED", rank + 1);
+          continue;
+        }
+        if (!runtime_.removeTargetCollision(target_ids)) {
+          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+            "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
+          return false;
+        }
+        moveit_msgs::msg::RobotTrajectory verified_descent;
+        const double fraction = runtime_.computeCartesianFromPlanEnd(
+          plan, candidate.grasp_pose, true, verified_descent);
+        if (!runtime_.restoreTargetCollision(target_objects)) {
+          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+            "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
+          return false;
+        }
+        if (fraction < runtime_.minimumCartesianFraction()) {
+          RCLCPP_WARN(node_->get_logger(),
+            "Bowl candidate rejected rank=%zu reason=PLANNED_ENDPOINT_DESCENT_INCOMPLETE "
+            "fraction=%.1f%% required=%.1f%%",
+            rank + 1, 100.0 * fraction, 100.0 * runtime_.minimumCartesianFraction());
+          continue;
+        }
+        selected = candidate;
+        selected_plan = std::move(plan);
+        selected_ik_candidates = ik_candidates;
+        selected_descent_candidates = descent_candidates;
+        found = true;
+        break;
       }
       if (found) break;
     }
@@ -228,23 +364,27 @@ public:
     }
 
     output.class_name = class_name_; output.estimated_center = fine->bottom_center;
-    output.grasp_pose = grasp; output.pregrasp_pose = pregrasp;
+    output.grasp_pose = selected.grasp_pose; output.pregrasp_pose = selected.pregrasp_pose;
     output.pregrasp_plan = std::move(selected_plan); output.lift_direction = up;
-    output.pregrasp_distance_m = selected_pregrasp;
+    output.pregrasp_distance_m = selected.pregrasp_distance;
     output.grasp_distance_m = 0.0;
-    output.grasp_yaw_degrees = selected_azimuth;
+    output.grasp_yaw_degrees = selected.azimuth_degrees;
     output.approach_tilt_degrees = 0.0;
     output.gripper_open_m = gripper_open_; output.gripper_closed_m = gripper_closed_;
     output.gripper_held_threshold_m = gripper_held_threshold_;
     output.grasp_settle_s = grasp_settle_; output.lift_distance_m = lift_distance_;
     auto state = std::make_shared<BowlState>();
     state->bottom_center = bottom; state->world_from_model = world_from_model;
-    state->grasp_transform = selected_grasp;
+    state->grasp_transform = selected.grasp_transform;
     state->target_collision_ids = target_ids; output.strategy_state = std::move(state);
     publishMarkers(*coarse, *fine, bottom, up, output);
     RCLCPP_INFO(node_->get_logger(),
-      "Bowl strategy selected pregrasp=%.0f mm rim_azimuth=%.1f deg finger_flip=%.0f deg",
-      1000.0 * selected_pregrasp, selected_azimuth, selected_flip);
+      "Bowl strategy selected pregrasp=%.0f mm rim_azimuth=%.1f deg finger_flip=%.0f deg "
+      "tilt=0.0 deg joint_motion_cost=%.4f IK_candidates=%zu descent_candidates=%zu "
+      "full_plan_attempts=%zu reason=first complete plan in joint-motion-ranked candidates",
+      1000.0 * selected.pregrasp_distance, selected.azimuth_degrees, selected.flip_degrees,
+      selected.motion_cost, selected_ik_candidates, selected_descent_candidates,
+      full_plan_attempts);
     return true;
   }
 
@@ -448,6 +588,7 @@ private:
   std::string estimate_name_;
   double pregrasp_max_{}, pregrasp_min_{}, pregrasp_step_{};
   double radius_{}, height_{};
+  double joint5_motion_weight_{};
   double gripper_open_{}, gripper_closed_{}, gripper_held_threshold_{};
   double grasp_settle_{}, lift_distance_{};
 };

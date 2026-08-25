@@ -32,32 +32,53 @@ two controllers to command one arm.
 - Real-hardware activation requires live status with `error_status=0`, powers
   the D1 when necessary, requests the validated `mode=65535` full enable, and
   verifies a fresh powered/enabled status before controllers become active.
-- Simulation commands are range-checked and limited to 10 Hz. Physical motion
-  uses the standard `joint_trajectory_controller` and
-  `GripperActionController`, with the hardware interface rate-adapting their
-  100 Hz command interfaces to a configurable physical stream (20 Hz by
-  default).
-- Every physical stream sample is a coherent Joint0--6 snapshot. The isolated
-  DDS gateway converts it into seven typed `SetServoAngle_` messages carrying
-  the same sequence number and interpolation duration; it does not use the
-  vendor `funcode=2, mode=1` endpoint wrapper.
-- The gateway drains its local UDP input and forwards only the newest sampled
-  command, preventing old trajectory samples from accumulating after a host
-  scheduling delay.
+- Simulation uses the standard `joint_trajectory_controller` and
+  `GripperActionController`. Physical motion uses
+  `d1_native_segment_controller`, exposed under the same Action names.
+- Each physical task stage sends one coherent Joint0--6 target, one common
+  arrival time and one acceleration/deceleration profile. The onboard executor
+  translates it to FashionStar native interval commands and compensates UART
+  dispatch skew.
+- The real ros2_control hardware plugin is feedback-only. It publishes
+  `/joint_states` but cannot accidentally emit a competing sampled command
+  stream.
 - Joint feedback remains authoritative for motion and completion. The 100 Hz
   ros2_control loop may read the most recent sample repeatedly, while freshness
   and velocity calculations use the native feedback arrival time.
-- Physical deployment is paired with `unitree-d1-streaming-control`'s onboard dispatcher, which assembles a
-  complete seven-message group and gives one I/O thread exclusive ownership of
-  the D1 serial protocol. This prevents feedback queries from interleaving a
-  seven-servo command burst.
-- Hardware deactivation emits one short measured-position target. This is not
-  an emergency stop or a replacement for a vendor-approved hardware stop.
+- Physical deployment is paired with `unitree-d1-streaming-control`'s thin
+  onboard executor, which gives one I/O thread exclusive ownership of command,
+  damping and feedback serial traffic.
+- Simulation hardware deactivation emits one short measured-position target.
+  Real feedback-only hardware emits no command on deactivation; neither path
+  is an emergency stop or a replacement for a vendor-approved hardware stop.
 
-The former `d1_mode1_controller` executable remains installed only as a
-rollback/debugging artifact. Normal launch no longer starts it; both simulation
-and real hardware use the community `ros2_control` controllers configured in
-`controllers.yaml`.
+The native controller intentionally executes each accepted task-stage endpoint
+as one joint-space segment; it does not reproduce every intermediate waypoint
+of the MoveIt trajectory. Collision checking therefore applies to the planned
+stage, while the physical segment still requires guarded real-machine
+validation. Its native segment duration is derived from the largest joint
+displacement at the configured D1 speed (15 deg/s by default).
+`common_arrival` clamps it to 1.5--30 seconds; `uniform_joint_speed` preserves
+short durations down to the protocol's 1 ms resolution. MoveIt's full waypoint
+trajectory duration is logged for diagnostics but is not reused for this
+single native segment.
+
+The standard `FollowJointTrajectory` compatibility endpoint always uses
+`uniform_joint_speed`; `native_joint_speed_deg_s` configures its default speed
+(15 deg/s). Higher values require explicit real-machine validation.
+
+Task code that needs explicit timing sends
+`d1_ros2_control/action/ExecuteJointSegment` to
+`/arm_controller/execute_joint_segment`. Every goal carries its own speed and
+one of these profiles:
+
+- `common_arrival` gives all moving joints one arrival time;
+- `uniform_joint_speed` scales each joint duration by its displacement, so all
+  moving joints use the same average angular speed and may arrive separately.
+
+There is no process-global motion-profile state to switch or restore. The
+gripper always uses its own uniform-speed segment. Simulation does not use the
+native-segment controller.
 
 `d1_mode1_gripper_goal.py` is a low-level diagnostic helper, not a normal task
 interface. It bypasses the Action controller, so stop and restart the real

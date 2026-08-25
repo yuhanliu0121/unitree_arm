@@ -10,6 +10,8 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 
+#include "d1_ros2_control/action/execute_joint_segment.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -89,16 +91,18 @@ std::array<double, 6> armPositions(const std::array<double, 7> & positions)
 }
 }  // namespace
 
-class D1Mode1Controller final : public rclcpp::Node
+class D1NativeSegmentController final : public rclcpp::Node
 {
 public:
   using Arm = control_msgs::action::FollowJointTrajectory;
   using ArmHandle = rclcpp_action::ServerGoalHandle<Arm>;
+  using Segment = d1_ros2_control::action::ExecuteJointSegment;
+  using SegmentHandle = rclcpp_action::ServerGoalHandle<Segment>;
   using Gripper = control_msgs::action::GripperCommand;
   using GripperHandle = rclcpp_action::ServerGoalHandle<Gripper>;
 
-  D1Mode1Controller()
-  : Node("d1_mode1_controller")
+  D1NativeSegmentController()
+  : Node("d1_native_segment_controller")
   {
     gateway_host_ = declare_parameter<std::string>("gateway_host", "127.0.0.1");
     command_port_ = declare_parameter<int>("command_port", 15000);
@@ -106,7 +110,6 @@ public:
     position_tolerance_rad_ = declare_parameter<double>(
       "arm_position_tolerance_rad", 0.034906585);
     stable_samples_ = declare_parameter<int>("arm_stable_samples", 3);
-    assumed_speed_deg_s_ = declare_parameter<double>("assumed_speed_deg_s", 10.0);
     timeout_padding_s_ = declare_parameter<double>("timeout_padding_s", 3.0);
     minimum_timeout_s_ = declare_parameter<double>("minimum_timeout_s", 5.0);
     command_start_timeout_s_ = declare_parameter<double>(
@@ -129,6 +132,18 @@ public:
     gripper_motion_start_deg_ = declare_parameter<double>(
       "gripper_motion_start_deg", 1.0);
     gripper_timeout_s_ = declare_parameter<double>("gripper_timeout_s", 10.0);
+    native_joint_speed_deg_s_ = declare_parameter<double>(
+      "native_joint_speed_deg_s", 15.0);
+    native_acceleration_fraction_ = declare_parameter<double>(
+      "native_acceleration_fraction", 0.15);
+    native_profile_max_ramp_ms_ = declare_parameter<int>(
+      "native_profile_max_ramp_ms", 800);
+    native_minimum_duration_ms_ = declare_parameter<int>(
+      "native_minimum_duration_ms", 1500);
+    native_maximum_duration_ms_ = declare_parameter<int>(
+      "native_maximum_duration_ms", 30000);
+    gripper_segment_duration_ms_ = declare_parameter<int>(
+      "gripper_segment_duration_ms", 1500);
     lower_limits_ = vectorToArray(declare_parameter<std::vector<double>>(
       "lower_limits", {-6.3, -6.3, -6.3, -6.3, -6.3, -6.3, 0.0}),
       "lower_limits");
@@ -138,7 +153,7 @@ public:
 
     if (command_port_ <= 0 || command_port_ > 65535 || feedback_timeout_s_ <= 0.0 ||
       position_tolerance_rad_ <= 0.0 || stable_samples_ <= 0 ||
-      assumed_speed_deg_s_ <= 0.0 || timeout_padding_s_ < 0.0 ||
+      timeout_padding_s_ < 0.0 ||
       minimum_timeout_s_ <= 0.0 || command_start_timeout_s_ <= 0.0 ||
       arm_motion_start_progress_deg_ <= 0.0 || no_motion_max_retries_ < 0 ||
       gripper_travel_m_ <= 0.0 ||
@@ -147,7 +162,16 @@ public:
       gripper_stable_duration_s_ <= 0.0 || gripper_motion_start_deg_ <= 0.0 ||
       gripper_timeout_s_ <= 0.0)
     {
-      throw std::invalid_argument("invalid D1 mode=1 controller parameters");
+      throw std::invalid_argument("invalid D1 native-segment controller parameters");
+    }
+    if (native_joint_speed_deg_s_ <= 0.0 || native_acceleration_fraction_ < 0.0 ||
+      native_acceleration_fraction_ > 0.5 || native_profile_max_ramp_ms_ < 0 ||
+      native_minimum_duration_ms_ <= 0 ||
+      native_maximum_duration_ms_ < native_minimum_duration_ms_ ||
+      native_maximum_duration_ms_ > 65535 ||
+      gripper_segment_duration_ms_ <= 0 || gripper_segment_duration_ms_ > 65535)
+    {
+      throw std::invalid_argument("invalid native segment profile parameters");
     }
     for (std::size_t index = 0; index < lower_limits_.size(); ++index) {
       if (!std::isfinite(lower_limits_[index]) || !std::isfinite(upper_limits_[index]) ||
@@ -184,6 +208,17 @@ public:
       [this](std::shared_ptr<ArmHandle> handle) {
         std::thread([this, handle]() {executeArm(handle);}).detach();
       });
+    segment_server_ = rclcpp_action::create_server<Segment>(
+      this, "/arm_controller/execute_joint_segment",
+      [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const Segment::Goal> goal) {
+        return acceptSegmentGoal(*goal);
+      },
+      [](const std::shared_ptr<SegmentHandle>) {
+        return rclcpp_action::CancelResponse::ACCEPT;
+      },
+      [this](std::shared_ptr<SegmentHandle> handle) {
+        std::thread([this, handle]() {executeSegment(handle);}).detach();
+      });
     gripper_server_ = rclcpp_action::create_server<Gripper>(
       this, "/gripper_controller/gripper_cmd",
       [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const Gripper::Goal> goal) {
@@ -198,10 +233,12 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "D1 real mode=1 controller ready: one owner for arm and gripper commands");
+      "D1 native-segment controller ready: default_profile=uniform_joint_speed "
+      "default_speed=%.1f deg/s explicit_action=/arm_controller/execute_joint_segment",
+      native_joint_speed_deg_s_);
   }
 
-  ~D1Mode1Controller() override
+  ~D1NativeSegmentController() override
   {
     if (socket_fd_ >= 0) {
       ::close(socket_fd_);
@@ -209,6 +246,24 @@ public:
   }
 
 private:
+  enum class MotionProfile : std::uint8_t
+  {
+    uniform_joint_speed = Segment::Goal::UNIFORM_JOINT_SPEED,
+    common_arrival = Segment::Goal::COMMON_ARRIVAL,
+  };
+
+  struct MotionSettings
+  {
+    MotionProfile profile{MotionProfile::uniform_joint_speed};
+    double speed_deg_s{15.0};
+  };
+
+  static const char * profileName(const MotionProfile profile)
+  {
+    return profile == MotionProfile::common_arrival ?
+      "common_arrival" : "uniform_joint_speed";
+  }
+
   static std::array<double, 7> vectorToArray(
     const std::vector<double> & values, const char * name)
   {
@@ -289,12 +344,20 @@ private:
     return true;
   }
 
-  bool sendSnapshot(const std::array<double, 7> & target)
+  bool sendSnapshot(
+    const std::array<double, 7> & target, const std::uint32_t duration_ms,
+    const MotionProfile profile)
   {
     JointPacket packet;
     packet.kind = PacketKind::command;
     packet.sequence = sequence_.fetch_add(1U);
-    packet.smoothing_mode = 1U;
+    packet.smoothing_mode = profile == MotionProfile::uniform_joint_speed ? 3U : 2U;
+    packet.duration_ms = duration_ms;
+    const auto ramp_ms = static_cast<std::uint32_t>(std::min(
+      native_profile_max_ramp_ms_,
+      static_cast<int>(std::lround(duration_ms * native_acceleration_fraction_))));
+    packet.acceleration_ms = ramp_ms;
+    packet.deceleration_ms = ramp_ms;
     for (std::size_t joint = 0; joint < 6; ++joint) {
       packet.angle_deg[joint] = target[joint] * kRadiansToDegrees;
     }
@@ -309,53 +372,15 @@ private:
       static_cast<ssize_t>(sizeof(packet));
     RCLCPP_INFO(
       get_logger(),
-      "Local D1 command %s: seq=%lu mode=%u target_deg="
+      "Local D1 native segment %s: seq=%lu profile=%s duration=%u accel=%u decel=%u target_deg="
       "[%.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
       sent ? "sent" : "failed", static_cast<unsigned long>(packet.sequence),
-      packet.smoothing_mode, packet.angle_deg[0], packet.angle_deg[1],
+      profileName(profile),
+      packet.duration_ms, packet.acceleration_ms, packet.deceleration_ms,
+      packet.angle_deg[0], packet.angle_deg[1],
       packet.angle_deg[2], packet.angle_deg[3], packet.angle_deg[4],
       packet.angle_deg[5], packet.angle_deg[6]);
     return sent;
-  }
-
-  bool holdArmAtMeasuredPosition()
-  {
-    std::array<double, 7> current{};
-    double velocity = 0.0;
-    if (!latestFeedback(current, velocity)) {
-      return false;
-    }
-    {
-      std::lock_guard<std::mutex> lock(command_mutex_);
-      if (!desired_valid_) {
-        desired_ = current;
-        desired_valid_ = true;
-      } else {
-        std::copy_n(current.begin(), 6, desired_.begin());
-      }
-      current = desired_;
-    }
-    return sendSnapshot(current);
-  }
-
-  bool holdGripperAtMeasuredPosition()
-  {
-    std::array<double, 7> current{};
-    double velocity = 0.0;
-    if (!latestFeedback(current, velocity)) {
-      return false;
-    }
-    {
-      std::lock_guard<std::mutex> lock(command_mutex_);
-      if (!desired_valid_) {
-        desired_ = current;
-        desired_valid_ = true;
-      } else {
-        desired_[6] = current[6];
-      }
-      current = desired_;
-    }
-    return sendSnapshot(current);
   }
 
   rclcpp_action::GoalResponse acceptArmGoal(const Arm::Goal & goal)
@@ -405,6 +430,40 @@ private:
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
+  rclcpp_action::GoalResponse acceptSegmentGoal(const Segment::Goal & goal)
+  {
+    if (goal.joint_names.size() != 6 || goal.positions.size() != 6 ||
+      !finiteVector(goal.positions) || !std::isfinite(goal.speed_deg_s) ||
+      goal.speed_deg_s <= 0.0 ||
+      (goal.motion_profile != Segment::Goal::UNIFORM_JOINT_SPEED &&
+      goal.motion_profile != Segment::Goal::COMMON_ARRIVAL))
+    {
+      RCLCPP_ERROR(get_logger(), "Rejecting malformed explicit joint segment");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    std::array<bool, 6> found{};
+    for (const auto & name : goal.joint_names) {
+      for (std::size_t joint = 0; joint < found.size(); ++joint) {
+        if (name == "Joint" + std::to_string(joint)) {
+          if (found[joint]) {
+            return rclcpp_action::GoalResponse::REJECT;
+          }
+          found[joint] = true;
+        }
+      }
+    }
+    if (!std::all_of(found.begin(), found.end(), [](const bool value) {return value;})) {
+      RCLCPP_ERROR(get_logger(), "Rejecting explicit segment with unexpected joints");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    bool expected = false;
+    if (!busy_.compare_exchange_strong(expected, true)) {
+      RCLCPP_WARN(get_logger(), "Rejecting explicit segment: physical command owner is busy");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
   std::array<double, 6> armTarget(const Arm::Goal & goal) const
   {
     std::array<double, 6> target{};
@@ -421,32 +480,50 @@ private:
     return target;
   }
 
-  void executeArm(const std::shared_ptr<ArmHandle> & handle)
+  std::array<double, 6> segmentTarget(const Segment::Goal & goal) const
   {
-    const auto finish = [this]() {busy_.store(false);};
-    auto result = std::make_shared<Arm::Result>();
+    std::array<double, 6> target{};
+    for (std::size_t source = 0; source < goal.joint_names.size(); ++source) {
+      for (std::size_t joint = 0; joint < target.size(); ++joint) {
+        if (goal.joint_names[source] == "Joint" + std::to_string(joint)) {
+          target[joint] = goal.positions[source];
+          break;
+        }
+      }
+    }
+    return target;
+  }
+
+  enum class SegmentStatus {success, canceled, invalid, failed};
+
+  struct SegmentOutcome
+  {
+    SegmentStatus status{SegmentStatus::failed};
+    std::string detail;
+    double maximum_error_rad{0.0};
+  };
+
+  template<typename CancelFunction, typename FeedbackFunction>
+  SegmentOutcome runArmSegment(
+    const std::array<double, 6> & target, const MotionSettings & settings,
+    const double planned_duration_s, CancelFunction canceled, FeedbackFunction feedback)
+  {
     try {
       if (!initializeDesiredFromFeedback()) {
-        result->error_code = Arm::Result::PATH_TOLERANCE_VIOLATED;
-        result->error_string = "fresh D1 feedback unavailable";
-        handle->abort(result); finish(); return;
+        return {SegmentStatus::failed, "fresh D1 feedback unavailable", 0.0};
       }
-      const auto target = armTarget(*handle->get_goal());
       std::array<double, 7> initial{};
       double gripper_velocity = 0.0;
       if (!latestFeedback(initial, gripper_velocity)) {
-        result->error_code = Arm::Result::PATH_TOLERANCE_VIOLATED;
-        result->error_string = "fresh D1 feedback unavailable";
-        handle->abort(result); finish(); return;
+        return {SegmentStatus::failed, "fresh D1 feedback unavailable", 0.0};
       }
       double maximum_delta_deg = 0.0;
       for (std::size_t joint = 0; joint < target.size(); ++joint) {
         if (!std::isfinite(target[joint]) || target[joint] < lower_limits_[joint] ||
           target[joint] > upper_limits_[joint])
         {
-          result->error_code = Arm::Result::INVALID_GOAL;
-          result->error_string = "arm endpoint violates configured joint limits";
-          handle->abort(result); finish(); return;
+          return {
+            SegmentStatus::invalid, "arm endpoint violates configured joint limits", 0.0};
         }
         maximum_delta_deg = std::max(
           maximum_delta_deg, std::abs(target[joint] - initial[joint]) * kRadiansToDegrees);
@@ -463,20 +540,28 @@ private:
         degreesString(armPositions(initial)).c_str(), degreesString(target).c_str(),
         gripper_closed_angle_deg_ + snapshot[6] / gripper_travel_m_ *
         (gripper_open_angle_deg_ - gripper_closed_angle_deg_));
-      if (!sendSnapshot(snapshot)) {
-        result->error_code = Arm::Result::PATH_TOLERANCE_VIOLATED;
-        result->error_string = "failed to send D1 mode=1 arm target";
-        handle->abort(result); finish(); return;
+      const double required_duration_s = maximum_delta_deg / settings.speed_deg_s;
+      const int minimum_duration_ms = settings.profile == MotionProfile::uniform_joint_speed ?
+        1 : native_minimum_duration_ms_;
+      const auto duration_ms = static_cast<std::uint32_t>(std::clamp<long long>(
+        std::llround(1000.0 * required_duration_s),
+        minimum_duration_ms, native_maximum_duration_ms_));
+      if (!sendSnapshot(snapshot, duration_ms, settings.profile)) {
+        return {SegmentStatus::failed, "failed to send D1 native arm segment", 0.0};
       }
       {
         std::lock_guard<std::mutex> lock(command_mutex_);
         desired_ = snapshot;
       }
       const double timeout_s = std::max(
-        minimum_timeout_s_, maximum_delta_deg / assumed_speed_deg_s_ + timeout_padding_s_);
+        minimum_timeout_s_, duration_ms / 1000.0 + timeout_padding_s_);
       RCLCPP_INFO(
-        get_logger(), "Arm endpoint sent once with mode=1: max_delta=%.1f deg timeout=%.1f s",
-        maximum_delta_deg, timeout_s);
+        get_logger(),
+        "Arm native segment sent once: max_delta=%.1f deg planned=%.3f s "
+        "requested_speed=%.1f deg/s native_required=%.3f s segment_duration=%.3f s "
+        "timeout=%.1f s",
+        maximum_delta_deg, planned_duration_s, settings.speed_deg_s,
+        required_duration_s, duration_ms / 1000.0, timeout_s);
 
       const auto started = std::chrono::steady_clock::now();
       const auto deadline = started + std::chrono::duration<double>(
@@ -490,20 +575,22 @@ private:
       double directed_progress_rad = 0.0;
       std::array<double, 7> last = initial;
       while (std::chrono::steady_clock::now() < deadline) {
-        if (handle->is_canceling()) {
-          holdArmAtMeasuredPosition();
-          result->error_code = Arm::Result::SUCCESSFUL;
-          result->error_string = "canceled; measured position held";
-          handle->canceled(result); finish(); return;
+        if (canceled()) {
+          return {
+            SegmentStatus::canceled, "canceled; no replacement command sent", 0.0};
         }
         std::array<double, 7> current{};
         double velocity = 0.0;
         if (!latestFeedback(current, velocity)) {
-          result->error_code = Arm::Result::PATH_TOLERANCE_VIOLATED;
-          result->error_string = "D1 feedback became stale";
-          handle->abort(result); finish(); return;
+          return {SegmentStatus::failed, "D1 feedback became stale", 0.0};
         }
         last = current;
+        double maximum_error_rad = 0.0;
+        for (std::size_t joint = 0; joint < target.size(); ++joint) {
+          maximum_error_rad = std::max(
+            maximum_error_rad, std::abs(current[joint] - target[joint]));
+        }
+        feedback(maximum_error_rad);
         if (!motion_started) {
           directed_progress_rad = targetDirectedProgress(initial, current, target);
           motion_started = directed_progress_rad * kRadiansToDegrees >=
@@ -531,9 +618,8 @@ private:
             std::chrono::duration<double>(
               std::chrono::steady_clock::now() - started).count(),
             degreesString(armPositions(current)).c_str());
-          result->error_code = Arm::Result::SUCCESSFUL;
-          result->error_string = "D1 mode=1 endpoint reached";
-          handle->succeed(result); finish(); return;
+          return {
+            SegmentStatus::success, "D1 native segment endpoint reached", maximum_error_rad};
         }
         const auto now = std::chrono::steady_clock::now();
         if (!motion_started && now >= next_start_deadline) {
@@ -544,9 +630,9 @@ private:
               no_motion_retries + 1,
               std::chrono::duration<double>(now - started).count(),
               degreesString(armPositions(current)).c_str());
-            result->error_code = Arm::Result::GOAL_TOLERANCE_VIOLATED;
-            result->error_string = "D1 arm target produced no observed motion";
-            handle->abort(result); finish(); return;
+            return {
+              SegmentStatus::failed, "D1 arm target produced no observed motion",
+              maximum_error_rad};
           }
           ++no_motion_retries;
           RCLCPP_WARN(
@@ -555,10 +641,10 @@ private:
             "retrying absolute target (%d/%d)",
             directed_progress_rad * kRadiansToDegrees, command_start_timeout_s_,
             no_motion_retries, no_motion_max_retries_);
-          if (!sendSnapshot(snapshot)) {
-            result->error_code = Arm::Result::PATH_TOLERANCE_VIOLATED;
-            result->error_string = "failed to retry D1 mode=1 arm target";
-            handle->abort(result); finish(); return;
+          if (!sendSnapshot(snapshot, duration_ms, settings.profile)) {
+            return {
+              SegmentStatus::failed, "failed to retry D1 native arm segment",
+              maximum_error_rad};
           }
           next_start_deadline = now +
             std::chrono::duration<double>(command_start_timeout_s_);
@@ -577,14 +663,70 @@ private:
         "Arm endpoint timeout: motion_started=%s final_deg=%s error_deg=%s",
         motion_started ? "true" : "false", degreesString(armPositions(last)).c_str(),
         degreesString(final_error).c_str());
-      result->error_code = Arm::Result::GOAL_TOLERANCE_VIOLATED;
-      result->error_string = "D1 mode=1 arm endpoint timed out";
-      handle->abort(result); finish();
+      double maximum_error_rad = 0.0;
+      for (std::size_t joint = 0; joint < final_error.size(); ++joint) {
+        maximum_error_rad = std::max(maximum_error_rad, std::abs(final_error[joint]));
+      }
+      return {SegmentStatus::failed, "D1 native arm segment timed out", maximum_error_rad};
     } catch (const std::exception & error) {
-      result->error_code = Arm::Result::INVALID_GOAL;
-      result->error_string = error.what();
-      handle->abort(result); finish();
+      return {SegmentStatus::invalid, error.what(), 0.0};
     }
+  }
+
+  void executeArm(const std::shared_ptr<ArmHandle> & handle)
+  {
+    const auto finish = [this]() {busy_.store(false);};
+    const auto planned_duration = handle->get_goal()->trajectory.points.back().time_from_start;
+    const double planned_duration_s = static_cast<double>(planned_duration.sec) +
+      static_cast<double>(planned_duration.nanosec) * 1e-9;
+    const auto outcome = runArmSegment(
+      armTarget(*handle->get_goal()),
+      MotionSettings{MotionProfile::uniform_joint_speed, native_joint_speed_deg_s_},
+      planned_duration_s, [handle]() {return handle->is_canceling();}, [](double) {});
+    auto result = std::make_shared<Arm::Result>();
+    result->error_string = outcome.detail;
+    if (outcome.status == SegmentStatus::success) {
+      result->error_code = Arm::Result::SUCCESSFUL;
+      handle->succeed(result);
+    } else if (outcome.status == SegmentStatus::canceled) {
+      result->error_code = Arm::Result::SUCCESSFUL;
+      handle->canceled(result);
+    } else {
+      result->error_code = outcome.status == SegmentStatus::invalid ?
+        Arm::Result::INVALID_GOAL : Arm::Result::GOAL_TOLERANCE_VIOLATED;
+      handle->abort(result);
+    }
+    finish();
+  }
+
+  void executeSegment(const std::shared_ptr<SegmentHandle> & handle)
+  {
+    const auto finish = [this]() {busy_.store(false);};
+    const auto goal = handle->get_goal();
+    const MotionSettings settings{
+      goal->motion_profile == Segment::Goal::COMMON_ARRIVAL ?
+      MotionProfile::common_arrival : MotionProfile::uniform_joint_speed,
+      goal->speed_deg_s};
+    const auto outcome = runArmSegment(
+      segmentTarget(*goal), settings, 0.0,
+      [handle]() {return handle->is_canceling();},
+      [handle](const double error) {
+        auto value = std::make_shared<Segment::Feedback>();
+        value->maximum_error_rad = error;
+        handle->publish_feedback(value);
+      });
+    auto result = std::make_shared<Segment::Result>();
+    result->success = outcome.status == SegmentStatus::success;
+    result->detail = outcome.detail;
+    result->maximum_error_rad = outcome.maximum_error_rad;
+    if (outcome.status == SegmentStatus::success) {
+      handle->succeed(result);
+    } else if (outcome.status == SegmentStatus::canceled) {
+      handle->canceled(result);
+    } else {
+      handle->abort(result);
+    }
+    finish();
   }
 
   void executeGripper(const std::shared_ptr<GripperHandle> & handle)
@@ -606,7 +748,9 @@ private:
       snapshot = desired_;
       snapshot[6] = target;
     }
-    if (!sendSnapshot(snapshot)) {
+    if (!sendSnapshot(
+        snapshot, gripper_segment_duration_ms_, MotionProfile::uniform_joint_speed))
+    {
       handle->abort(result); finish(); return;
     }
     {
@@ -614,7 +758,7 @@ private:
       desired_ = snapshot;
     }
     RCLCPP_INFO(
-      get_logger(), "Gripper target sent with full mode=1 snapshot: %.1f deg",
+      get_logger(), "Gripper target sent as full native segment: %.1f deg",
       gripper_closed_angle_deg_ + target / gripper_travel_m_ *
       (gripper_open_angle_deg_ - gripper_closed_angle_deg_));
 
@@ -650,7 +794,6 @@ private:
       handle->publish_feedback(feedback);
 
       if (handle->is_canceling()) {
-        holdGripperAtMeasuredPosition();
         handle->canceled(result); finish(); return;
       }
       if (std::abs(current[6] - target) <= goal_tolerance) {
@@ -704,7 +847,6 @@ private:
             no_motion_retries + 1,
             std::chrono::duration<double>(now - started).count(),
             gripper_closed_angle_deg_ + current[6] / gripper_travel_m_ * angle_span_deg);
-          holdGripperAtMeasuredPosition();
           handle->abort(result); finish(); return;
         }
         ++no_motion_retries;
@@ -712,7 +854,9 @@ private:
           get_logger(),
           "Gripper has not started %.3f s after send; retrying absolute target (%d/%d)",
           command_start_timeout_s_, no_motion_retries, no_motion_max_retries_);
-        if (!sendSnapshot(snapshot)) {
+        if (!sendSnapshot(
+            snapshot, gripper_segment_duration_ms_, MotionProfile::uniform_joint_speed))
+        {
           handle->abort(result); finish(); return;
         }
         next_start_deadline = now +
@@ -723,7 +867,6 @@ private:
       feedback_changed_.wait_for(
         lock, 100ms, [this, observed]() {return feedback_sequence_ != observed;});
     }
-    holdGripperAtMeasuredPosition();
     handle->abort(result); finish();
   }
 
@@ -732,7 +875,6 @@ private:
   double feedback_timeout_s_{1.5};
   double position_tolerance_rad_{0.034906585};
   int stable_samples_{3};
-  double assumed_speed_deg_s_{10.0};
   double timeout_padding_s_{3.0};
   double minimum_timeout_s_{5.0};
   double command_start_timeout_s_{2.0};
@@ -746,6 +888,12 @@ private:
   double gripper_stable_duration_s_{0.55};
   double gripper_motion_start_deg_{1.0};
   double gripper_timeout_s_{10.0};
+  double native_joint_speed_deg_s_{15.0};
+  double native_acceleration_fraction_{0.15};
+  int native_profile_max_ramp_ms_{800};
+  int native_minimum_duration_ms_{1500};
+  int native_maximum_duration_ms_{30000};
+  int gripper_segment_duration_ms_{1500};
   std::array<double, 7> lower_limits_{};
   std::array<double, 7> upper_limits_{};
 
@@ -768,6 +916,7 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
   rclcpp_action::Server<Arm>::SharedPtr arm_server_;
+  rclcpp_action::Server<Segment>::SharedPtr segment_server_;
   rclcpp_action::Server<Gripper>::SharedPtr gripper_server_;
 };
 }  // namespace d1_ros2_control
@@ -775,7 +924,7 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<d1_ros2_control::D1Mode1Controller>();
+  auto node = std::make_shared<d1_ros2_control::D1NativeSegmentController>();
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

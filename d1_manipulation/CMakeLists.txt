@@ -10,6 +10,7 @@ find_package(ament_cmake_python REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(d1_ros2_control REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
@@ -18,11 +19,14 @@ find_package(rclcpp_action REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(shape_msgs REQUIRED)
+find_package(srdfdom REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(urdf REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -48,6 +52,14 @@ target_include_directories(observation_geometry PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(observation_geometry Eigen3::Eigen)
+
+add_library(trajectory_smoothing src/trajectory_smoothing.cpp)
+target_compile_features(trajectory_smoothing PUBLIC cxx_std_17)
+target_include_directories(trajectory_smoothing PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(trajectory_smoothing moveit_core rclcpp)
 
 add_executable(observe_target_server src/observe_target_server.cpp)
 target_compile_features(observe_target_server PRIVATE cxx_std_17)
@@ -76,8 +88,14 @@ add_executable(pick_object_server
 target_compile_features(pick_object_server PRIVATE cxx_std_17)
 target_include_directories(pick_object_server PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${d1_ros2_control_INCLUDE_DIRS}
 )
-target_link_libraries(pick_object_server Eigen3::Eigen)
+target_link_libraries(
+  pick_object_server
+  Eigen3::Eigen
+  trajectory_smoothing
+  d1_ros2_control::d1_ros2_control__rosidl_typesupport_cpp
+)
 ament_target_dependencies(pick_object_server
   control_msgs
   geometry_msgs
@@ -88,6 +106,7 @@ ament_target_dependencies(pick_object_server
   rclcpp_action
   sensor_msgs
   shape_msgs
+  std_srvs
   tf2_eigen
   tf2_geometry_msgs
   tf2_ros
@@ -111,7 +130,7 @@ target_link_libraries(observe_target_server "${cpp_typesupport_target}")
 target_link_libraries(pick_object_server "${cpp_typesupport_target}")
 target_link_libraries(drop_object_server "${cpp_typesupport_target}")
 
-install(TARGETS observation_geometry
+install(TARGETS observation_geometry trajectory_smoothing
   EXPORT export_observation_geometry
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -152,6 +171,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_gtest(test_observation_geometry test/test_observation_geometry.cpp)
   target_link_libraries(test_observation_geometry observation_geometry Eigen3::Eigen)
+  ament_add_gtest(test_trajectory_smoothing test/test_trajectory_smoothing.cpp)
+  target_link_libraries(test_trajectory_smoothing trajectory_smoothing)
+  ament_target_dependencies(test_trajectory_smoothing moveit_core rclcpp srdfdom urdf)
   ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
   ament_add_pytest_test(test_gripper_profiles test/test_gripper_profiles.py)
 endif()

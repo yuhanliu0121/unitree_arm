@@ -111,6 +111,63 @@ def _mask_distance(mask: np.ndarray, pixel: tuple[float, float]) -> float:
     return float(np.hypot(x_indices - pixel_x, y_indices - pixel_y).min())
 
 
+def target_detection_diagnostics(
+    detections: Sequence[Any],
+    reference_pixel: tuple[float, float],
+    max_mask_distance_px: float,
+    allowed_class_names: Sequence[str] | None = None,
+    min_confidence: float = 0.0,
+) -> list[str]:
+    """Describe every coarse-target candidate and each selection gate it fails."""
+    allowed_classes = (
+        None if allowed_class_names is None else set(allowed_class_names)
+    )
+    diagnostics: list[str] = []
+    for index, detection in enumerate(detections):
+        confidence = float(detection.confidence)
+        mask_distance = _mask_distance(detection.mask, reference_pixel)
+        reasons: list[str] = []
+        runtime_reasons = tuple(getattr(detection, "reject_reasons", ()))
+        if not bool(detection.accepted):
+            detail = ",".join(str(reason) for reason in runtime_reasons)
+            reasons.append(f"runtime_rejected({detail})" if detail else "runtime_rejected")
+        if detection.status != "depth_verified":
+            reasons.append(f"status={detection.status}")
+        if detection.position_camera_m is None:
+            reasons.append("missing_3d_position")
+        if allowed_classes is not None and detection.class_name not in allowed_classes:
+            reasons.append("class_not_allowed")
+        if confidence < min_confidence:
+            reasons.append(
+                f"confidence_below_min({confidence:.3f}<{min_confidence:.3f})"
+            )
+        if not np.isfinite(mask_distance):
+            reasons.append("empty_mask")
+        elif mask_distance > max_mask_distance_px:
+            reasons.append(
+                f"mask_too_far({mask_distance:.1f}>{max_mask_distance_px:.1f}px)"
+            )
+        outcome = "eligible" if not reasons else "rejected=" + ",".join(reasons)
+        distance_text = (
+            f"{mask_distance:.1f}px" if np.isfinite(mask_distance) else "inf"
+        )
+        diagnostics.append(
+            "candidate[%d] id=%s class=%s confidence=%.3f accepted=%s "
+            "status=%s optical_center_distance=%s %s"
+            % (
+                index,
+                getattr(detection, "instance_id", "?"),
+                detection.class_name,
+                confidence,
+                bool(detection.accepted),
+                detection.status,
+                distance_text,
+                outcome,
+            )
+        )
+    return diagnostics
+
+
 def match_target_detection(
     detections: Sequence[Any],
     reference_pixel: tuple[float, float],

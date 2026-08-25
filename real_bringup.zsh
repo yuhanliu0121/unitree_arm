@@ -5,6 +5,9 @@ SCRIPT_DIR=${0:A:h}
 CONFIG_PATH="${SCRIPT_DIR}/d1_bringup/config/real_machine.yaml"
 ARM_SERIAL=""
 LAUNCH_RVIZ=false
+COMMAND_RATE_HZ=""
+COMMAND_DURATION_MS=""
+JOINT_SPEED_DEG_S=""
 GRAVITY_CALIBRATION=""
 LAUNCH_PID=""
 
@@ -50,7 +53,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 usage() {
-  print "Usage: ./real_bringup.zsh [--rviz] [--config PATH] [--arm-serial SERIAL]"
+  print "Usage: ./real_bringup.zsh [--rviz] [--config PATH] [--arm-serial SERIAL] [--joint-speed-deg-s DEG_S] [--command-rate-hz HZ] [--command-duration-ms MS]"
   print ""
   print "Runs the motionless real-machine preflight first. Controllers, MoveIt,"
   print "camera perception, and task Actions start only after the preflight passes."
@@ -76,6 +79,30 @@ while (( $# > 0 )); do
         exit 2
       fi
       ARM_SERIAL=$2
+      shift 2
+      ;;
+    --command-rate-hz)
+      if (( $# < 2 )); then
+        print -u2 "--command-rate-hz requires a value"
+        exit 2
+      fi
+      COMMAND_RATE_HZ=$2
+      shift 2
+      ;;
+    --joint-speed-deg-s)
+      if (( $# < 2 )); then
+        print -u2 "--joint-speed-deg-s requires a value"
+        exit 2
+      fi
+      JOINT_SPEED_DEG_S=$2
+      shift 2
+      ;;
+    --command-duration-ms)
+      if (( $# < 2 )); then
+        print -u2 "--command-duration-ms requires a value"
+        exit 2
+      fi
+      COMMAND_DURATION_MS=$2
       shift 2
       ;;
     -h|--help)
@@ -122,6 +149,18 @@ if [[ -z "${ARM_SERIAL}" ]]; then
   print -u2 "Physical arm serial must be set in YAML or with --arm-serial"
   exit 2
 fi
+if [[ -n "${COMMAND_RATE_HZ}" ]] && ! python3 -c 'import math,sys; value=float(sys.argv[1]); raise SystemExit(0 if math.isfinite(value) and value > 0.0 else 1)' "${COMMAND_RATE_HZ}"; then
+  print -u2 "--command-rate-hz must be a finite positive number"
+  exit 2
+fi
+if [[ -n "${JOINT_SPEED_DEG_S}" ]] && ! python3 -c 'import math,sys; value=float(sys.argv[1]); raise SystemExit(0 if math.isfinite(value) and value > 0.0 else 1)' "${JOINT_SPEED_DEG_S}"; then
+  print -u2 "--joint-speed-deg-s must be a finite positive number"
+  exit 2
+fi
+if [[ -n "${COMMAND_DURATION_MS}" ]] && ! python3 -c 'import sys; value=sys.argv[1]; raise SystemExit(0 if value.isdigit() and 1 <= int(value) <= 32767 else 1)' "${COMMAND_DURATION_MS}"; then
+  print -u2 "--command-duration-ms must be an integer in [1, 32767]"
+  exit 2
+fi
 
 export ROS_DOMAIN_ID=${CONFIG_ROS_DOMAIN}
 export ROS_LOG_DIR=/tmp/d1_ros_logs
@@ -142,11 +181,17 @@ sleep 2
 print "[2/2] Preflight passed; starting physical control, MoveIt, perception, and task Actions..."
 print "Press Ctrl+C to stop the stack and all of its child processes."
 print "No pick/drop motion starts automatically."
-setsid ros2 launch d1_bringup real_system.launch.py \
-  "config:=${CONFIG_PATH}" \
-  "arm_serial:=${ARM_SERIAL}" \
-  "gravity_calibration:=${GRAVITY_CALIBRATION}" \
-  "launch_rviz:=${LAUNCH_RVIZ}" &
+LAUNCH_ARGS=(
+  "config:=${CONFIG_PATH}"
+  "arm_serial:=${ARM_SERIAL}"
+  "gravity_calibration:=${GRAVITY_CALIBRATION}"
+  "launch_rviz:=${LAUNCH_RVIZ}"
+)
+[[ -z "${COMMAND_RATE_HZ}" ]] || LAUNCH_ARGS+=("real_command_rate_hz:=${COMMAND_RATE_HZ}")
+[[ -z "${COMMAND_DURATION_MS}" ]] || LAUNCH_ARGS+=("real_command_duration_ms:=${COMMAND_DURATION_MS}")
+[[ -z "${JOINT_SPEED_DEG_S}" ]] || LAUNCH_ARGS+=("native_joint_speed_deg_s:=${JOINT_SPEED_DEG_S}")
+
+setsid ros2 launch d1_bringup real_system.launch.py "${LAUNCH_ARGS[@]}" &
 LAUNCH_PID=$!
 if wait "${LAUNCH_PID}"; then
   LAUNCH_STATUS=0

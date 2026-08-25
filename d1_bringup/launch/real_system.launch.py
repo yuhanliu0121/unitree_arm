@@ -66,6 +66,14 @@ def _launch_setup(context):
         )
 
     arm = config["arm"]
+    requested_joint_speed = LaunchConfiguration(
+        "native_joint_speed_deg_s"
+    ).perform(context).strip()
+    native_joint_speed_deg_s = float(
+        requested_joint_speed or arm.get("native_joint_speed_deg_s", 15.0)
+    )
+    if not math.isfinite(native_joint_speed_deg_s) or native_joint_speed_deg_s <= 0.0:
+        raise RuntimeError("native_joint_speed_deg_s must be a finite positive number")
     if not bool(arm.get("onboard_streaming_deployed", False)):
         raise RuntimeError(
             "real_system requires the grouped D1 onboard streaming controller; "
@@ -79,6 +87,17 @@ def _launch_setup(context):
     ).strip()
     if not arm_serial:
         raise RuntimeError("real_system requires an explicit physical arm serial")
+    requested_command_rate = LaunchConfiguration("real_command_rate_hz").perform(context).strip()
+    command_rate_hz = float(requested_command_rate or arm["command_rate_hz"])
+    if not math.isfinite(command_rate_hz) or command_rate_hz <= 0.0:
+        raise RuntimeError("real_command_rate_hz must be a finite positive number")
+    requested_duration = LaunchConfiguration("real_command_duration_ms").perform(context).strip()
+    command_duration_ms = int(
+        requested_duration or arm.get("command_duration_ms", 0)
+    )
+    if command_duration_ms < 0 or command_duration_ms > 32767:
+        raise RuntimeError("real_command_duration_ms must be in [0, 32767]")
+    effective_duration_ms = command_duration_ms or int(round(1000.0 / command_rate_hz))
 
     gravity_path_text = LaunchConfiguration("gravity_calibration").perform(context).strip()
     if not gravity_path_text:
@@ -141,7 +160,10 @@ def _launch_setup(context):
             "feedback_port": str(arm["loopback_feedback_port"]),
             "command_topic": arm["command_topic"],
             "servo_command_topic": arm["servo_command_topic"],
-            "real_command_rate_hz": str(arm["command_rate_hz"]),
+            "native_segment_topic": arm["native_segment_topic"],
+            "native_joint_speed_deg_s": str(native_joint_speed_deg_s),
+            "real_command_rate_hz": str(command_rate_hz),
+            "real_command_duration_ms": str(command_duration_ms),
             "feedback_topic": arm["feedback_topic"],
             "status_topic": arm["status_topic"],
             "gripper_closed_angle_deg": str(arm["gripper_closed_angle_deg"]),
@@ -164,7 +186,13 @@ def _launch_setup(context):
     )
 
     return [
-        LogInfo(msg=f"Starting REAL D1 system: serial={arm_serial} config={config_path}"),
+        LogInfo(
+            msg=(
+                f"Starting REAL D1 system: serial={arm_serial} config={config_path} "
+                f"command_rate={command_rate_hz:g}Hz "
+                f"servo_duration={effective_duration_ms}ms"
+            )
+        ),
         realsense,
         _configured_static_tf("go2_base", "base_link", site["go2_base_to_arm_base"]),
         _configured_static_tf("Link6", "wrist_camera_link", camera["link6_to_camera_link"]),
@@ -185,5 +213,8 @@ def generate_launch_description():
         DeclareLaunchArgument("arm_serial", default_value=""),
         DeclareLaunchArgument("gravity_calibration"),
         DeclareLaunchArgument("launch_rviz", default_value="false"),
+        DeclareLaunchArgument("native_joint_speed_deg_s", default_value=""),
+        DeclareLaunchArgument("real_command_rate_hz", default_value=""),
+        DeclareLaunchArgument("real_command_duration_ms", default_value=""),
         OpaqueFunction(function=_launch_setup),
     ])

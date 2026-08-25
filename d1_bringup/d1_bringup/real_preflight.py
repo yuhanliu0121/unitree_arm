@@ -1,7 +1,6 @@
 import math
 import socket
 import statistics
-import struct
 import sys
 import time
 from collections import deque
@@ -16,12 +15,13 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Imu, JointState
 from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 
+from d1_bringup.local_protocol import (
+    PACKET,
+    PACKET_FEEDBACK,
+    PACKET_STATUS,
+    decode_joint_packet,
+)
 
-PACKET = struct.Struct("<IHHQII7d")
-PACKET_MAGIC = 0x44314350
-PACKET_VERSION = 1
-PACKET_FEEDBACK = 2
-PACKET_STATUS = 3
 DEG_TO_RAD = math.pi / 180.0
 
 
@@ -101,6 +101,7 @@ class RealPreflight(Node):
             "feedback_max_age_s": 0.5,
             "camera_info_max_age_s": 2.0,
             "joint_limit_tolerance_rad": 0.001,
+            "require_arm_hardware_status": True,
             "joint_limits": [
                 -2.785545486183, 2.809980095711,
                 -1.541125729511, 1.619665545851,
@@ -193,16 +194,16 @@ class RealPreflight(Node):
                 return
             if len(data) != PACKET.size:
                 continue
-            unpacked = PACKET.unpack(data)
-            if unpacked[0:2] != (PACKET_MAGIC, PACKET_VERSION):
+            try:
+                packet_kind, angles_deg = decode_joint_packet(data)
+            except ValueError:
                 continue
-            if unpacked[2] == PACKET_STATUS:
-                self.latest_arm_status = tuple(int(value) for value in unpacked[6:9])
+            if packet_kind == PACKET_STATUS:
+                self.latest_arm_status = tuple(int(value) for value in angles_deg[:3])
                 self.last_arm_status = time.monotonic()
                 continue
-            if unpacked[2] != PACKET_FEEDBACK:
+            if packet_kind != PACKET_FEEDBACK:
                 continue
-            angles_deg = unpacked[6:13]
             if not all(math.isfinite(value) for value in angles_deg):
                 continue
             positions = [value * DEG_TO_RAD for value in angles_deg[:6]]
@@ -333,6 +334,8 @@ class RealPreflight(Node):
         return True, "feedback fresh; all joints within configured limits"
 
     def _arm_status_result(self):
+        if not bool(self.get_parameter("require_arm_hardware_status").value):
+            return True, "not required: onboard native executor is selected"
         if self.latest_arm_status is None:
             return False, "waiting for D1 hardware status"
         age = time.monotonic() - self.last_arm_status

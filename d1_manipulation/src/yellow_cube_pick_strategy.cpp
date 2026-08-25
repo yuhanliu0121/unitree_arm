@@ -144,47 +144,64 @@ public:
         "ESTIMATE_POSE", coarse ? coarse->detail : "cube coarse estimation unavailable"};
       return false;
     }
-    Eigen::Vector3d up(
+    Eigen::Vector3d surface_up(
       coarse->ground_normal.x, coarse->ground_normal.y, coarse->ground_normal.z);
+    surface_up.normalize();
+    const Eigen::Vector3d gravity_up = runtime_.gravityUp();
     Eigen::Vector3d coarse_center(
       coarse->center.point.x, coarse->center.point.y, coarse->center.point.z);
-    if (!runtime_.applyEstimatedGround(up, coarse->ground_offset)) {
+    if (!runtime_.applyEstimatedGround(surface_up, coarse->ground_offset)) {
       failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply perception-fitted ground to MoveIt"};
       return false;
     }
-    if (!runtime_.moveCameraTopDown(coarse_center, up.normalized())) {
+    if (!runtime_.moveCameraTopDown(coarse_center, gravity_up)) {
       failure = {action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
         "MOVE_TOP_OBSERVE", "top observation pose is not plannable"};
       return false;
     }
     const auto fine = estimate(
-      srv::EstimateCube::Request::FINE, coarse->center, up.normalized(), coarse->ground_offset);
+      srv::EstimateCube::Request::FINE, coarse->center, surface_up, coarse->ground_offset);
     if (!fine || !fine->success) {
       failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", fine ? fine->detail : "cube fine estimation unavailable"};
       return false;
     }
 
-    up = Eigen::Vector3d(
+    surface_up = Eigen::Vector3d(
       fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
-    if (!up.allFinite() || up.norm() < 0.9) {
+    if (!surface_up.allFinite() || surface_up.norm() < 0.9) {
       failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "cube fine ground normal is invalid"};
       return false;
     }
-    up.normalize();
-    if (!runtime_.applyEstimatedGround(up, fine->ground_offset)) {
+    surface_up.normalize();
+    if (!runtime_.applyEstimatedGround(surface_up, fine->ground_offset)) {
       failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
       return false;
     }
 
     Eigen::Vector3d center(fine->center.point.x, fine->center.point.y, fine->center.point.z);
-    Eigen::Vector3d edge(
+    Eigen::Vector3d object_edge(
       fine->edge_direction.x, fine->edge_direction.y, fine->edge_direction.z);
-    edge = (edge - edge.dot(up) * up).normalized();
-    const Eigen::Vector3d top_center = center + 0.5 * cube_size_ * up;
+    object_edge = (object_edge - object_edge.dot(surface_up) * surface_up).normalized();
+    Eigen::Vector3d grasp_edge =
+      object_edge - object_edge.dot(gravity_up) * gravity_up;
+    if (!object_edge.allFinite() || grasp_edge.norm() < 1e-6) {
+      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        "ESTIMATE_POSE", "cube edge is invalid after gravity projection"};
+      return false;
+    }
+    grasp_edge.normalize();
+    const Eigen::Vector3d top_center = center + 0.5 * cube_size_ * surface_up;
+    const double surface_gravity_angle_deg = std::acos(std::clamp(
+      surface_up.dot(gravity_up), -1.0, 1.0)) * 180.0 / M_PI;
+    RCLCPP_INFO(node_->get_logger(),
+      "Cube orientation references: surface_up=(%.3f, %.3f, %.3f) "
+      "gravity_up=(%.3f, %.3f, %.3f) separation=%.2f deg; tool axis uses gravity",
+      surface_up.x(), surface_up.y(), surface_up.z(),
+      gravity_up.x(), gravity_up.y(), gravity_up.z(), surface_gravity_angle_deg);
     const std::vector<std::string> target_ids{"yellow_cube", "observe_target"};
     const auto target_objects = runtime_.planningScene().getObjects(target_ids);
     const auto pregrasp_distances = descending(pregrasp_max_, pregrasp_min_, pregrasp_step_);
@@ -219,16 +236,22 @@ public:
       // Stage 1: generate IK endpoints only. This avoids publishing and solving a
       // complete OMPL path for every cube-symmetric yaw/tilt candidate.
       for (const int quarter_turn : {0, 1, -1, 2}) {
-        const Eigen::Vector3d x = Eigen::AngleAxisd(quarter_turn * M_PI_2, up) * edge;
-        const Eigen::Vector3d z = -up;
+        const Eigen::Vector3d x =
+          Eigen::AngleAxisd(quarter_turn * M_PI_2, gravity_up) * grasp_edge;
+        const Eigen::Vector3d z = -gravity_up;
         const Eigen::Vector3d y = z.cross(x).normalized();
         Eigen::Matrix3d vertical;
         vertical.col(0) = x; vertical.col(1) = y; vertical.col(2) = z;
-        for (const double tilt_deg : {2.0, -2.0, 4.0, -4.0}) {
+        // A tilted approach sweeps the fingers laterally during descent.  The
+        // 50 mm cube leaves only about 10 mm of total clearance in the open
+        // gripper, so even four degrees over the full approach can hit the top
+        // face.  Cube grasps therefore require a strictly gravity-aligned tool
+        // axis; if that endpoint is infeasible the caller must reposition.
+        for (const double tilt_deg : {0.0}) {
           Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
           transform.linear() = vertical *
             Eigen::AngleAxisd(tilt_deg * M_PI / 180.0, Eigen::Vector3d::UnitX());
-          transform.translation() = top_center + pregrasp_distance * up;
+          transform.translation() = top_center + pregrasp_distance * gravity_up;
           const auto pregrasp = poseMessage(transform);
           move_group.setStartStateToCurrentState();
           if (!move_group.setJointValueTarget(pregrasp, runtime_.tcpFrame())) continue;
@@ -271,7 +294,7 @@ public:
         for (const double grasp_distance : grasp_distances) {
           Eigen::Isometry3d grasp_transform = Eigen::Isometry3d::Identity();
           grasp_transform.linear() = candidate.rotation;
-          grasp_transform.translation() = top_center + grasp_distance * up;
+          grasp_transform.translation() = top_center + grasp_distance * gravity_up;
           moveit_msgs::msg::RobotTrajectory descent;
           const auto grasp_pose = poseMessage(grasp_transform);
           const double fraction = move_group.computeCartesianPath(
@@ -373,7 +396,7 @@ public:
     output.grasp_pose = selected.grasp_pose;
     output.pregrasp_pose = selected.pregrasp_pose;
     output.pregrasp_plan = std::move(selected_plan);
-    output.lift_direction = up;
+    output.lift_direction = gravity_up;
     output.pregrasp_distance_m = selected.pregrasp_distance;
     output.grasp_distance_m = selected.grasp_distance;
     output.grasp_yaw_degrees = selected.yaw_degrees;
@@ -386,9 +409,9 @@ public:
     auto state = std::make_shared<YellowCubeState>();
     state->top_center = top_center;
     state->grasp_rotation = selected.rotation;
-    state->object_rotation.col(0) = edge;
-    state->object_rotation.col(2) = up;
-    state->object_rotation.col(1) = up.cross(edge).normalized();
+    state->object_rotation.col(0) = object_edge;
+    state->object_rotation.col(2) = surface_up;
+    state->object_rotation.col(1) = surface_up.cross(object_edge).normalized();
     state->grasp_distances = grasp_distances;
     state->target_collision_ids = target_ids;
     output.strategy_state = std::move(state);
