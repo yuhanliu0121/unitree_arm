@@ -16,7 +16,7 @@ d1_detect_target:
     sync_tolerance_s: 0.02
     allowed_target_classes: [yellow_cube, zucchini, bowl]
     minimum_target_confidence: 0.70
-    max_optical_center_mask_distance_px: 120.0
+    max_optical_center_mask_distance_px: 200.0
     depth_scale_m_per_unit: 0.001
     debug_overlay_topic: /arm/perception/debug/overlay
     cube_debug_overlay_topic: /arm/perception/debug/cube_geometry
@@ -27,6 +27,9 @@ d1_detect_target:
     ground_ransac_iterations: 160
     ground_max_points: 12000
     cube_half_size_m: 0.025
+    cube_finetune_top_height_tolerance_m: 0.012
+    cube_finetune_min_color_area_px: 500
+    cube_finetune_min_top_area_px: 200
     zucchini_coarse_plane_height_m: 0.010
     zucchini_center_height_m: 0.01656
     zucchini_debug_directory: /tmp/d1_zucchini_debug_latest

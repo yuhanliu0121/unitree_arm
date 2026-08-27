@@ -153,6 +153,17 @@ class DetectTargetServer(Node):
         self._cube_half_size = float(
             self.declare_parameter("cube_half_size_m", 0.025).value
         )
+        self._cube_finetune_top_tolerance = float(
+            self.declare_parameter(
+                "cube_finetune_top_height_tolerance_m", 0.012
+            ).value
+        )
+        self._cube_finetune_min_color_area = int(
+            self.declare_parameter("cube_finetune_min_color_area_px", 500).value
+        )
+        self._cube_finetune_min_top_area = int(
+            self.declare_parameter("cube_finetune_min_top_area_px", 200).value
+        )
         self._cube_debug_directory = Path(
             self.declare_parameter("cube_debug_directory", "/tmp/d1_cube_debug_latest").value
         )
@@ -518,10 +529,16 @@ class DetectTargetServer(Node):
         message.point.y = float(values[1])
         message.point.z = float(values[2])
 
-    def _publish_overlay(self, color_bgr: np.ndarray, detections, matched, header) -> None:
+    def _publish_overlay(
+        self, color_bgr: np.ndarray, detections, matched, header,
+        selected_mask=None, selected_label="",
+    ) -> None:
         overlay = color_bgr.copy()
-        if matched is not None:
-            selected = matched.mask.astype(bool)
+        if matched is not None or selected_mask is not None:
+            selected = (
+                matched.mask.astype(bool) if matched is not None
+                else np.asarray(selected_mask, dtype=bool)
+            )
             magenta_bgr = np.array([255, 0, 255], dtype=np.float32)
             overlay[selected] = np.rint(
                 0.60 * overlay[selected].astype(np.float32)
@@ -546,6 +563,20 @@ class DetectTargetServer(Node):
                 2,
                 cv2.LINE_AA,
             )
+        if selected_mask is not None:
+            contours, _ = cv2.findContours(
+                np.asarray(selected_mask, dtype=np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            cv2.drawContours(overlay, contours, -1, (255, 0, 255), 3)
+            if contours and selected_label:
+                x, y, _, _ = cv2.boundingRect(max(contours, key=cv2.contourArea))
+                cv2.putText(
+                    overlay, selected_label, (x, max(18, y - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2,
+                    cv2.LINE_AA,
+                )
         output = Image()
         output.header = header
         output.height, output.width = overlay.shape[:2]
@@ -719,6 +750,73 @@ class DetectTargetServer(Node):
         )
         return normal, offset
 
+    def _cube_finetune_top_mask(
+        self, color_bgr, depth_m, camera_info, detections,
+        rotation, camera_origin, normal, offset,
+    ):
+        """Return a depth-filtered cube top mask for close PREGRASP views."""
+        principal = np.asarray([camera_info.k[2], camera_info.k[5]])
+        detection = select_class_mask_near_pixel(
+            detections, "yellow_cube", tuple(principal)
+        )
+        source = "yolo"
+        confidence = float(detection.confidence) if detection is not None else 0.0
+        if detection is not None:
+            color_mask = detection.mask.astype(np.uint8)
+        else:
+            hsv = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2HSV)
+            raw = cv2.inRange(hsv, self._yellow_hsv_lower, self._yellow_hsv_upper)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            raw = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel)
+            raw = cv2.morphologyEx(raw, cv2.MORPH_CLOSE, kernel)
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(raw)
+            candidates = []
+            for label in range(1, count):
+                area = int(stats[label, cv2.CC_STAT_AREA])
+                if area < self._cube_finetune_min_color_area:
+                    continue
+                rows, columns = np.nonzero(labels == label)
+                distance = float(np.min(np.hypot(
+                    columns - principal[0], rows - principal[1]
+                )))
+                candidates.append((distance, -area, label))
+            if not candidates:
+                raise LookupError(
+                    "cube FINETUNE found neither a YOLO mask nor a usable yellow component"
+                )
+            _, _, label = min(candidates)
+            color_mask = np.asarray(labels == label, dtype=np.uint8)
+            source = "yellow_hsv_fallback"
+
+        valid = color_mask.astype(bool) & np.isfinite(depth_m) & (depth_m > 0.0)
+        rows, columns = np.nonzero(valid)
+        if len(columns) < self._cube_finetune_min_top_area:
+            raise ValueError("cube FINETUNE mask has too few valid depth pixels")
+        pixels = np.column_stack((columns, rows))
+        rays_camera = undistorted_rays(pixels, camera_info.k, camera_info.d)
+        points_camera = rays_camera * (
+            depth_m[rows, columns] / rays_camera[:, 2]
+        )[:, None]
+        points_planning = points_camera @ rotation.T + camera_origin
+        heights = points_planning @ normal + offset
+        top_inliers = np.abs(
+            heights - 2.0 * self._cube_half_size
+        ) <= self._cube_finetune_top_tolerance
+        top_mask = np.zeros_like(color_mask, dtype=np.uint8)
+        top_mask[rows[top_inliers], columns[top_inliers]] = 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        top_mask = cv2.morphologyEx(top_mask, cv2.MORPH_CLOSE, kernel)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(top_mask)
+        if count < 2:
+            raise ValueError("cube FINETUNE depth filter found no top face")
+        label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < self._cube_finetune_min_top_area:
+            raise ValueError(
+                f"cube FINETUNE top face is too small: area={area}px"
+            )
+        return np.asarray(labels == label, dtype=np.uint8), source, confidence
+
     def _estimate_cube(self, request, response):
         if not self._request_lock.acquire(blocking=False):
             return self._cube_fail(response, EstimateCube.Response.FAILURE_INTERNAL,
@@ -726,35 +824,52 @@ class DetectTargetServer(Node):
         try:
             (color_message, color_bgr, depth_m, camera_info,
              optical_frame, detections) = self._runtime_frame()
-            detection = self._select_stage_detection(
-                request.stage,
-                EstimateCube.Request.COARSE,
-                EstimateCube.Request.FINE,
-                "yellow_cube",
-                request.target_hint,
-                optical_frame,
-                camera_info,
-                detections,
-            )
             planning_transform = self._lookup_transform(self._planning_frame, optical_frame)
             rotation, camera_origin = self._transform_arrays(planning_transform)
             normal, offset = self._fit_ground_from_current_depth(
                 depth_m, camera_info, rotation, camera_origin
             )
 
+            detection = None
+            finetune_source = ""
+            finetune_confidence = 0.0
+            if request.stage == EstimateCube.Request.FINETUNE:
+                geometry_mask, finetune_source, finetune_confidence = \
+                    self._cube_finetune_top_mask(
+                        color_bgr, depth_m, camera_info, detections,
+                        rotation, camera_origin, normal, offset,
+                    )
+            else:
+                detection = self._select_stage_detection(
+                    request.stage,
+                    EstimateCube.Request.COARSE,
+                    EstimateCube.Request.FINE,
+                    "yellow_cube",
+                    request.target_hint,
+                    optical_frame,
+                    camera_info,
+                    detections,
+                )
+                geometry_mask = detection.mask.astype(np.uint8)
+
             if request.stage == EstimateCube.Request.COARSE:
-                mask_y, mask_x = np.nonzero(detection.mask)
+                mask_y, mask_x = np.nonzero(geometry_mask)
                 center_pixel = np.array([[np.median(mask_x), np.median(mask_y)]])
-                center_ray = undistorted_rays(center_pixel, camera_info.k, camera_info.d) @ rotation.T
+                center_ray = undistorted_rays(
+                    center_pixel, camera_info.k, camera_info.d
+                ) @ rotation.T
                 center = intersect_rays_with_plane(
                     camera_origin, center_ray, normal, offset - self._cube_half_size
                 )[0]
                 edge = np.zeros(3)
                 corners = np.empty((0, 3))
                 detail = "ground fitted and mask-centre ray intersected with cube mid-plane"
-            elif request.stage == EstimateCube.Request.FINE:
+                stage_name = "coarse"
+            elif request.stage in (
+                EstimateCube.Request.FINE, EstimateCube.Request.FINETUNE
+            ):
                 contours, _ = cv2.findContours(
-                    detection.mask.astype(np.uint8), cv2.RETR_EXTERNAL,
+                    geometry_mask, cv2.RETR_EXTERNAL,
                     cv2.CHAIN_APPROX_NONE,
                 )
                 if not contours:
@@ -769,58 +884,97 @@ class DetectTargetServer(Node):
                 )
                 top_center, edge, corners = fit_square_on_plane(top_points, normal)
                 center = top_center - self._cube_half_size * normal
-                detail = (
-                    "ground refitted; mask contour projected to the refreshed "
-                    "top plane and fitted with minAreaRect"
+                stage_name = (
+                    "finetune" if request.stage == EstimateCube.Request.FINETUNE
+                    else "fine"
                 )
+                if request.stage == EstimateCube.Request.FINETUNE:
+                    detail = (
+                        "ground refitted; depth-filtered top-face contour projected "
+                        "to the refreshed top plane and fitted with minAreaRect "
+                        f"(source={finetune_source})"
+                    )
+                else:
+                    detail = (
+                        "ground refitted; mask contour projected to the refreshed "
+                        "top plane and fitted with minAreaRect"
+                    )
                 debug = color_bgr.copy()
+                if request.stage == EstimateCube.Request.FINETUNE:
+                    tint = np.zeros_like(debug)
+                    tint[:, :] = (255, 0, 255)
+                    blended = cv2.addWeighted(debug, 0.35, tint, 0.65, 0.0)
+                    selected = geometry_mask.astype(bool)
+                    debug[selected] = blended[selected]
                 cv2.drawContours(debug, [contour.astype(np.int32)], -1, (255, 0, 255), 2)
-                cv2.putText(debug, "yellow_cube fine geometry", (20, 32),
+                cv2.putText(debug, f"yellow_cube {stage_name} top face", (20, 32),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2, cv2.LINE_AA)
                 self._cube_debug_publisher.publish(self._to_ros_image(debug, color_message.header))
+            else:
+                raise ValueError(
+                    f"unsupported yellow_cube estimation stage {request.stage}"
+                )
             response.success = True
             response.failure_reason = EstimateCube.Response.FAILURE_NONE
             response.detail = detail
-            response.class_name = detection.class_name
-            response.confidence = float(detection.confidence)
+            response.class_name = "yellow_cube"
+            response.confidence = (
+                finetune_confidence if request.stage == EstimateCube.Request.FINETUNE
+                else float(detection.confidence)
+            )
             self._set_point(response.center, self._planning_frame,
                             color_message.header.stamp, center)
-            response.ground_normal.x, response.ground_normal.y, response.ground_normal.z = map(float, normal)
+            response.ground_normal.x, response.ground_normal.y, \
+                response.ground_normal.z = map(float, normal)
             response.ground_offset = float(offset)
-            response.edge_direction.x, response.edge_direction.y, response.edge_direction.z = map(float, edge)
+            response.edge_direction.x, response.edge_direction.y, \
+                response.edge_direction.z = map(float, edge)
             response.top_polygon.header = response.center.header
             for corner in corners:
                 point = Point32()
                 point.x, point.y, point.z = map(float, corner)
                 response.top_polygon.polygon.points.append(point)
-            self._publish_overlay(color_bgr, detections, detection, color_message.header)
+            self._publish_overlay(
+                color_bgr, detections, detection, color_message.header,
+                geometry_mask if request.stage == EstimateCube.Request.FINETUNE else None,
+                "yellow_cube selected finetune top" if
+                request.stage == EstimateCube.Request.FINETUNE else "",
+            )
             self._cube_debug_directory.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(
-                str(self._cube_debug_directory / ("coarse.png" if request.stage == 0 else "fine.png")),
-                color_bgr if request.stage == 0 else debug,
+                str(self._cube_debug_directory / f"{stage_name}.png"),
+                color_bgr if request.stage == EstimateCube.Request.COARSE else debug,
             )
             geometry = {
-                "stage": "coarse" if request.stage == 0 else "fine",
-                "class_name": detection.class_name,
-                "confidence": float(detection.confidence),
+                "stage": stage_name,
+                "class_name": "yellow_cube",
+                "confidence": float(response.confidence),
                 "center_base_m": center.tolist(),
                 "ground_normal_base": normal.tolist(),
                 "ground_offset_m": float(offset),
                 "edge_direction_base": edge.tolist(),
                 "top_corners_base_m": corners.tolist(),
             }
-            (self._cube_debug_directory / ("coarse.json" if request.stage == 0 else "fine.json")).write_text(
+            (self._cube_debug_directory / f"{stage_name}.json").write_text(
                 json.dumps(geometry, indent=2), encoding="utf-8"
             )
             self.get_logger().info(
                 "Cube %s estimate: center=(%.3f, %.3f, %.3f) normal=(%.3f, %.3f, %.3f)"
-                % ("coarse" if request.stage == 0 else "fine", *center, *normal)
+                % (stage_name, *center, *normal)
             )
             return response
         except LookupError as exception:
-            return self._cube_fail(response, EstimateCube.Response.FAILURE_NO_MATCHING_DETECTION, str(exception))
+            return self._cube_fail(
+                response,
+                EstimateCube.Response.FAILURE_NO_MATCHING_DETECTION,
+                str(exception),
+            )
         except (TimeoutError, ValueError, TransformException) as exception:
-            return self._cube_fail(response, EstimateCube.Response.FAILURE_INCOMPLETE_INFORMATION, str(exception))
+            return self._cube_fail(
+                response,
+                EstimateCube.Response.FAILURE_INCOMPLETE_INFORMATION,
+                str(exception),
+            )
         except Exception as exception:
             self.get_logger().error(f"EstimateCube internal error: {exception}")
             return self._cube_fail(response, EstimateCube.Response.FAILURE_INTERNAL, str(exception))

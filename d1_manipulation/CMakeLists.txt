@@ -164,6 +164,14 @@ install(PROGRAMS scripts/drop_seed_bin.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME drop_seed_bin
 )
+install(PROGRAMS scripts/capture_cube_safe_boundary.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME capture_cube_safe_boundary
+)
+install(PROGRAMS scripts/visualize_cube_safe_region.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME visualize_cube_safe_region
+)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

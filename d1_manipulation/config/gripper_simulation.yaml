@@ -8,3 +8,11 @@ d1_pick_object:
     zucchini_gripper_held_threshold_m: 0.0066666667  # -10 deg
     bowl_gripper_closed_m: 0.0                # -30 deg
     bowl_gripper_held_threshold_m: 0.0006666667  # -28 deg
+    # MuJoCo RGB-D exhibits slightly larger frame-to-frame contour jitter than
+    # the physical D435i at this close view; retain the same finetune flow with
+    # a simulation-specific stability threshold.
+    cube_finetune_max_stddev_m: 0.003
+    # Ideal MuJoCo kinematics do not contain the stable physical TCP/URDF
+    # offset absorbed by the real-arm calibration. Keep the same physical
+    # cross-section width around the ideal simulated descent centre.
+    cube_finetune_closing_bounds_m: [-0.05646, -0.05234]

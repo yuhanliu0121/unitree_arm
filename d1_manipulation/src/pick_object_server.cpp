@@ -223,9 +223,17 @@ public:
       {
         continueDescend(response);
       }, rmw_qos_profile_services_default, debug_service_callback_group_);
+    finetune_grasp_service_ = node_->create_service<std_srvs::srv::Trigger>(
+      "/arm/debug/finetune_grasp",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+      {
+        fineTuneDebugPregrasp(response);
+      }, rmw_qos_profile_services_default, debug_service_callback_group_);
     RCLCPP_INFO(
       node_->get_logger(),
-      "PickObject action server ready: %s backend=%s debug_resume=/arm/debug/continue_descend",
+      "PickObject action server ready: %s backend=%s "
+      "debug_finetune=/arm/debug/finetune_grasp debug_resume=/arm/debug/continue_descend",
       action_name_.c_str(), backend_.c_str());
   }
 
@@ -275,6 +283,85 @@ private:
     }
     detail = "current arm remains at cached pregrasp";
     return true;
+  }
+
+  bool refreshDebugPregraspEndpoint(PreparedPick& prepared, std::string& detail)
+  {
+    auto& trajectory = prepared.pregrasp_plan.trajectory_.joint_trajectory;
+    if (trajectory.points.empty()) {
+      detail = "cached pregrasp trajectory has no endpoint";
+      return false;
+    }
+    const auto state = move_group_.getCurrentState(2.0);
+    if (!state) {
+      detail = "current arm joint feedback is unavailable after FINETUNE_GRASP";
+      return false;
+    }
+    auto& endpoint = trajectory.points.back();
+    endpoint.positions.resize(trajectory.joint_names.size());
+    for (std::size_t index = 0; index < trajectory.joint_names.size(); ++index) {
+      endpoint.positions[index] = state->getVariablePosition(trajectory.joint_names[index]);
+    }
+    detail = "cached pregrasp endpoint refreshed from live joint feedback";
+    return true;
+  }
+
+  void fineTuneDebugPregrasp(
+    const std::shared_ptr<std_srvs::srv::Trigger::Response>& response)
+  {
+    if (pick_executing_.load()) {
+      response->success = false;
+      response->message = "pick action is still executing";
+      return;
+    }
+
+    std::shared_ptr<PreparedPick> prepared;
+    std::string class_name;
+    {
+      std::lock_guard<std::mutex> lock(debug_pregrasp_mutex_);
+      prepared = debug_pregrasp_;
+      class_name = debug_pregrasp_class_;
+    }
+    if (!prepared) {
+      response->success = false;
+      response->message = "no cached pregrasp; first run pick_object with stop_after: 1";
+      return;
+    }
+
+    std::string pregrasp_detail;
+    if (!stillAtDebugPregrasp(*prepared, pregrasp_detail)) {
+      clearDebugPregrasp();
+      response->success = false;
+      response->message = pregrasp_detail + "; cached plan discarded";
+      return;
+    }
+    const auto strategy_entry = strategies_.find(class_name);
+    if (strategy_entry == strategies_.end()) {
+      clearDebugPregrasp();
+      response->success = false;
+      response->message = "cached grasp strategy is unavailable";
+      return;
+    }
+
+    cancel_.store(false);
+    StrategyFailure failure;
+    if (!strategy_entry->second->fineTune(*prepared, failure)) {
+      clearDebugPregrasp();
+      response->success = false;
+      response->message = failure.state + ": " + failure.detail;
+      return;
+    }
+    std::string refresh_detail;
+    if (!refreshDebugPregraspEndpoint(*prepared, refresh_detail)) {
+      clearDebugPregrasp();
+      response->success = false;
+      response->message = refresh_detail + "; cached plan discarded";
+      return;
+    }
+    response->success = true;
+    response->message = class_name +
+      " FINETUNE_GRASP accepted; arm remains at corrected PREGRASP and DESCEND is armed";
+    RCLCPP_INFO(node_->get_logger(), "%s", response->message.c_str());
   }
 
   void continueDescend(const std::shared_ptr<std_srvs::srv::Trigger::Response>& response)
@@ -553,6 +640,7 @@ public:
   const std::string& planningFrame() const override { return planning_frame_; }
   const std::string& tcpFrame() const override { return tcp_frame_; }
   const std::string& link6Frame() const override { return link6_frame_; }
+  const std::string& cameraFrame() const override { return camera_frame_; }
   Eigen::Vector3d gravityUp() override
   {
     const auto transform = lookup(planning_frame_, gravity_frame_);
@@ -638,7 +726,8 @@ private:
     return result.get().code == rclcpp_action::ResultCode::SUCCEEDED;
   }
 
-  bool executePlan(const moveit::planning_interface::MoveGroupInterface::Plan& plan)
+  bool executePlan(
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan) override
   {
     return executePlan(plan, ExecutionOptions{});
   }
@@ -1058,6 +1147,20 @@ private:
           class_name.c_str());
         return;
       }
+      feedback(handle, "FINETUNE_GRASP", 0.72F,
+        "Checking the live target against the calibrated safe descent region");
+      if (!strategy.fineTune(prepared, strategy_failure)) {
+        fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
+        return;
+      }
+      if (cancel_.load() || handle->is_canceling()) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR,
+          "FINETUNE_GRASP", "canceled", true);
+        return;
+      }
+      result->estimated_center = prepared.estimated_center;
+      result->pregrasp_pose.pose = prepared.pregrasp_pose;
+      result->pregrasp_pose.header.stamp = node_->now();
       if (!strategy.confirmDescent(prepared, strategy_failure)) {
         fail(handle, strategy_failure.category, strategy_failure.state, strategy_failure.detail);
         return;
@@ -1146,6 +1249,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
   rclcpp_action::Server<Pick>::SharedPtr server_;
   rclcpp::CallbackGroup::SharedPtr debug_service_callback_group_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finetune_grasp_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr continue_descend_service_;
   std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> cancel_{false};

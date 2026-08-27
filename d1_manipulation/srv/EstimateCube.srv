@@ -1,5 +1,6 @@
 uint8 COARSE=0
 uint8 FINE=1
+uint8 FINETUNE=2
 uint8 stage
 geometry_msgs/PointStamped target_hint
 # Plane convention in planning_frame: dot(normal, p) + offset = 0.

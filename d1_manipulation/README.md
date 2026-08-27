@@ -92,8 +92,19 @@ intentionally not implemented by the cube strategy.
 The pipeline performs an oblique RGB-D observation, gravity-constrained ground
 RANSAC, a strict top-down RGB observation, metric top-contour projection,
 minimum-area square fitting, ordered symmetric grasp planning, and the selected
-execution stage. RViz exposes `Cube Grasp Geometry`; the latest coarse/fine
-images and JSON estimates are copied into the acceptance log directory.
+execution stage. By default, the cube strategy additionally performs
+`FINETUNE_GRASP` after PREGRASP: it refits the
+ground, isolates the depth-consistent top face, checks its camera-frame 3-D
+centre against the physically calibrated safe-descent prism, and makes at most
+three bounded stop-and-look corrections. Bowl and zucchini strategies retain
+their established path. RViz exposes `Cube Grasp Geometry`;
+the latest coarse/fine/finetune images and JSON estimates are written to the
+cube debug directory.
+
+The finetune flow is enabled for both backends. Real arms sharing the same D1,
+wrist-camera mount and URDF use the common physically calibrated prism;
+`gripper_simulation.yaml` overrides its closing-axis offset because ideal
+MuJoCo kinematics intentionally omit the stable physical TCP/URDF error.
 
 MoveIt deliberately does not receive MuJoCo ground-truth collision geometry
 for the cube, bowl, or zucchini. Its world contains the arm, the Go2 proxy and

@@ -50,13 +50,29 @@ d1_pick_object:
     tcp_frame: tcp_link
     color_optical_frame: wrist_camera_color_optical_frame
     cube_size_m: 0.05
-    pregrasp_distance_max_m: 0.080
+    pregrasp_distance_max_m: 0.040
     pregrasp_distance_min_m: 0.015
     pregrasp_distance_step_m: 0.005
     grasp_distance_min_m: -0.040
     grasp_distance_max_m: -0.024
     grasp_distance_step_m: 0.002
     cube_joint5_motion_weight: 2.0
+    # PREGRASP visual fine-tuning is the default cube grasp path. The safe
+    # prism is calibrated for the shared D1 + wrist-camera hardware layout.
+    cube_finetune_enabled: true
+    cube_finetune_camera_frame: wrist_camera_color_optical_frame
+    cube_finetune_closing_axis_camera: [-0.9964914766084, 0.030719609390554355, -0.07785269838420857]
+    cube_finetune_finger_axis_camera: [0.008596773865607941, 0.9628521848541389, 0.26989213697459724]
+    cube_finetune_closing_bounds_m: [-0.04352345527058814, -0.03940754708007975]
+    cube_finetune_finger_bounds_m: [0.07775923811314761, 0.11838677790731594]
+    cube_finetune_gain: 0.7
+    cube_finetune_max_step_m: 0.008
+    cube_finetune_max_total_m: 0.020
+    cube_finetune_max_corrections: 3
+    cube_finetune_samples: 3
+    cube_finetune_max_stddev_m: 0.0015
+    cube_finetune_min_improvement_ratio: 0.30
+    cube_finetune_settle_s: 0.5
     lift_distance_m: 0.10
     carry_joint_positions: [0.0, -1.54, 1.546, 0.0, -0.6, 1.57]
     top_observation_distance_m: 0.35

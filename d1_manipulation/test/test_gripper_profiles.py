@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
@@ -41,3 +42,27 @@ def test_gripper_profile_angles(profile, expected):
         assert _degrees(target) == pytest.approx(target_deg, abs=1e-6)
         assert _degrees(threshold) == pytest.approx(threshold_deg, abs=1e-6)
         assert threshold > target
+
+
+def test_cube_finetune_is_default_and_uses_calibrated_orthogonal_axes():
+    common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
+    parameters = common["d1_pick_object"]["ros__parameters"]
+    assert parameters["cube_finetune_enabled"] is True
+    assert parameters["cube_finetune_camera_frame"] == \
+        "wrist_camera_color_optical_frame"
+    closing = np.asarray(parameters["cube_finetune_closing_axis_camera"])
+    finger = np.asarray(parameters["cube_finetune_finger_axis_camera"])
+    assert np.linalg.norm(closing) == pytest.approx(1.0, abs=1e-6)
+    assert np.linalg.norm(finger) == pytest.approx(1.0, abs=1e-6)
+    assert float(closing @ finger) == pytest.approx(0.0, abs=1e-6)
+    closing_bounds = parameters["cube_finetune_closing_bounds_m"]
+    finger_bounds = parameters["cube_finetune_finger_bounds_m"]
+    assert closing_bounds[1] - closing_bounds[0] == pytest.approx(
+        0.004115908190508388, abs=1e-12
+    )
+    assert finger_bounds[1] - finger_bounds[0] == pytest.approx(
+        0.04062753979416833, abs=1e-12
+    )
+    assert parameters["cube_finetune_max_step_m"] == pytest.approx(0.008)
+    assert parameters["cube_finetune_max_total_m"] == pytest.approx(0.020)
+    assert parameters["cube_finetune_max_corrections"] == 3

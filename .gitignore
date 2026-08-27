@@ -43,3 +43,6 @@ dist/
 
 # Local development-only dataset, training runs and paper-object fine-tuning.
 /paper_object_perception/
+
+# Local pointer to an unfinished four-boundary hardware calibration session.
+/validation/real_pregrasp_alignment/safe_region_calibration/.active_session

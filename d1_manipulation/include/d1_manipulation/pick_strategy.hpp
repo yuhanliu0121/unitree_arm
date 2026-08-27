@@ -63,6 +63,7 @@ public:
   virtual const std::string& planningFrame() const = 0;
   virtual const std::string& tcpFrame() const = 0;
   virtual const std::string& link6Frame() const = 0;
+  virtual const std::string& cameraFrame() const = 0;
   virtual Eigen::Vector3d gravityUp() = 0;
   virtual Eigen::Isometry3d lookup(const std::string& target, const std::string& source) = 0;
   virtual bool moveCameraTopDown(const Eigen::Vector3d& target, const Eigen::Vector3d& up) = 0;
@@ -77,6 +78,8 @@ public:
     moveit_msgs::msg::RobotTrajectory& trajectory) = 0;
   virtual double cartesianStep() const = 0;
   virtual double minimumCartesianFraction() const = 0;
+  virtual bool executePlan(
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan) = 0;
 };
 
 class PickStrategy
@@ -88,6 +91,7 @@ public:
     const geometry_msgs::msg::PointStamped& coarse_hint,
     PreparedPick& output,
     StrategyFailure& failure) = 0;
+  virtual bool fineTune(PreparedPick&, StrategyFailure&) {return true;}
   virtual bool confirmDescent(PreparedPick& plan, StrategyFailure& failure) = 0;
   virtual moveit_msgs::msg::AttachedCollisionObject makeAttachedObject(
     const PreparedPick& plan,

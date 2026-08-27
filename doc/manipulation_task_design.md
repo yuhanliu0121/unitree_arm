@@ -197,6 +197,7 @@ CURRENT_POSE
 → ESTIMATE_POSE
 → PLAN_PREGRASP
 → MOVE_PREGRASP
+→ FINETUNE_GRASP
 → DESCEND
 → GRASP
 → VERIFY_GRASP
@@ -216,6 +217,8 @@ CURRENT_POSE
 - `ESTIMATE_POSE`：计算目标精确三维位姿；
 - `PLAN_PREGRASP`：计算并规划预抓取姿态；
 - `MOVE_PREGRASP`：移动到物体上方；
+- `FINETUNE_GRASP`：yellow_cube 在当前 RGB-D 中重新提取顶面中心，
+  与真机标定的安全下落柱体比较，最多三次“小步移动—停止—重新观测”；
 - `DESCEND`：沿受约束路径下降；
 - `GRASP`：闭合夹爪；
 - `VERIFY_GRASP`：判断物体是否被可靠夹持；

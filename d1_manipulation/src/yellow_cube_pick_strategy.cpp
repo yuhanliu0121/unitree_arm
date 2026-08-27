@@ -8,6 +8,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include <Eigen/SVD>
@@ -95,6 +96,18 @@ struct YellowCubeState final : PickStrategyState
   std::vector<double> grasp_distances;
   std::vector<std::string> target_collision_ids;
 };
+
+struct FineTuneMeasurement
+{
+  Eigen::Vector3d top_center_camera{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d top_center_planning{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d ground_normal{Eigen::Vector3d::UnitZ()};
+  double ground_offset{0.0};
+  double closing_coordinate{0.0};
+  double finger_coordinate{0.0};
+  double closing_stddev{0.0};
+  double finger_stddev{0.0};
+};
 }  // namespace
 
 class YellowCubePickStrategy final : public PickStrategy
@@ -119,6 +132,35 @@ public:
     grasp_settle_ = parameterOrDeclare(node_, "grasp_settle_s", 0.5);
     lift_distance_ = parameterOrDeclare(node_, "lift_distance_m", 0.10);
     joint5_motion_weight_ = parameterOrDeclare(node_, "cube_joint5_motion_weight", 2.0);
+    finetune_enabled_ = parameterOrDeclare(node_, "cube_finetune_enabled", true);
+    finetune_camera_frame_ = parameterOrDeclare(
+      node_, "cube_finetune_camera_frame", std::string{"wrist_camera_color_optical_frame"});
+    const auto closing_axis = parameterOrDeclare(
+      node_, "cube_finetune_closing_axis_camera", std::vector<double>{-1.0, 0.0, 0.0});
+    const auto finger_axis = parameterOrDeclare(
+      node_, "cube_finetune_finger_axis_camera", std::vector<double>{0.0, 1.0, 0.0});
+    const auto closing_bounds = parameterOrDeclare(
+      node_, "cube_finetune_closing_bounds_m", std::vector<double>{-0.01, 0.01});
+    const auto finger_bounds = parameterOrDeclare(
+      node_, "cube_finetune_finger_bounds_m", std::vector<double>{-0.02, 0.02});
+    if (closing_axis.size() != 3 || finger_axis.size() != 3 ||
+      closing_bounds.size() != 2 || finger_bounds.size() != 2)
+    {
+      throw std::invalid_argument("cube finetune axes must have 3 values and bounds 2 values");
+    }
+    closing_axis_camera_ = Eigen::Vector3d(closing_axis[0], closing_axis[1], closing_axis[2]);
+    finger_axis_camera_ = Eigen::Vector3d(finger_axis[0], finger_axis[1], finger_axis[2]);
+    closing_bounds_ = Eigen::Vector2d(closing_bounds[0], closing_bounds[1]);
+    finger_bounds_ = Eigen::Vector2d(finger_bounds[0], finger_bounds[1]);
+    finetune_gain_ = parameterOrDeclare(node_, "cube_finetune_gain", 0.7);
+    finetune_max_step_ = parameterOrDeclare(node_, "cube_finetune_max_step_m", 0.008);
+    finetune_max_total_ = parameterOrDeclare(node_, "cube_finetune_max_total_m", 0.020);
+    finetune_max_corrections_ = parameterOrDeclare(node_, "cube_finetune_max_corrections", 3);
+    finetune_samples_ = parameterOrDeclare(node_, "cube_finetune_samples", 3);
+    finetune_max_stddev_ = parameterOrDeclare(node_, "cube_finetune_max_stddev_m", 0.0015);
+    finetune_min_improvement_ = parameterOrDeclare(
+      node_, "cube_finetune_min_improvement_ratio", 0.30);
+    finetune_settle_s_ = parameterOrDeclare(node_, "cube_finetune_settle_s", 0.5);
     if (cube_size_ <= 0.0 || pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ ||
       pregrasp_step_ <= 0.0 || grasp_min_ > grasp_max_ || grasp_max_ >= 0.0 ||
       grasp_step_ <= 0.0 || gripper_closed_ < 0.0 || joint5_motion_weight_ <= 0.0 ||
@@ -126,6 +168,23 @@ public:
     {
       throw std::invalid_argument("invalid signed cube pregrasp/grasp search parameters");
     }
+    if (closing_axis_camera_.norm() < 0.9 || finger_axis_camera_.norm() < 0.9 ||
+      closing_bounds_.x() >= closing_bounds_.y() || finger_bounds_.x() >= finger_bounds_.y() ||
+      finetune_gain_ <= 0.0 || finetune_gain_ > 1.0 || finetune_max_step_ <= 0.0 ||
+      finetune_max_total_ < finetune_max_step_ || finetune_max_corrections_ < 0 ||
+      finetune_samples_ < 1 || finetune_max_stddev_ <= 0.0 ||
+      finetune_min_improvement_ < 0.0 || finetune_min_improvement_ >= 1.0 ||
+      finetune_settle_s_ < 0.0)
+    {
+      throw std::invalid_argument("invalid cube finetune parameters");
+    }
+    closing_axis_camera_.normalize();
+    finger_axis_camera_ -= closing_axis_camera_ *
+      closing_axis_camera_.dot(finger_axis_camera_);
+    if (finger_axis_camera_.norm() < 0.9) {
+      throw std::invalid_argument("cube finetune camera axes are nearly collinear");
+    }
+    finger_axis_camera_.normalize();
     estimate_client_ = node_->create_client<srv::EstimateCube>(estimate_name_);
     state_validity_client_ = node_->create_client<moveit_msgs::srv::GetStateValidity>(
       "/check_state_validity");
@@ -426,6 +485,165 @@ public:
     return true;
   }
 
+  bool fineTune(PreparedPick& plan, StrategyFailure& failure) override
+  {
+    if (!finetune_enabled_) {
+      RCLCPP_INFO(node_->get_logger(),
+        "Cube FINETUNE_GRASP is disabled; retaining the prepared pregrasp");
+      return true;
+    }
+    if (runtime_.cameraFrame() != finetune_camera_frame_) {
+      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        "FINETUNE_GRASP", "configured camera frame does not match the calibrated safe region"};
+      return false;
+    }
+    const auto state = std::dynamic_pointer_cast<YellowCubeState>(plan.strategy_state);
+    if (!state) {
+      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        "FINETUNE_GRASP", "yellow-cube strategy state is missing"};
+      return false;
+    }
+
+    const double closing_midpoint = 0.5 * (closing_bounds_.x() + closing_bounds_.y());
+    const double finger_midpoint = 0.5 * (finger_bounds_.x() + finger_bounds_.y());
+    double cumulative_correction = 0.0;
+    double previous_outside_error = std::numeric_limits<double>::quiet_NaN();
+
+    for (int correction = 0; correction <= finetune_max_corrections_; ++correction) {
+      FineTuneMeasurement measurement;
+      std::string measurement_error;
+      if (!measureFineTune(plan, measurement, measurement_error)) {
+        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+          "FINETUNE_GRASP", measurement_error};
+        return false;
+      }
+      publishFineTuneMarkers(measurement);
+
+      const double closing_outside = intervalError(
+        measurement.closing_coordinate, closing_bounds_);
+      const double finger_outside = intervalError(
+        measurement.finger_coordinate, finger_bounds_);
+      const double outside_error = std::hypot(closing_outside, finger_outside);
+      RCLCPP_INFO(node_->get_logger(),
+        "Cube FINETUNE_GRASP observation %d/%d: closing=%.1f mm [%.1f, %.1f] "
+        "finger=%.1f mm [%.1f, %.1f] std=(%.2f, %.2f) mm outside=%.2f mm",
+        correction + 1, finetune_max_corrections_ + 1,
+        1000.0 * measurement.closing_coordinate,
+        1000.0 * closing_bounds_.x(), 1000.0 * closing_bounds_.y(),
+        1000.0 * measurement.finger_coordinate,
+        1000.0 * finger_bounds_.x(), 1000.0 * finger_bounds_.y(),
+        1000.0 * measurement.closing_stddev,
+        1000.0 * measurement.finger_stddev, 1000.0 * outside_error);
+
+      if (measurement.closing_stddev > finetune_max_stddev_ ||
+        measurement.finger_stddev > finetune_max_stddev_)
+      {
+        std::ostringstream detail;
+        detail << std::fixed << std::setprecision(1)
+               << "cube top centre is unstable across " << finetune_samples_
+               << " frames: closing_std=" << 1000.0 * measurement.closing_stddev
+               << " mm finger_std=" << 1000.0 * measurement.finger_stddev
+               << " mm; keep PREGRASP and reposition Go2";
+        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+          "FINETUNE_GRASP", detail.str()};
+        return false;
+      }
+
+      if (outside_error <= 1e-9) {
+        if (!acceptFineTune(plan, *state, measurement)) {
+          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+            "FINETUNE_GRASP", "failed to update MoveIt with the refreshed ground plane"};
+          return false;
+        }
+        RCLCPP_INFO(node_->get_logger(),
+          "Cube FINETUNE_GRASP accepted inside calibrated safe prism after %d correction(s)",
+          correction);
+        return true;
+      }
+      if (std::isfinite(previous_outside_error) &&
+        outside_error > (1.0 - finetune_min_improvement_) * previous_outside_error)
+      {
+        std::ostringstream detail;
+        detail << std::fixed << std::setprecision(1)
+               << "visual correction did not reduce safe-region error by "
+               << 100.0 * finetune_min_improvement_ << "% ("
+               << 1000.0 * previous_outside_error << " -> "
+               << 1000.0 * outside_error
+               << " mm); keep PREGRASP and reposition Go2";
+        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+          "FINETUNE_GRASP", detail.str()};
+        return false;
+      }
+      if (correction == finetune_max_corrections_) break;
+
+      Eigen::Vector3d correction_camera = finetune_gain_ * (
+        (measurement.closing_coordinate - closing_midpoint) * closing_axis_camera_ +
+        (measurement.finger_coordinate - finger_midpoint) * finger_axis_camera_);
+      if (correction_camera.norm() > finetune_max_step_) {
+        correction_camera *= finetune_max_step_ / correction_camera.norm();
+      }
+      const double remaining = finetune_max_total_ - cumulative_correction;
+      if (remaining <= 1e-6) break;
+      if (correction_camera.norm() > remaining) {
+        correction_camera *= remaining / correction_camera.norm();
+      }
+
+      Eigen::Vector3d correction_planning =
+        runtime_.lookup(runtime_.planningFrame(), runtime_.cameraFrame()).linear() *
+        correction_camera;
+      const Eigen::Vector3d gravity_up = runtime_.gravityUp();
+      correction_planning -= gravity_up * correction_planning.dot(gravity_up);
+      const double correction_norm = correction_planning.norm();
+      if (correction_norm < 1e-5) break;
+
+      auto& move_group = runtime_.moveGroup();
+      move_group.setEndEffectorLink(runtime_.tcpFrame());
+      auto target = move_group.getCurrentPose(runtime_.tcpFrame()).pose;
+      target.position.x += correction_planning.x();
+      target.position.y += correction_planning.y();
+      target.position.z += correction_planning.z();
+      move_group.setStartStateToCurrentState();
+      if (!move_group.setPoseTarget(target, runtime_.tcpFrame())) {
+        move_group.clearPoseTargets();
+        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+          "FINETUNE_GRASP", "visual correction endpoint has no IK solution; reposition Go2"};
+        return false;
+      }
+      moveit::planning_interface::MoveGroupInterface::Plan correction_plan;
+      const bool planned =
+        move_group.plan(correction_plan) == moveit::core::MoveItErrorCode::SUCCESS;
+      move_group.clearPoseTargets();
+      if (!planned) {
+        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+          "FINETUNE_GRASP", "visual correction is not collision-free/plannable; reposition Go2"};
+        return false;
+      }
+      RCLCPP_INFO(node_->get_logger(),
+        "Cube FINETUNE_GRASP correction %d: camera_delta=(%+.1f, %+.1f, %+.1f) mm "
+        "planning_horizontal_delta=(%+.1f, %+.1f, %+.1f) mm",
+        correction + 1, 1000.0 * correction_camera.x(),
+        1000.0 * correction_camera.y(), 1000.0 * correction_camera.z(),
+        1000.0 * correction_planning.x(), 1000.0 * correction_planning.y(),
+        1000.0 * correction_planning.z());
+      if (!runtime_.executePlan(correction_plan)) {
+        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          "FINETUNE_GRASP", "visual correction execution failed; motion stopped"};
+        return false;
+      }
+      cumulative_correction += correction_norm;
+      previous_outside_error = outside_error;
+      std::this_thread::sleep_for(std::chrono::duration<double>(finetune_settle_s_));
+    }
+
+    std::ostringstream detail;
+    detail << "cube top centre remains outside the calibrated safe prism after "
+           << finetune_max_corrections_
+           << " corrections; keep PREGRASP and reposition Go2";
+    failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+      "FINETUNE_GRASP", detail.str()};
+    return false;
+  }
+
   bool confirmDescent(PreparedPick& plan, StrategyFailure& failure) override
   {
     const auto state = std::dynamic_pointer_cast<YellowCubeState>(plan.strategy_state);
@@ -552,6 +770,154 @@ public:
   }
 
 private:
+  static double intervalError(double value, const Eigen::Vector2d& bounds)
+  {
+    if (value < bounds.x()) return bounds.x() - value;
+    if (value > bounds.y()) return value - bounds.y();
+    return 0.0;
+  }
+
+  bool measureFineTune(
+    const PreparedPick& plan, FineTuneMeasurement& output, std::string& error)
+  {
+    std::vector<Eigen::Vector3d> camera_points;
+    std::vector<Eigen::Vector3d> planning_points;
+    camera_points.reserve(static_cast<std::size_t>(finetune_samples_));
+    planning_points.reserve(static_cast<std::size_t>(finetune_samples_));
+    Eigen::Vector3d normal_sum = Eigen::Vector3d::Zero();
+    double offset_sum = 0.0;
+    for (int sample = 0; sample < finetune_samples_; ++sample) {
+      const auto estimate_response = estimate(
+        srv::EstimateCube::Request::FINETUNE, plan.estimated_center);
+      if (!estimate_response || !estimate_response->success) {
+        error = estimate_response ? estimate_response->detail :
+          "cube FINETUNE perception service is unavailable";
+        return false;
+      }
+      Eigen::Vector3d normal(
+        estimate_response->ground_normal.x,
+        estimate_response->ground_normal.y,
+        estimate_response->ground_normal.z);
+      if (!normal.allFinite() || normal.norm() < 0.9) {
+        error = "cube FINETUNE returned an invalid ground normal";
+        return false;
+      }
+      normal.normalize();
+      const Eigen::Vector3d center(
+        estimate_response->center.point.x,
+        estimate_response->center.point.y,
+        estimate_response->center.point.z);
+      const Eigen::Vector3d top_center = center + 0.5 * cube_size_ * normal;
+      const Eigen::Isometry3d camera_from_planning = runtime_.lookup(
+        runtime_.cameraFrame(), estimate_response->center.header.frame_id);
+      const Eigen::Vector3d top_camera = camera_from_planning * top_center;
+      if (!top_camera.allFinite()) {
+        error = "cube FINETUNE top centre is non-finite after TF conversion";
+        return false;
+      }
+      planning_points.push_back(top_center);
+      camera_points.push_back(top_camera);
+      normal_sum += normal;
+      offset_sum += estimate_response->ground_offset;
+    }
+
+    for (const auto& point : camera_points) output.top_center_camera += point;
+    for (const auto& point : planning_points) output.top_center_planning += point;
+    output.top_center_camera /= static_cast<double>(camera_points.size());
+    output.top_center_planning /= static_cast<double>(planning_points.size());
+    output.ground_normal = normal_sum.normalized();
+    output.ground_offset = offset_sum / static_cast<double>(camera_points.size());
+    output.closing_coordinate = output.top_center_camera.dot(closing_axis_camera_);
+    output.finger_coordinate = output.top_center_camera.dot(finger_axis_camera_);
+    double closing_variance = 0.0;
+    double finger_variance = 0.0;
+    for (const auto& point : camera_points) {
+      closing_variance += std::pow(
+        point.dot(closing_axis_camera_) - output.closing_coordinate, 2);
+      finger_variance += std::pow(
+        point.dot(finger_axis_camera_) - output.finger_coordinate, 2);
+    }
+    output.closing_stddev = std::sqrt(
+      closing_variance / static_cast<double>(camera_points.size()));
+    output.finger_stddev = std::sqrt(
+      finger_variance / static_cast<double>(camera_points.size()));
+    return true;
+  }
+
+  bool acceptFineTune(
+    PreparedPick& plan, YellowCubeState& state,
+    const FineTuneMeasurement& measurement)
+  {
+    state.top_center = measurement.top_center_planning;
+    plan.estimated_center.header.frame_id = runtime_.planningFrame();
+    plan.estimated_center.header.stamp = node_->now();
+    const Eigen::Vector3d center =
+      measurement.top_center_planning - 0.5 * cube_size_ * measurement.ground_normal;
+    plan.estimated_center.point.x = center.x();
+    plan.estimated_center.point.y = center.y();
+    plan.estimated_center.point.z = center.z();
+    const auto current_pose = runtime_.moveGroup().getCurrentPose(runtime_.tcpFrame()).pose;
+    plan.pregrasp_pose = current_pose;
+    return runtime_.applyEstimatedGround(
+      measurement.ground_normal, measurement.ground_offset);
+  }
+
+  void publishFineTuneMarkers(const FineTuneMeasurement& measurement)
+  {
+    visualization_msgs::msg::MarkerArray array;
+    const Eigen::Vector3d extrusion_axis =
+      closing_axis_camera_.cross(finger_axis_camera_).normalized();
+    const double gravity_coordinate =
+      measurement.top_center_camera.dot(extrusion_axis);
+    const Eigen::Vector3d centre =
+      0.5 * (closing_bounds_.x() + closing_bounds_.y()) * closing_axis_camera_ +
+      0.5 * (finger_bounds_.x() + finger_bounds_.y()) * finger_axis_camera_ +
+      gravity_coordinate * extrusion_axis;
+    Eigen::Matrix3d orientation;
+    orientation.col(0) = closing_axis_camera_;
+    orientation.col(1) = finger_axis_camera_;
+    orientation.col(2) = extrusion_axis;
+    const Eigen::Quaterniond quaternion(orientation);
+
+    visualization_msgs::msg::Marker prism;
+    prism.header.frame_id = runtime_.cameraFrame();
+    prism.header.stamp = node_->now();
+    prism.ns = "finetune_safe_prism";
+    prism.id = 100;
+    prism.type = visualization_msgs::msg::Marker::CUBE;
+    prism.action = visualization_msgs::msg::Marker::ADD;
+    prism.pose.position.x = centre.x();
+    prism.pose.position.y = centre.y();
+    prism.pose.position.z = centre.z();
+    prism.pose.orientation.x = quaternion.x();
+    prism.pose.orientation.y = quaternion.y();
+    prism.pose.orientation.z = quaternion.z();
+    prism.pose.orientation.w = quaternion.w();
+    prism.scale.x = closing_bounds_.y() - closing_bounds_.x();
+    prism.scale.y = finger_bounds_.y() - finger_bounds_.x();
+    prism.scale.z = 0.20;
+    prism.color = color(0.1F, 1.0F, 0.2F, 0.22F);
+    array.markers.push_back(prism);
+
+    visualization_msgs::msg::Marker measured;
+    measured.header = prism.header;
+    measured.ns = "finetune_measured_top_center";
+    measured.id = 101;
+    measured.type = visualization_msgs::msg::Marker::SPHERE;
+    measured.action = visualization_msgs::msg::Marker::ADD;
+    measured.pose.position.x = measurement.top_center_camera.x();
+    measured.pose.position.y = measurement.top_center_camera.y();
+    measured.pose.position.z = measurement.top_center_camera.z();
+    measured.pose.orientation.w = 1.0;
+    measured.scale.x = measured.scale.y = measured.scale.z = 0.012;
+    const bool inside =
+      intervalError(measurement.closing_coordinate, closing_bounds_) == 0.0 &&
+      intervalError(measurement.finger_coordinate, finger_bounds_) == 0.0;
+    measured.color = inside ? color(0.1F, 1.0F, 0.2F) : color(1.0F, 0.1F, 0.1F);
+    array.markers.push_back(measured);
+    marker_publisher_->publish(array);
+  }
+
   void diagnoseCartesianFailure(
     const moveit::core::RobotState& start_state,
     const geometry_msgs::msg::Pose& target, double collision_aware_fraction,
@@ -761,6 +1127,20 @@ private:
   double gripper_open_{}, gripper_closed_{}, gripper_held_threshold_{};
   double grasp_settle_{}, lift_distance_{};
   double joint5_motion_weight_{};
+  bool finetune_enabled_{false};
+  std::string finetune_camera_frame_;
+  Eigen::Vector3d closing_axis_camera_{Eigen::Vector3d::UnitX()};
+  Eigen::Vector3d finger_axis_camera_{Eigen::Vector3d::UnitY()};
+  Eigen::Vector2d closing_bounds_{-0.01, 0.01};
+  Eigen::Vector2d finger_bounds_{-0.02, 0.02};
+  double finetune_gain_{0.7};
+  double finetune_max_step_{0.008};
+  double finetune_max_total_{0.020};
+  int finetune_max_corrections_{3};
+  int finetune_samples_{3};
+  double finetune_max_stddev_{0.0015};
+  double finetune_min_improvement_{0.30};
+  double finetune_settle_s_{0.5};
 };
 
 std::unique_ptr<PickStrategy> makeYellowCubePickStrategy(
