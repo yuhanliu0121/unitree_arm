@@ -96,8 +96,12 @@ execution stage. By default, the cube strategy additionally performs
 `FINETUNE_GRASP` after PREGRASP: it refits the
 ground, isolates the depth-consistent top face, checks its camera-frame 3-D
 centre against the physically calibrated safe-descent prism, and makes at most
-three bounded stop-and-look corrections. Bowl and zucchini strategies retain
-their established path. RViz exposes `Cube Grasp Geometry`;
+three bounded stop-and-look corrections. The zucchini strategy performs the
+same staged correction using a physically calibrated closing-direction safe
+slab: a point already inside the slab is accepted immediately; an outside
+point uses the slab centre as its correction target. Finger-length and gravity
+coordinates remain unconstrained. Bowl retains its established path. RViz
+exposes the corresponding grasp geometry;
 the latest coarse/fine/finetune images and JSON estimates are written to the
 cube debug directory.
 
@@ -105,6 +109,10 @@ The finetune flow is enabled for both backends. Real arms sharing the same D1,
 wrist-camera mount and URDF use the common physically calibrated prism;
 `gripper_simulation.yaml` overrides its closing-axis offset because ideal
 MuJoCo kinematics intentionally omit the stable physical TCP/URDF error.
+The same capture infrastructure supports two-side zucchini safe-slab
+calibration through `capture_zucchini_safe_region.zsh`. Both boundaries must
+pass an open-gripper DESCEND physical validation before their sorted
+`closing_min`/`closing_max` coordinates are enabled at runtime.
 
 MoveIt deliberately does not receive MuJoCo ground-truth collision geometry
 for the cube, bowl, or zucchini. Its world contains the arm, the Go2 proxy and

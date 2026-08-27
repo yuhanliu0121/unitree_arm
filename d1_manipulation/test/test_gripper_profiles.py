@@ -66,3 +66,34 @@ def test_cube_finetune_is_default_and_uses_calibrated_orthogonal_axes():
     assert parameters["cube_finetune_max_step_m"] == pytest.approx(0.008)
     assert parameters["cube_finetune_max_total_m"] == pytest.approx(0.020)
     assert parameters["cube_finetune_max_corrections"] == 3
+
+
+def test_zucchini_pregrasp_uses_explicit_ground_clearance_search():
+    common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
+    parameters = common["d1_pick_object"]["ros__parameters"]
+    assert parameters["zucchini_pregrasp_ground_clearance_max_m"] == \
+        pytest.approx(0.090)
+    assert parameters["zucchini_pregrasp_ground_clearance_min_m"] == \
+        pytest.approx(0.065)
+    assert parameters["zucchini_pregrasp_ground_clearance_step_m"] == \
+        pytest.approx(0.005)
+    assert "zucchini_pregrasp_distance_max_m" not in parameters
+
+
+def test_zucchini_finetune_uses_physically_validated_closing_slab():
+    common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
+    parameters = common["d1_pick_object"]["ros__parameters"]
+    assert parameters["zucchini_finetune_enabled"] is True
+    assert parameters["zucchini_finetune_camera_frame"] == \
+        "wrist_camera_color_optical_frame"
+    closing = np.asarray(parameters["zucchini_finetune_closing_axis_camera"])
+    gravity = np.asarray(parameters["zucchini_finetune_gravity_axis_camera"])
+    assert np.linalg.norm(closing) == pytest.approx(1.0, abs=1e-6)
+    assert np.linalg.norm(gravity) == pytest.approx(1.0, abs=1e-6)
+    assert float(closing @ gravity) == pytest.approx(0.0, abs=1e-6)
+    bounds = parameters["zucchini_finetune_closing_bounds_m"]
+    assert bounds[1] - bounds[0] == pytest.approx(
+        0.017038788840476115, abs=1e-12
+    )
+    assert "zucchini_finetune_target_tolerance_m" not in parameters
+    assert parameters["zucchini_finetune_max_corrections"] == 3

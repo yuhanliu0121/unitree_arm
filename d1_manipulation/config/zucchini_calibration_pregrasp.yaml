@@ -1,0 +1,22 @@
+# Fixed real-machine pose captured at the first zucchini safe-region
+# calibration PREGRASP on 2026-08-27. Joint values are measured feedback, not
+# the MoveIt/URDF target. Reusing this pose keeps all boundary samples in the
+# same camera/gripper geometry.
+frame_id: base_link
+joint_names: [Joint0, Joint1, Joint2, Joint3, Joint4, Joint5]
+positions_rad:
+  - -1.668534738274968
+  - 0.7749262145170933
+  - 0.20943951023931953
+  - 0.017453292519943295
+  - 0.5881759712378944
+  - -1.6737707792941727
+gripper_opening_m: 0.029966667175292967
+
+# This is a calibration-only reverse-DESCEND operation, not a general pose
+# recovery command. Refuse to run if the arm or gripper is too far away.
+maximum_start_delta_rad: 0.5235987755982988  # 30 deg
+minimum_gripper_opening_m: 0.025
+motion_profile: common_arrival
+speed_deg_s: 15.0
+action_name: /arm_controller/execute_joint_segment

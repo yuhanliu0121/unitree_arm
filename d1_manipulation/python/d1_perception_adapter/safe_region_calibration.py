@@ -15,6 +15,12 @@ BOUNDARY_NAMES = (
     "right_upper",
 )
 
+SLAB_BOUNDARY_NAMES = (
+    "closing_side_a",
+    "closing_side_b",
+)
+LEGACY_SLAB_BOUNDARY_NAMES = ("closing_negative", "closing_positive")
+
 
 def _unit(vector: Sequence[float], name: str) -> np.ndarray:
     value = np.asarray(vector, dtype=np.float64)
@@ -65,7 +71,11 @@ def build_safe_region(
 
     ordered = [samples[name] for name in BOUNDARY_NAMES]
     points = np.asarray(
-        [sample["top_center_camera_m"] for sample in ordered], dtype=np.float64
+        [
+            sample.get("reference_point_camera_m", sample.get("top_center_camera_m"))
+            for sample in ordered
+        ],
+        dtype=np.float64,
     )
     if points.shape != (4, 3) or not np.all(np.isfinite(points)):
         raise ValueError("top centres must contain four finite 3-vectors")
@@ -183,5 +193,84 @@ def build_safe_region(
                 }
                 for index, name in enumerate(BOUNDARY_NAMES)
             },
+        },
+    }
+
+
+def build_safe_slab(
+    samples: Mapping[str, Mapping[str, Sequence[float]]],
+    closing_margin_m: float = 0.0,
+) -> dict:
+    """Build a gravity/finger-extruded slab from two closing boundaries."""
+    names = SLAB_BOUNDARY_NAMES
+    if not all(name in samples for name in names) and all(
+        name in samples for name in LEGACY_SLAB_BOUNDARY_NAMES
+    ):
+        names = LEGACY_SLAB_BOUNDARY_NAMES
+    missing = [name for name in names if name not in samples]
+    if missing:
+        raise ValueError(f"missing slab boundary samples: {', '.join(missing)}")
+    if closing_margin_m < 0.0:
+        raise ValueError("safe-slab margin cannot be negative")
+
+    ordered = [samples[name] for name in names]
+    points = np.asarray(
+        [
+            sample.get("reference_point_camera_m", sample.get("top_center_camera_m"))
+            for sample in ordered
+        ],
+        dtype=np.float64,
+    )
+    if points.shape != (2, 3) or not np.all(np.isfinite(points)):
+        raise ValueError("reference points must contain two finite 3-vectors")
+
+    extrusion = _aligned_mean(
+        [sample["gravity_up_camera"] for sample in ordered], "gravity axis"
+    )
+    closing_hint = _aligned_mean(
+        [sample["closing_axis_camera"] for sample in ordered], "closing axis"
+    )
+    closing = closing_hint - np.dot(closing_hint, extrusion) * extrusion
+    closing = _unit(closing, "horizontal closing axis")
+    values = points @ closing
+    raw_bounds = sorted(map(float, values))
+    safe_bounds = [
+        raw_bounds[0] + closing_margin_m,
+        raw_bounds[1] - closing_margin_m,
+    ]
+    if safe_bounds[0] >= safe_bounds[1]:
+        raise ValueError("closing margin consumes the measured slab span")
+    midpoint = 0.5 * sum(safe_bounds)
+
+    return {
+        "schema_version": 1,
+        "region_type": "closing_interval_extruded_along_finger_and_gravity",
+        "frame_id": ordered[0].get(
+            "camera_frame", "wrist_camera_color_optical_frame"
+        ),
+        "interpretation": (
+            "one-dimensional closing-axis interval; unconstrained along "
+            "finger length and gravity"
+        ),
+        "basis_camera": {
+            "closing_axis": closing.tolist(),
+            "extrusion_axis_gravity_up": extrusion.tolist(),
+        },
+        "raw_bounds_m": {"closing": raw_bounds},
+        "safe_margins_m": {"closing": float(closing_margin_m)},
+        "safe_bounds_m": {"closing": safe_bounds},
+        "safe_centre_plane": {
+            "normal_camera": closing.tolist(),
+            "coordinate_m": midpoint,
+        },
+        "diagnostics": {
+            "raw_closing_width_m": raw_bounds[1] - raw_bounds[0],
+            "boundary_coordinates_m": {
+                name: float(values[index])
+                for index, name in enumerate(names)
+            },
+            "gravity_axis_deviation_deg": _angle_degrees(
+                ordered[0]["gravity_up_camera"], ordered[1]["gravity_up_camera"]
+            ),
         },
     }

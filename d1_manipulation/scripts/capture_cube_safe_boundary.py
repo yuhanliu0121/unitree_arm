@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture one boundary sample for the yellow-cube safe-descend region.
+"""Capture one boundary sample for a calibrated safe-descend region.
 
 This tool is deliberately read-only with respect to the arm.  It calls the
 existing fine cube estimator, snapshots the corresponding wrist RGB-D and
@@ -31,10 +31,12 @@ from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image, Imu, JointState
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from d1_manipulation.srv import EstimateCube
+from d1_manipulation.srv import EstimateCube, EstimateZucchini
 from d1_perception_adapter import (
     BOUNDARY_NAMES,
+    SLAB_BOUNDARY_NAMES,
     build_safe_region,
+    build_safe_slab,
     fit_ground_plane_ransac,
     fit_square_on_plane,
     intersect_rays_with_plane,
@@ -48,6 +50,10 @@ BOUNDARY_LABELS = {
     3: BOUNDARY_NAMES[2],
     4: BOUNDARY_NAMES[3],
 }
+
+
+def _boundary_names(object_class: str):
+    return BOUNDARY_NAMES if object_class == "yellow_cube" else SLAB_BOUNDARY_NAMES
 
 
 def _stamp_ns(stamp: TimeMessage) -> int:
@@ -154,7 +160,7 @@ def _camera_info_dict(message: CameraInfo) -> dict:
 
 class CaptureNode(Node):
     def __init__(self, args) -> None:
-        super().__init__("capture_cube_safe_boundary")
+        super().__init__(f"capture_{args.object_class}_safe_boundary")
         self.args = args
         self.tf_buffer = Buffer(cache_time=Duration(seconds=20.0))
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -176,7 +182,8 @@ class CaptureNode(Node):
         self._subscribe(CameraInfo, args.aligned_info_topic, "aligned_info")
         self._subscribe(Imu, args.imu_topic, "imu")
         self._subscribe(JointState, args.joint_topic, "joints")
-        self.client = self.create_client(EstimateCube, args.estimate_service)
+        service_type = EstimateCube if args.object_class == "yellow_cube" else EstimateZucchini
+        self.client = self.create_client(service_type, args.estimate_service)
         self.fallback_color_mask = None
         self.fallback_mask = None
         self.fallback_overlay = None
@@ -224,9 +231,15 @@ class CaptureNode(Node):
 
     def estimate(self, timeout_s: float):
         if not self.client.wait_for_service(timeout_sec=timeout_s):
-            raise TimeoutError(f"cube estimator unavailable: {self.args.estimate_service}")
-        request = EstimateCube.Request()
-        request.stage = EstimateCube.Request.FINE
+            raise TimeoutError(
+                f"{self.args.object_class} estimator unavailable: {self.args.estimate_service}"
+            )
+        if self.args.object_class == "yellow_cube":
+            request = EstimateCube.Request()
+            request.stage = EstimateCube.Request.FINE
+        else:
+            request = EstimateZucchini.Request()
+            request.stage = EstimateZucchini.Request.FINE
         request.target_hint.header.frame_id = self.args.planning_frame
         request.target_hint.header.stamp = self.get_clock().now().to_msg()
         future = self.client.call_async(request)
@@ -234,11 +247,11 @@ class CaptureNode(Node):
         while rclpy.ok() and not future.done() and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.05)
         if not future.done():
-            raise TimeoutError("fine cube estimation timed out")
+            raise TimeoutError(f"fine {self.args.object_class} estimation timed out")
         response = future.result()
         if response is None or not response.success:
             detail = response.detail if response is not None else "no service response"
-            raise RuntimeError(f"fine cube estimation failed: {detail}")
+            raise RuntimeError(f"fine {self.args.object_class} estimation failed: {detail}")
         # Let the service's debug overlay reach this process before snapshotting.
         end = time.monotonic() + 0.35
         while time.monotonic() < end:
@@ -431,7 +444,9 @@ class CaptureNode(Node):
         )
 
 
-def _resolve_session(output_root: Path, boundary: int, force_new: bool):
+def _resolve_session(
+    output_root: Path, boundary: int, force_new: bool, object_class: str
+):
     output_root.mkdir(parents=True, exist_ok=True)
     active_path = output_root / ".active_session"
     if boundary == 1:
@@ -441,7 +456,8 @@ def _resolve_session(output_root: Path, boundary: int, force_new: bool):
                 f"an unfinished calibration session is active: {active}; "
                 "use --new only if you intend to start another session"
             )
-        name = "cube_safe_region_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = "cube" if object_class == "yellow_cube" else object_class
+        name = f"{prefix}_safe_region_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         session = output_root / name
         return session, active_path, True
     if not active_path.exists():
@@ -485,9 +501,10 @@ def _stationary_spread(messages, target_ns: int, window_s: float = 1.0) -> float
 def _capture(args) -> tuple[Path, dict]:
     output_root = Path(args.output_root).expanduser().resolve()
     session, active_path, new_session = _resolve_session(
-        output_root, args.boundary, args.new
+        output_root, args.boundary, args.new, args.object_class
     )
-    boundary_name = BOUNDARY_LABELS[args.boundary]
+    names = _boundary_names(args.object_class)
+    boundary_name = names[args.boundary - 1]
     sample_directory = session / f"{args.boundary}_{boundary_name}"
     if sample_directory.exists():
         raise RuntimeError(f"boundary already captured: {sample_directory}")
@@ -500,7 +517,10 @@ def _capture(args) -> tuple[Path, dict]:
         try:
             response = node.estimate(args.timeout)
         except RuntimeError as estimate_error:
-            if "found no yellow_cube mask" not in str(estimate_error):
+            if (
+                args.object_class != "yellow_cube"
+                or "found no yellow_cube mask" not in str(estimate_error)
+            ):
                 raise
             node.get_logger().warning(
                 "YOLO missed the close cube; using calibration-only yellow "
@@ -520,19 +540,30 @@ def _capture(args) -> tuple[Path, dict]:
                 _save_image(failure_directory / "aligned_depth.png", depth)
                 _save_depth_preview(failure_directory / "aligned_depth_plasma.png", depth)
             raise
-        stamp = response.top_polygon.header.stamp
+        if args.object_class == "yellow_cube":
+            geometry_header = response.top_polygon.header
+        else:
+            geometry_header = response.center.header
+        stamp = geometry_header.stamp
         target_ns = _stamp_ns(stamp)
         camera_frame = node.messages["color"][-1].header.frame_id
-        planning_frame = response.top_polygon.header.frame_id or args.planning_frame
-        if len(response.top_polygon.polygon.points) != 4:
-            raise RuntimeError(
-                f"fine estimator returned {len(response.top_polygon.polygon.points)} top corners, expected 4"
+        planning_frame = geometry_header.frame_id or args.planning_frame
+        corners_planning = np.empty((0, 3), dtype=np.float64)
+        if args.object_class == "yellow_cube":
+            if len(response.top_polygon.polygon.points) != 4:
+                raise RuntimeError(
+                    "fine estimator returned "
+                    f"{len(response.top_polygon.polygon.points)} top corners, expected 4"
+                )
+            corners_planning = np.asarray(
+                [_vector(point) for point in response.top_polygon.polygon.points],
+                dtype=np.float64,
             )
-        corners_planning = np.asarray(
-            [_vector(point) for point in response.top_polygon.polygon.points],
-            dtype=np.float64,
-        )
-        top_center_planning = np.mean(corners_planning, axis=0)
+            reference_point_planning = np.mean(corners_planning, axis=0)
+        else:
+            reference_point_planning = np.asarray(
+                _vector(response.center.point), dtype=np.float64
+            )
 
         capture_time = Time.from_msg(stamp)
         camera_from_planning = node.tf_buffer.lookup_transform(
@@ -545,7 +576,9 @@ def _capture(args) -> tuple[Path, dict]:
         )
         rotation_cp, translation_cp = _transform_arrays(camera_from_planning)
         rotation_ct, _ = _transform_arrays(camera_from_tcp)
-        top_center_camera = rotation_cp @ top_center_planning + translation_cp
+        reference_point_camera = (
+            rotation_cp @ reference_point_planning + translation_cp
+        )
         gravity_up_camera = rotation_cp @ np.asarray(_vector(response.ground_normal))
 
         nearest = {}
@@ -574,6 +607,7 @@ def _capture(args) -> tuple[Path, dict]:
         imu = nearest["imu"]
         sample = {
             "schema_version": 1,
+            "object_class": args.object_class,
             "boundary_index": args.boundary,
             "boundary_name": boundary_name,
             "captured_at_local": datetime.now().astimezone().isoformat(),
@@ -584,10 +618,15 @@ def _capture(args) -> tuple[Path, dict]:
             "class_name": response.class_name,
             "confidence": float(response.confidence),
             "estimate_detail": response.detail,
-            "cube_center_planning_m": _vector(response.center.point),
-            "top_center_planning_m": top_center_planning.tolist(),
-            "top_corners_planning_m": corners_planning.tolist(),
-            "top_center_camera_m": top_center_camera.tolist(),
+            "reference_point_semantics": (
+                "cube_top_center" if args.object_class == "yellow_cube"
+                else "zucchini_axis_midpoint_at_nominal_center_height"
+            ),
+            "reference_point_planning_m": reference_point_planning.tolist(),
+            "reference_point_camera_m": reference_point_camera.tolist(),
+            # Retain the original key so existing cube calibration readers
+            # and historical sessions remain compatible.
+            "top_center_camera_m": reference_point_camera.tolist(),
             "gravity_up_planning": _vector(response.ground_normal),
             "gravity_up_camera": gravity_up_camera.tolist(),
             # tcp_link +Y joins the fingertips; +X runs along finger length.
@@ -595,7 +634,6 @@ def _capture(args) -> tuple[Path, dict]:
             "finger_axis_camera": rotation_ct[:, 0].tolist(),
             "approach_axis_camera": rotation_ct[:, 2].tolist(),
             "ground_offset_planning_m": float(response.ground_offset),
-            "cube_edge_direction_planning": _vector(response.edge_direction),
             "arm_joint_positions_rad": joint["arm_joint_positions_rad"],
             "joint_state": joint,
             "imu": {
@@ -614,12 +652,27 @@ def _capture(args) -> tuple[Path, dict]:
                 "arm_motion_range_last_window_deg": stationary_spread_deg,
             },
         }
+        if args.object_class == "yellow_cube":
+            sample.update({
+                "cube_center_planning_m": _vector(response.center.point),
+                "top_center_planning_m": reference_point_planning.tolist(),
+                "top_corners_planning_m": corners_planning.tolist(),
+                "cube_edge_direction_planning": _vector(response.edge_direction),
+            })
+        else:
+            sample.update({
+                "zucchini_center_planning_m": _vector(response.center.point),
+                "zucchini_axis_direction_planning": _vector(response.axis_direction),
+                "zucchini_visible_length_m": float(response.visible_length_m),
+                "zucchini_visible_width_m": float(response.visible_width_m),
+            })
 
         manifest_path = session / "session.json"
         manifest = {
             "schema_version": 1,
             "session": session.name,
-            "boundary_order": list(BOUNDARY_NAMES),
+            "object_class": args.object_class,
+            "boundary_order": list(names),
             "samples": {},
             "status": "in_progress",
         }
@@ -649,7 +702,10 @@ def _capture(args) -> tuple[Path, dict]:
         if nearest["raw_depth"] is not None:
             _save_image(sample_directory / "raw_depth.png", nearest["raw_depth"])
         if nearest["overlay"] is not None:
-            _save_image(sample_directory / "cube_geometry_overlay.png", nearest["overlay"])
+            _save_image(
+                sample_directory / f"{args.object_class}_geometry_overlay.png",
+                nearest["overlay"],
+            )
         if node.fallback_mask is not None:
             cv2.imwrite(
                 str(sample_directory / "calibration_fallback_color_mask.png"),
@@ -672,18 +728,24 @@ def _capture(args) -> tuple[Path, dict]:
 
         manifest["samples"][boundary_name] = str(sample_directory.relative_to(session) / "sample.json")
 
-        if args.boundary == 4:
+        if args.boundary == len(names):
             loaded = {}
-            for name in BOUNDARY_NAMES:
+            for name in names:
                 relative = manifest["samples"].get(name)
                 if not relative:
                     raise RuntimeError(f"session is missing {name}")
                 loaded[name] = json.loads((session / relative).read_text(encoding="utf-8"))
-            region = build_safe_region(
-                loaded,
-                closing_margin_m=args.closing_margin_mm / 1000.0,
-                finger_margin_m=args.finger_margin_mm / 1000.0,
-            )
+            if args.object_class == "yellow_cube":
+                region = build_safe_region(
+                    loaded,
+                    closing_margin_m=args.closing_margin_mm / 1000.0,
+                    finger_margin_m=args.finger_margin_mm / 1000.0,
+                )
+            else:
+                region = build_safe_slab(
+                    loaded,
+                    closing_margin_m=args.closing_margin_mm / 1000.0,
+                )
             region["source_session"] = session.name
             region["status"] = "provisional_pending_descend_validation"
             (session / "safe_region.json").write_text(
@@ -703,11 +765,15 @@ def _capture(args) -> tuple[Path, dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Capture one of four yellow-cube safe-descend boundaries"
+        description="Capture one boundary of an object safe-descend region"
     )
     parser.add_argument("boundary", type=int, choices=(1, 2, 3, 4))
     parser.add_argument("--new", action="store_true", help="start a new session at boundary 1")
     parser.add_argument("--output-root", required=True)
+    parser.add_argument(
+        "--object-class", choices=("yellow_cube", "zucchini"),
+        default="yellow_cube",
+    )
     parser.add_argument("--estimate-service", default="/arm/perception/estimate_cube")
     parser.add_argument("--planning-frame", default="base_link")
     parser.add_argument("--gravity-frame", default="gravity_frame")
@@ -727,8 +793,8 @@ def main() -> int:
     parser.add_argument("--stationary-window", type=float, default=1.0)
     parser.add_argument("--max-stationary-deg", type=float, default=0.5)
     parser.add_argument("--max-pose-delta-deg", type=float, default=1.0)
-    # The four captured points are already physically validated boundary
-    # cases.  Extra inset is optional rather than silently applied twice.
+    # Captured points are already physically validated boundary cases. Extra
+    # inset is optional rather than silently applied twice.
     parser.add_argument("--closing-margin-mm", type=float, default=0.0)
     parser.add_argument("--finger-margin-mm", type=float, default=0.0)
     parser.add_argument("--yellow-hsv-lower", nargs=3, type=int, default=(18, 70, 60))
@@ -745,19 +811,27 @@ def main() -> int:
     parser.add_argument("--ground-iterations", type=int, default=160)
     parser.add_argument("--cube-size-m", type=float, default=0.05)
     args = parser.parse_args()
+    boundary_count = len(_boundary_names(args.object_class))
+    if args.boundary > boundary_count:
+        parser.error(
+            f"{args.object_class} calibration has {boundary_count} boundaries; "
+            f"got {args.boundary}"
+        )
 
     rclpy.init()
     try:
         session, sample = _capture(args)
         print(
-            f"CAPTURED boundary {args.boundary}/4 ({sample['boundary_name']}): "
-            f"top_center_camera={np.round(sample['top_center_camera_m'], 6).tolist()} m"
+            f"CAPTURED boundary {args.boundary}/{boundary_count} "
+            f"({sample['boundary_name']}): "
+            "reference_point_camera="
+            f"{np.round(sample['reference_point_camera_m'], 6).tolist()} m"
         )
         print(f"Data: {session}")
-        if args.boundary == 4:
+        if args.boundary == boundary_count:
             print(f"SAFE REGION GENERATED: {session / 'safe_region.json'}")
         else:
-            print(f"Next boundary: {args.boundary + 1}/4")
+            print(f"Next boundary: {args.boundary + 1}/{boundary_count}")
         return 0
     except (OSError, RuntimeError, TimeoutError, TransformException, ValueError) as exception:
         print(f"CALIBRATION CAPTURE FAILED: {exception}", file=sys.stderr)

@@ -93,13 +93,32 @@ d1_pick_object:
     zucchini_length_m: 0.15
     zucchini_width_m: 0.040
     zucchini_height_m: 0.03312
-    zucchini_pregrasp_distance_max_m: 0.080
-    zucchini_pregrasp_distance_min_m: 0.015
-    zucchini_pregrasp_distance_step_m: 0.005
+    # Explicit TCP-to-ground PREGRASP search. 90 mm reproduces the camera
+    # working distance validated by cube top + 40 mm.
+    zucchini_pregrasp_ground_clearance_max_m: 0.090
+    zucchini_pregrasp_ground_clearance_min_m: 0.065
+    zucchini_pregrasp_ground_clearance_step_m: 0.005
     zucchini_tcp_ground_clearance_m: 0.001
     zucchini_tcp_ground_clearance_max_m: 0.015
     zucchini_tcp_ground_clearance_step_m: 0.002
     zucchini_joint5_motion_weight: 2.0
+    # Two physically validated boundaries define a closing-direction safe
+    # slab. It is intentionally unbounded along finger length and gravity.
+    # FINETUNE_GRASP drives the perceived local-axis midpoint toward the slab
+    # centre, rather than merely accepting a point close to either boundary.
+    zucchini_finetune_enabled: true
+    zucchini_finetune_camera_frame: wrist_camera_color_optical_frame
+    zucchini_finetune_closing_axis_camera: [-0.9968582850544625, 0.025625090897871242, -0.07494607551267711]
+    zucchini_finetune_gravity_axis_camera: [0.0788559187407329, 0.23224371268360905, -0.9694558277706562]
+    zucchini_finetune_closing_bounds_m: [-0.045322211086450064, -0.02828342224597395]
+    zucchini_finetune_gain: 0.7
+    zucchini_finetune_max_step_m: 0.008
+    zucchini_finetune_max_total_m: 0.020
+    zucchini_finetune_max_corrections: 3
+    zucchini_finetune_samples: 3
+    zucchini_finetune_max_stddev_m: 0.0015
+    zucchini_finetune_min_improvement_ratio: 0.30
+    zucchini_finetune_settle_s: 0.5
     bowl_pregrasp_distance_max_m: 0.080
     bowl_pregrasp_distance_min_m: 0.015
     bowl_pregrasp_distance_step_m: 0.005

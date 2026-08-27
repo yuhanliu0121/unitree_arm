@@ -172,6 +172,10 @@ install(PROGRAMS scripts/visualize_cube_safe_region.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME visualize_cube_safe_region
 )
+install(PROGRAMS scripts/return_zucchini_calibration_pregrasp.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME return_zucchini_calibration_pregrasp
+)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

@@ -16,7 +16,12 @@ from .core import (
     transform_rotation,
     undistorted_rays,
 )
-from .safe_region_calibration import BOUNDARY_NAMES, build_safe_region
+from .safe_region_calibration import (
+    BOUNDARY_NAMES,
+    SLAB_BOUNDARY_NAMES,
+    build_safe_region,
+    build_safe_slab,
+)
 
 __all__ = [
     "MatchResult",
@@ -34,5 +39,7 @@ __all__ = [
     "transform_rotation",
     "undistorted_rays",
     "BOUNDARY_NAMES",
+    "SLAB_BOUNDARY_NAMES",
     "build_safe_region",
+    "build_safe_slab",
 ]
