@@ -141,6 +141,8 @@ public:
     gripper_travel_m_ = parameterOrDeclare(node_, "gripper_travel_m", 0.03);
     debug_resume_joint_tolerance_ = parameterOrDeclare(
       node_, "debug_resume_joint_tolerance_rad", 0.087266463);
+    finetune_motion_speed_deg_s_ = parameterOrDeclare(
+      node_, "finetune_motion_speed_deg_s", 5.0);
     if (stowed_.size() != 6 || stowed_tolerance_ <= 0.0 ||
       stowed_recovery_max_delta_ <= stowed_tolerance_ ||
       stowed_recovery_duration_ <= 0.0 || stowed_recovery_timeout_ <= 0.0)
@@ -156,6 +158,9 @@ public:
     }
     if (debug_resume_joint_tolerance_ <= 0.0) {
       throw std::invalid_argument("debug_resume_joint_tolerance_rad must be positive");
+    }
+    if (finetune_motion_speed_deg_s_ <= 0.0) {
+      throw std::invalid_argument("finetune_motion_speed_deg_s must be positive");
     }
 
     move_group_.setEndEffectorLink(tcp_frame_);
@@ -732,6 +737,15 @@ private:
     return executePlan(plan, ExecutionOptions{});
   }
 
+  bool executeFineTunePlan(
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan) override
+  {
+    ExecutionOptions options;
+    options.motion_profile = Segment::Goal::UNIFORM_JOINT_SPEED;
+    options.speed_deg_s = finetune_motion_speed_deg_s_;
+    return executePlan(plan, options);
+  }
+
   bool executePlan(
     const moveit::planning_interface::MoveGroupInterface::Plan& plan,
     const ExecutionOptions& options)
@@ -1276,6 +1290,7 @@ private:
   double gripper_safe_closed_angle_deg_{}, gripper_safe_open_angle_deg_{};
   double gripper_travel_m_{};
   double debug_resume_joint_tolerance_{};
+  double finetune_motion_speed_deg_s_{};
   int gripper_verify_min_samples_{};
   std::mutex gripper_samples_mutex_;
   std::vector<std::pair<std::chrono::steady_clock::time_point, double>> gripper_samples_;

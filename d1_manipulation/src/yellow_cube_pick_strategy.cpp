@@ -158,8 +158,6 @@ public:
     finetune_max_corrections_ = parameterOrDeclare(node_, "cube_finetune_max_corrections", 3);
     finetune_samples_ = parameterOrDeclare(node_, "cube_finetune_samples", 3);
     finetune_max_stddev_ = parameterOrDeclare(node_, "cube_finetune_max_stddev_m", 0.0015);
-    finetune_min_improvement_ = parameterOrDeclare(
-      node_, "cube_finetune_min_improvement_ratio", 0.30);
     finetune_settle_s_ = parameterOrDeclare(node_, "cube_finetune_settle_s", 0.5);
     if (cube_size_ <= 0.0 || pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ ||
       pregrasp_step_ <= 0.0 || grasp_min_ > grasp_max_ || grasp_max_ >= 0.0 ||
@@ -173,7 +171,6 @@ public:
       finetune_gain_ <= 0.0 || finetune_gain_ > 1.0 || finetune_max_step_ <= 0.0 ||
       finetune_max_total_ < finetune_max_step_ || finetune_max_corrections_ < 0 ||
       finetune_samples_ < 1 || finetune_max_stddev_ <= 0.0 ||
-      finetune_min_improvement_ < 0.0 || finetune_min_improvement_ >= 1.0 ||
       finetune_settle_s_ < 0.0)
     {
       throw std::invalid_argument("invalid cube finetune parameters");
@@ -507,8 +504,6 @@ public:
     const double closing_midpoint = 0.5 * (closing_bounds_.x() + closing_bounds_.y());
     const double finger_midpoint = 0.5 * (finger_bounds_.x() + finger_bounds_.y());
     double cumulative_correction = 0.0;
-    double previous_outside_error = std::numeric_limits<double>::quiet_NaN();
-
     for (int correction = 0; correction <= finetune_max_corrections_; ++correction) {
       FineTuneMeasurement measurement;
       std::string measurement_error;
@@ -559,20 +554,6 @@ public:
           "Cube FINETUNE_GRASP accepted inside calibrated safe prism after %d correction(s)",
           correction);
         return true;
-      }
-      if (std::isfinite(previous_outside_error) &&
-        outside_error > (1.0 - finetune_min_improvement_) * previous_outside_error)
-      {
-        std::ostringstream detail;
-        detail << std::fixed << std::setprecision(1)
-               << "visual correction did not reduce safe-region error by "
-               << 100.0 * finetune_min_improvement_ << "% ("
-               << 1000.0 * previous_outside_error << " -> "
-               << 1000.0 * outside_error
-               << " mm); keep PREGRASP and reposition Go2";
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
-          "FINETUNE_GRASP", detail.str()};
-        return false;
       }
       if (correction == finetune_max_corrections_) break;
 
@@ -625,13 +606,12 @@ public:
         1000.0 * correction_camera.y(), 1000.0 * correction_camera.z(),
         1000.0 * correction_planning.x(), 1000.0 * correction_planning.y(),
         1000.0 * correction_planning.z());
-      if (!runtime_.executePlan(correction_plan)) {
+      if (!runtime_.executeFineTunePlan(correction_plan)) {
         failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "FINETUNE_GRASP", "visual correction execution failed; motion stopped"};
         return false;
       }
       cumulative_correction += correction_norm;
-      previous_outside_error = outside_error;
       std::this_thread::sleep_for(std::chrono::duration<double>(finetune_settle_s_));
     }
 
@@ -1139,7 +1119,6 @@ private:
   int finetune_max_corrections_{3};
   int finetune_samples_{3};
   double finetune_max_stddev_{0.0015};
-  double finetune_min_improvement_{0.30};
   double finetune_settle_s_{0.5};
 };
 

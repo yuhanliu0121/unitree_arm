@@ -27,7 +27,7 @@ def _degrees(position_m):
             "real",
             {
                 "cube": (35.0, 37.5),
-                "zucchini": (-10.0, 0.0),
+                "zucchini": (10.0, 13.0),
                 "bowl": (-30.0, -28.0),
             },
         ),
@@ -66,6 +66,8 @@ def test_cube_finetune_is_default_and_uses_calibrated_orthogonal_axes():
     assert parameters["cube_finetune_max_step_m"] == pytest.approx(0.008)
     assert parameters["cube_finetune_max_total_m"] == pytest.approx(0.020)
     assert parameters["cube_finetune_max_corrections"] == 3
+    assert parameters["finetune_motion_speed_deg_s"] == pytest.approx(5.0)
+    assert "cube_finetune_min_improvement_ratio" not in parameters
 
 
 def test_zucchini_pregrasp_uses_explicit_ground_clearance_search():
@@ -97,3 +99,4 @@ def test_zucchini_finetune_uses_physically_validated_closing_slab():
     )
     assert "zucchini_finetune_target_tolerance_m" not in parameters
     assert parameters["zucchini_finetune_max_corrections"] == 3
+    assert "zucchini_finetune_min_improvement_ratio" not in parameters

@@ -80,6 +80,8 @@ public:
   virtual double minimumCartesianFraction() const = 0;
   virtual bool executePlan(
     const moveit::planning_interface::MoveGroupInterface::Plan& plan) = 0;
+  virtual bool executeFineTunePlan(
+    const moveit::planning_interface::MoveGroupInterface::Plan& plan) = 0;
 };
 
 class PickStrategy

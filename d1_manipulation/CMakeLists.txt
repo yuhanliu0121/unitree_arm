@@ -117,8 +117,13 @@ add_executable(drop_object_server src/drop_object_server.cpp)
 target_compile_features(drop_object_server PRIVATE cxx_std_17)
 target_include_directories(drop_object_server PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${d1_ros2_control_INCLUDE_DIRS}
 )
-target_link_libraries(drop_object_server Eigen3::Eigen)
+target_link_libraries(
+  drop_object_server
+  Eigen3::Eigen
+  d1_ros2_control::d1_ros2_control__rosidl_typesupport_cpp
+)
 ament_target_dependencies(drop_object_server
   control_msgs geometry_msgs moveit_core moveit_msgs
   moveit_ros_planning_interface rclcpp rclcpp_action shape_msgs

@@ -23,6 +23,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "d1_manipulation/action/drop_object.hpp"
+#include "d1_ros2_control/action/execute_joint_segment.hpp"
 
 using namespace std::chrono_literals;
 
@@ -59,6 +60,7 @@ public:
   using Drop = action::DropObject;
   using Handle = rclcpp_action::ServerGoalHandle<Drop>;
   using Gripper = control_msgs::action::GripperCommand;
+  using Segment = d1_ros2_control::action::ExecuteJointSegment;
 
   explicit DropObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
@@ -79,6 +81,9 @@ public:
     yaw_offsets_ = parameterOrDeclare(node_, "yaw_offsets_degrees", std::vector<double>{0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90});
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
     gripper_open_hold_ = parameterOrDeclare(node_, "gripper_open_hold_s", 0.5);
+    segment_action_name_ = parameterOrDeclare(
+      node_, "joint_segment_action_name", std::string("/arm_controller/execute_joint_segment"));
+    real_motion_speed_deg_s_ = parameterOrDeclare(node_, "real_motion_speed_deg_s", 15.0);
 
     move_group_.setEndEffectorLink(tcp_frame_);
     move_group_.setPoseReferenceFrame(planning_frame_);
@@ -90,6 +95,7 @@ public:
     move_group_.setGoalPositionTolerance(parameterOrDeclare(node_, "position_tolerance_m", 0.005));
     move_group_.setGoalOrientationTolerance(parameterOrDeclare(node_, "orientation_tolerance_rad", 0.03));
     gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
+    segment_client_ = rclcpp_action::create_client<Segment>(node_, segment_action_name_);
 
     server_ = rclcpp_action::create_server<Drop>(
       node_, action_name_,
@@ -125,7 +131,72 @@ private:
     if (!move_group_.setJointValueTarget(target)) return false;
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     return move_group_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
-      move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+      executePlan(plan);
+  }
+
+  bool executePlan(const moveit::planning_interface::MoveGroupInterface::Plan& plan)
+  {
+    if (backend_ == "simulation") {
+      return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    }
+
+    const auto& trajectory = plan.trajectory_.joint_trajectory;
+    if (trajectory.joint_names.size() != 6 || trajectory.points.empty() ||
+      trajectory.points.back().positions.size() != trajectory.joint_names.size())
+    {
+      RCLCPP_ERROR(node_->get_logger(), "Cannot execute malformed real-arm drop endpoint");
+      return false;
+    }
+    if (!segment_client_->wait_for_action_server(5s)) {
+      RCLCPP_ERROR(
+        node_->get_logger(), "Explicit D1 joint-segment action is unavailable: %s",
+        segment_action_name_.c_str());
+      return false;
+    }
+
+    Segment::Goal goal;
+    goal.joint_names = trajectory.joint_names;
+    goal.positions = trajectory.points.back().positions;
+    goal.motion_profile = Segment::Goal::UNIFORM_JOINT_SPEED;
+    goal.speed_deg_s = real_motion_speed_deg_s_;
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "Executing real-arm drop endpoint: profile=uniform_joint_speed speed=%.1f deg/s",
+      real_motion_speed_deg_s_);
+
+    auto sent = segment_client_->async_send_goal(goal);
+    if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) {
+      RCLCPP_ERROR(node_->get_logger(), "Explicit D1 drop joint segment was rejected");
+      return false;
+    }
+    const auto segment_goal = sent.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goal_mutex_);
+      active_segment_goal_ = segment_goal;
+    }
+    auto result = segment_client_->async_get_result(segment_goal);
+    while (result.wait_for(50ms) != std::future_status::ready) {
+      if (cancel_.load()) {
+        segment_client_->async_cancel_goal(segment_goal);
+        std::lock_guard<std::mutex> lock(active_goal_mutex_);
+        active_segment_goal_.reset();
+        return false;
+      }
+    }
+    const auto wrapped = result.get();
+    {
+      std::lock_guard<std::mutex> lock(active_goal_mutex_);
+      active_segment_goal_.reset();
+    }
+    if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED ||
+      !wrapped.result || !wrapped.result->success)
+    {
+      RCLCPP_ERROR(
+        node_->get_logger(), "Explicit D1 drop joint segment failed: %s",
+        wrapped.result ? wrapped.result->detail.c_str() : "no result");
+      return false;
+    }
+    return true;
   }
 
   bool moveToStowed()
@@ -155,6 +226,7 @@ private:
     move_group_.stop();
     std::lock_guard<std::mutex> lock(active_goal_mutex_);
     if (active_gripper_goal_) gripper_client_->async_cancel_goal(active_gripper_goal_);
+    if (active_segment_goal_) segment_client_->async_cancel_goal(active_segment_goal_);
   }
 
   void fail(const std::shared_ptr<Handle>& handle, uint8_t category,
@@ -307,7 +379,7 @@ private:
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR, "PLAN_RELEASE", "canceled", true); return;
       }
       feedback(handle, "MOVE_RELEASE", 0.55F, "Moving held object above trash bin");
-      if (move_group_.execute(release_plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+      if (!executePlan(release_plan)) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "MOVE_RELEASE", "release trajectory execution failed"); return;
       }
@@ -363,14 +435,17 @@ private:
   moveit::planning_interface::PlanningSceneInterface planning_scene_;
   tf2_ros::Buffer tf_buffer_; tf2_ros::TransformListener tf_listener_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
+  rclcpp_action::Client<Segment>::SharedPtr segment_client_;
   rclcpp_action::Server<Drop>::SharedPtr server_;
   std::atomic<bool> cancel_{false};
   std::mutex active_goal_mutex_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
+  rclcpp_action::ClientGoalHandle<Segment>::SharedPtr active_segment_goal_;
   std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;
+  std::string segment_action_name_;
   std::vector<double> stowed_, height_offsets_, yaw_offsets_;
   double stowed_tolerance_{};
-  double gripper_open_{}, gripper_open_hold_{};
+  double gripper_open_{}, gripper_open_hold_{}, real_motion_speed_deg_s_{};
 };
 }  // namespace d1_manipulation
 

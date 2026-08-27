@@ -134,6 +134,8 @@ public:
     gripper_timeout_s_ = declare_parameter<double>("gripper_timeout_s", 10.0);
     native_joint_speed_deg_s_ = declare_parameter<double>(
       "native_joint_speed_deg_s", 15.0);
+    gripper_joint_speed_deg_s_ = declare_parameter<double>(
+      "gripper_joint_speed_deg_s", 30.0);
     native_acceleration_fraction_ = declare_parameter<double>(
       "native_acceleration_fraction", 0.15);
     native_profile_max_ramp_ms_ = declare_parameter<int>(
@@ -142,8 +144,6 @@ public:
       "native_minimum_duration_ms", 1500);
     native_maximum_duration_ms_ = declare_parameter<int>(
       "native_maximum_duration_ms", 30000);
-    gripper_segment_duration_ms_ = declare_parameter<int>(
-      "gripper_segment_duration_ms", 1500);
     lower_limits_ = vectorToArray(declare_parameter<std::vector<double>>(
       "lower_limits", {-6.3, -6.3, -6.3, -6.3, -6.3, -6.3, 0.0}),
       "lower_limits");
@@ -164,12 +164,12 @@ public:
     {
       throw std::invalid_argument("invalid D1 native-segment controller parameters");
     }
-    if (native_joint_speed_deg_s_ <= 0.0 || native_acceleration_fraction_ < 0.0 ||
+    if (native_joint_speed_deg_s_ <= 0.0 || gripper_joint_speed_deg_s_ <= 0.0 ||
+      native_acceleration_fraction_ < 0.0 ||
       native_acceleration_fraction_ > 0.5 || native_profile_max_ramp_ms_ < 0 ||
       native_minimum_duration_ms_ <= 0 ||
       native_maximum_duration_ms_ < native_minimum_duration_ms_ ||
-      native_maximum_duration_ms_ > 65535 ||
-      gripper_segment_duration_ms_ <= 0 || gripper_segment_duration_ms_ > 65535)
+      native_maximum_duration_ms_ > 65535)
     {
       throw std::invalid_argument("invalid native segment profile parameters");
     }
@@ -234,8 +234,9 @@ public:
     RCLCPP_INFO(
       get_logger(),
       "D1 native-segment controller ready: default_profile=uniform_joint_speed "
-      "default_speed=%.1f deg/s explicit_action=/arm_controller/execute_joint_segment",
-      native_joint_speed_deg_s_);
+      "default_speed=%.1f deg/s gripper_speed=%.1f deg/s "
+      "explicit_action=/arm_controller/execute_joint_segment",
+      native_joint_speed_deg_s_, gripper_joint_speed_deg_s_);
   }
 
   ~D1NativeSegmentController() override
@@ -262,6 +263,17 @@ private:
   {
     return profile == MotionProfile::common_arrival ?
       "common_arrival" : "uniform_joint_speed";
+  }
+
+  std::uint32_t segmentDurationMs(
+    const double maximum_delta_deg, const MotionSettings & settings) const
+  {
+    const double required_duration_s = maximum_delta_deg / settings.speed_deg_s;
+    const int minimum_duration_ms = settings.profile == MotionProfile::uniform_joint_speed ?
+      1 : native_minimum_duration_ms_;
+    return static_cast<std::uint32_t>(std::clamp<long long>(
+      std::llround(1000.0 * required_duration_s),
+      minimum_duration_ms, native_maximum_duration_ms_));
   }
 
   static std::array<double, 7> vectorToArray(
@@ -541,11 +553,7 @@ private:
         gripper_closed_angle_deg_ + snapshot[6] / gripper_travel_m_ *
         (gripper_open_angle_deg_ - gripper_closed_angle_deg_));
       const double required_duration_s = maximum_delta_deg / settings.speed_deg_s;
-      const int minimum_duration_ms = settings.profile == MotionProfile::uniform_joint_speed ?
-        1 : native_minimum_duration_ms_;
-      const auto duration_ms = static_cast<std::uint32_t>(std::clamp<long long>(
-        std::llround(1000.0 * required_duration_s),
-        minimum_duration_ms, native_maximum_duration_ms_));
+      const auto duration_ms = segmentDurationMs(maximum_delta_deg, settings);
       if (!sendSnapshot(snapshot, duration_ms, settings.profile)) {
         return {SegmentStatus::failed, "failed to send D1 native arm segment", 0.0};
       }
@@ -742,14 +750,19 @@ private:
     if (!latestFeedback(initial, ignored_velocity)) {
       handle->abort(result); finish(); return;
     }
-    std::array<double, 7> snapshot{};
-    {
-      std::lock_guard<std::mutex> lock(command_mutex_);
-      snapshot = desired_;
-      snapshot[6] = target;
-    }
-    if (!sendSnapshot(
-        snapshot, gripper_segment_duration_ms_, MotionProfile::uniform_joint_speed))
+    // A gripper command must still be transmitted as a complete seven-joint D1
+    // target. Preserve the live Joint0..5 positions rather than the historical
+    // desired_ targets so closing the gripper cannot make the arm chase an old
+    // endpoint that it never reached.
+    std::array<double, 7> snapshot = initial;
+    snapshot[6] = target;
+    const double angle_span_deg = gripper_open_angle_deg_ - gripper_closed_angle_deg_;
+    const double maximum_delta_deg =
+      std::abs(target - initial[6]) / gripper_travel_m_ * angle_span_deg;
+    const MotionSettings settings{
+      MotionProfile::uniform_joint_speed, gripper_joint_speed_deg_s_};
+    const auto duration_ms = segmentDurationMs(maximum_delta_deg, settings);
+    if (!sendSnapshot(snapshot, duration_ms, settings.profile))
     {
       handle->abort(result); finish(); return;
     }
@@ -758,11 +771,12 @@ private:
       desired_ = snapshot;
     }
     RCLCPP_INFO(
-      get_logger(), "Gripper target sent as full native segment: %.1f deg",
+      get_logger(),
+      "Gripper target sent as full native segment: target=%.1f deg "
+      "delta=%.1f deg speed=%.1f deg/s duration=%.3f s; Joint0..5 preserve live feedback",
       gripper_closed_angle_deg_ + target / gripper_travel_m_ *
-      (gripper_open_angle_deg_ - gripper_closed_angle_deg_));
+      angle_span_deg, maximum_delta_deg, settings.speed_deg_s, duration_ms / 1000.0);
 
-    const double angle_span_deg = gripper_open_angle_deg_ - gripper_closed_angle_deg_;
     const double goal_tolerance = gripper_goal_tolerance_deg_ / angle_span_deg *
       gripper_travel_m_;
     const double stable_range = gripper_stable_range_deg_ / angle_span_deg *
@@ -854,8 +868,7 @@ private:
           get_logger(),
           "Gripper has not started %.3f s after send; retrying absolute target (%d/%d)",
           command_start_timeout_s_, no_motion_retries, no_motion_max_retries_);
-        if (!sendSnapshot(
-            snapshot, gripper_segment_duration_ms_, MotionProfile::uniform_joint_speed))
+        if (!sendSnapshot(snapshot, duration_ms, settings.profile))
         {
           handle->abort(result); finish(); return;
         }
@@ -889,11 +902,11 @@ private:
   double gripper_motion_start_deg_{1.0};
   double gripper_timeout_s_{10.0};
   double native_joint_speed_deg_s_{15.0};
+  double gripper_joint_speed_deg_s_{30.0};
   double native_acceleration_fraction_{0.15};
   int native_profile_max_ramp_ms_{800};
   int native_minimum_duration_ms_{1500};
   int native_maximum_duration_ms_{30000};
-  int gripper_segment_duration_ms_{1500};
   std::array<double, 7> lower_limits_{};
   std::array<double, 7> upper_limits_{};
 

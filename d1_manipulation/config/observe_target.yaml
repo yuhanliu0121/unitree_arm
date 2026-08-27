@@ -71,8 +71,10 @@ d1_pick_object:
     cube_finetune_max_corrections: 3
     cube_finetune_samples: 3
     cube_finetune_max_stddev_m: 0.0015
-    cube_finetune_min_improvement_ratio: 0.30
     cube_finetune_settle_s: 0.5
+    # All PREGRASP visual corrections use a slow uniform joint speed. Success
+    # is determined only by entering the calibrated region within three moves.
+    finetune_motion_speed_deg_s: 5.0
     lift_distance_m: 0.10
     carry_joint_positions: [0.0, -1.54, 1.546, 0.0, -0.6, 1.57]
     top_observation_distance_m: 0.35
@@ -117,7 +119,6 @@ d1_pick_object:
     zucchini_finetune_max_corrections: 3
     zucchini_finetune_samples: 3
     zucchini_finetune_max_stddev_m: 0.0015
-    zucchini_finetune_min_improvement_ratio: 0.30
     zucchini_finetune_settle_s: 0.5
     bowl_pregrasp_distance_max_m: 0.080
     bowl_pregrasp_distance_min_m: 0.015
