@@ -100,3 +100,21 @@ def test_zucchini_finetune_uses_physically_validated_closing_slab():
     assert "zucchini_finetune_target_tolerance_m" not in parameters
     assert parameters["zucchini_finetune_max_corrections"] == 3
     assert "zucchini_finetune_min_improvement_ratio" not in parameters
+
+
+def test_drop_search_expands_from_nominal_height_and_y():
+    common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
+    parameters = common["d1_drop_object"]["ros__parameters"]
+    assert parameters["height_offsets_m"] == pytest.approx(
+        [
+            0.0, -0.010, 0.010, -0.020, 0.020, -0.030, 0.030,
+            -0.040, 0.040, -0.050, 0.050, -0.060, 0.060,
+            -0.080, 0.080,
+        ]
+    )
+    assert parameters["y_offsets_m"] == pytest.approx(
+        [
+            0.0, 0.003, -0.003, 0.006, -0.006, 0.009,
+            -0.009, 0.012, -0.012, 0.015, -0.015,
+        ]
+    )

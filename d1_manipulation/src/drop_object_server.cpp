@@ -77,7 +77,16 @@ public:
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.54, 1.55, 0, 0, 0});
     stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.034906585);
-    height_offsets_ = parameterOrDeclare(node_, "height_offsets_m", std::vector<double>{0, -0.025, -0.05, 0.025, 0.05});
+    height_offsets_ = parameterOrDeclare(
+      node_, "height_offsets_m",
+      std::vector<double>{
+        0.0, -0.01, 0.01, -0.02, 0.02, -0.03, 0.03, -0.04, 0.04,
+        -0.05, 0.05, -0.06, 0.06, -0.08, 0.08});
+    y_offsets_ = parameterOrDeclare(
+      node_, "y_offsets_m",
+      std::vector<double>{
+        0.0, 0.003, -0.003, 0.006, -0.006, 0.009, -0.009,
+        0.012, -0.012, 0.015, -0.015});
     yaw_offsets_ = parameterOrDeclare(node_, "yaw_offsets_degrees", std::vector<double>{0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90});
     gripper_open_ = parameterOrDeclare(node_, "gripper_open_m", 0.03);
     gripper_open_hold_ = parameterOrDeclare(node_, "gripper_open_hold_s", 0.5);
@@ -240,6 +249,11 @@ private:
     result->detail = detail + "; motion stopped and current position held";
     result->returned_to_stowed = returned;
     const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
+    RCLCPP_ERROR(
+      node_->get_logger(),
+      "DROP FAILED: category=%u failed_state=%s detail=%s returned_to_stowed=%s action_status=%s",
+      static_cast<unsigned int>(category), state.c_str(), result->detail.c_str(),
+      returned ? "true" : "false", was_canceled ? "CANCELED" : "ABORTED");
     if (was_canceled) handle->canceled(result); else handle->abort(result);
   }
 
@@ -348,33 +362,75 @@ private:
 
       moveit::planning_interface::MoveGroupInterface::Plan release_plan;
       geometry_msgs::msg::Pose selected_pose;
-      double selected_height = 0.0, selected_yaw = 0.0;
+      double selected_height = 0.0, selected_y = 0.0, selected_yaw = 0.0;
       bool found = false;
+      std::size_t candidate_index = 0;
+      std::size_t ik_failures = 0;
+      std::size_t planning_failures = 0;
       feedback(handle, "PLAN_RELEASE", 0.20F, "Searching gravity-aligned release candidates");
       for (const double height : height_offsets_) {
-        for (const double yaw_deg : yaw_offsets_) {
-          const Eigen::Vector3d x = Eigen::AngleAxisd(yaw_deg * M_PI / 180.0, up) * reference;
-          const Eigen::Vector3d z = -up;
-          const Eigen::Vector3d y = z.cross(x).normalized();
-          Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-          pose.linear().col(0) = x; pose.linear().col(1) = y; pose.linear().col(2) = z;
-          pose.translation() = bottom + (-bottom.dot(up) + height) * up;
-          move_group_.setStartStateToCurrentState();
-          if (!move_group_.setJointValueTarget(poseMessage(pose), tcp_frame_)) continue;
-          moveit::planning_interface::MoveGroupInterface::Plan plan;
-          if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
-          release_plan = std::move(plan);
-          selected_pose = poseMessage(pose); selected_height = height; selected_yaw = yaw_deg;
-          found = true; break;
+        for (const double y_offset : y_offsets_) {
+          for (const double yaw_deg : yaw_offsets_) {
+            ++candidate_index;
+            const Eigen::Vector3d x =
+              Eigen::AngleAxisd(yaw_deg * M_PI / 180.0, up) * reference;
+            const Eigen::Vector3d z = -up;
+            const Eigen::Vector3d y = z.cross(x).normalized();
+            const Eigen::Vector3d candidate_bottom =
+              bottom + y_offset * Eigen::Vector3d::UnitY();
+            Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+            pose.linear().col(0) = x; pose.linear().col(1) = y; pose.linear().col(2) = z;
+            pose.translation() =
+              candidate_bottom + (-candidate_bottom.dot(up) + height) * up;
+            move_group_.setStartStateToCurrentState();
+            if (!move_group_.setJointValueTarget(poseMessage(pose), tcp_frame_)) {
+              ++ik_failures;
+              RCLCPP_INFO(
+                node_->get_logger(),
+                "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg -> IK_FAILED",
+                candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg);
+              continue;
+            }
+            moveit::planning_interface::MoveGroupInterface::Plan plan;
+            if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+              ++planning_failures;
+              RCLCPP_INFO(
+                node_->get_logger(),
+                "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg "
+                "-> PLANNING_FAILED",
+                candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg);
+              continue;
+            }
+            RCLCPP_INFO(
+              node_->get_logger(),
+              "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg "
+              "-> PLAN_SUCCEEDED",
+              candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg);
+            release_plan = std::move(plan);
+            selected_pose = poseMessage(pose);
+            selected_height = height;
+            selected_y = y_offset;
+            selected_yaw = yaw_deg;
+            found = true;
+            break;
+          }
+          if (found) break;
         }
         if (found) break;
       }
       if (!found) {
+        const std::string detail =
+          "no gravity-aligned release plan after " + std::to_string(candidate_index) +
+          " candidates (IK failures=" + std::to_string(ik_failures) +
+          ", planning failures=" + std::to_string(planning_failures) +
+          "); reposition Go2";
         fail(handle, Drop::Result::FAILURE_REPOSITION_REQUIRED,
-          "PLAN_RELEASE", "no gravity-aligned release plan; reposition Go2"); return;
+          "PLAN_RELEASE", detail); return;
       }
-      RCLCPP_INFO(node_->get_logger(), "Selected release: base height offset=%+.0f mm yaw=%+.1f deg",
-        1000.0 * selected_height, selected_yaw);
+      RCLCPP_INFO(
+        node_->get_logger(),
+        "Selected release: base height offset=%+.0f mm y offset=%+.0f mm yaw=%+.1f deg",
+        1000.0 * selected_height, 1000.0 * selected_y, selected_yaw);
       if (cancel_.load()) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR, "PLAN_RELEASE", "canceled", true); return;
       }
@@ -443,7 +499,7 @@ private:
   rclcpp_action::ClientGoalHandle<Segment>::SharedPtr active_segment_goal_;
   std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;
   std::string segment_action_name_;
-  std::vector<double> stowed_, height_offsets_, yaw_offsets_;
+  std::vector<double> stowed_, height_offsets_, y_offsets_, yaw_offsets_;
   double stowed_tolerance_{};
   double gripper_open_{}, gripper_open_hold_{}, real_motion_speed_deg_s_{};
 };

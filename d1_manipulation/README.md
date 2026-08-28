@@ -179,10 +179,13 @@ point is a release reference, while the real low-profile bin is outside the
 collision model used by this task. MuJoCo may still render and physically
 simulate the bin independently. The server fixes `tcp_link` +Z along gravity
 and searches the configured candidates in strict order. Height
-offsets relative to the `base_link` gravity height are `0, -25, -50, +25,
-+50 mm`; each height uses yaw offsets `0, +15, -15, ..., +90, -90 deg` from
-the projected CARRY TCP x-axis. The first release pose with a complete plan is
-executed. The server confirms that the gripper reached its fully open target,
+offsets relative to the `base_link` gravity height are searched from the
+nominal height outwards as `0, -10, +10, ..., -60, +60, -80, +80 mm`.
+At each height, the target is additionally searched along `base_link` Y using
+`0, +3, -3, ..., +15, -15 mm`; every height/Y pair uses yaw offsets
+`0, +15, -15, ..., +90, -90 deg` from the projected CARRY TCP x-axis. Every
+candidate is logged as an IK failure, planning failure, or success. The first
+release pose with a complete plan is executed. The server confirms that the gripper reached its fully open target,
 detaches the held object from MoveIt's gripper model, holds the physical gripper
 fully open for 0.5 seconds, and then plans directly to STOWED.
 
