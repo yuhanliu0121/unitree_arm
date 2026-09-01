@@ -89,6 +89,11 @@ public:
   {
     uint8_t motion_profile{Segment::Goal::UNIFORM_JOINT_SPEED};
     double speed_deg_s{15.0};
+    bool require_settled_feedback{false};
+    double maximum_deviation_rad{0.0};
+    double maximum_stable_range_rad{0.0};
+    std::uint32_t stable_samples{0U};
+    double stable_sample_period_s{0.0};
 
     static ExecutionOptions commonArrival(double speed_deg_s = 15.0)
     {
@@ -143,6 +148,14 @@ public:
       node_, "debug_resume_joint_tolerance_rad", 0.087266463);
     finetune_motion_speed_deg_s_ = parameterOrDeclare(
       node_, "finetune_motion_speed_deg_s", 5.0);
+    finetune_completion_max_deviation_rad_ = parameterOrDeclare(
+      node_, "finetune_completion_max_deviation_rad", 0.026179939);
+    finetune_completion_stable_range_rad_ = parameterOrDeclare(
+      node_, "finetune_completion_stable_range_rad", 0.005235988);
+    finetune_completion_stable_samples_ = parameterOrDeclare(
+      node_, "finetune_completion_stable_samples", 5);
+    finetune_completion_sample_period_s_ = parameterOrDeclare(
+      node_, "finetune_completion_sample_period_s", 0.12);
     if (stowed_.size() != 6 || stowed_tolerance_ <= 0.0 ||
       stowed_recovery_max_delta_ <= stowed_tolerance_ ||
       stowed_recovery_duration_ <= 0.0 || stowed_recovery_timeout_ <= 0.0)
@@ -161,6 +174,13 @@ public:
     }
     if (finetune_motion_speed_deg_s_ <= 0.0) {
       throw std::invalid_argument("finetune_motion_speed_deg_s must be positive");
+    }
+    if (finetune_completion_max_deviation_rad_ <= 0.0 ||
+      finetune_completion_stable_range_rad_ <= 0.0 ||
+      finetune_completion_stable_samples_ < 2 ||
+      finetune_completion_sample_period_s_ <= 0.0)
+    {
+      throw std::invalid_argument("invalid FINETUNE completion parameters");
     }
 
     move_group_.setEndEffectorLink(tcp_frame_);
@@ -743,6 +763,12 @@ private:
     ExecutionOptions options;
     options.motion_profile = Segment::Goal::UNIFORM_JOINT_SPEED;
     options.speed_deg_s = finetune_motion_speed_deg_s_;
+    options.require_settled_feedback = true;
+    options.maximum_deviation_rad = finetune_completion_max_deviation_rad_;
+    options.maximum_stable_range_rad = finetune_completion_stable_range_rad_;
+    options.stable_samples =
+      static_cast<std::uint32_t>(finetune_completion_stable_samples_);
+    options.stable_sample_period_s = finetune_completion_sample_period_s_;
     return executePlan(plan, options);
   }
 
@@ -769,6 +795,11 @@ private:
     goal.positions = trajectory.points.back().positions;
     goal.motion_profile = options.motion_profile;
     goal.speed_deg_s = options.speed_deg_s;
+    goal.require_settled_feedback = options.require_settled_feedback;
+    goal.maximum_deviation_rad = options.maximum_deviation_rad;
+    goal.maximum_stable_range_rad = options.maximum_stable_range_rad;
+    goal.stable_samples = options.stable_samples;
+    goal.stable_sample_period_s = options.stable_sample_period_s;
     RCLCPP_INFO(
       node_->get_logger(), "Executing real-arm endpoint: profile=%s speed=%.1f deg/s",
       options.motion_profile == Segment::Goal::COMMON_ARRIVAL ?
@@ -1291,6 +1322,10 @@ private:
   double gripper_travel_m_{};
   double debug_resume_joint_tolerance_{};
   double finetune_motion_speed_deg_s_{};
+  double finetune_completion_max_deviation_rad_{};
+  double finetune_completion_stable_range_rad_{};
+  int finetune_completion_stable_samples_{};
+  double finetune_completion_sample_period_s_{};
   int gripper_verify_min_samples_{};
   std::mutex gripper_samples_mutex_;
   std::vector<std::pair<std::chrono::steady_clock::time_point, double>> gripper_samples_;

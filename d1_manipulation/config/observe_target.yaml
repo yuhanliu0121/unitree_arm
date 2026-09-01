@@ -22,7 +22,7 @@ d1_observe_target:
     position_tolerance_m: 0.005
     orientation_tolerance_rad: 0.03
     camera_settle_s: 0.5
-    max_target_pixel_error: 30.0
+    max_target_pixel_error: 50.0
     real_joint_goal_tolerance_rad: 0.034906585
     real_joint_goal_stable_samples: 3
     real_joint_goal_assumed_speed_deg_s: 10.0
@@ -63,18 +63,24 @@ d1_pick_object:
     cube_finetune_camera_frame: wrist_camera_color_optical_frame
     cube_finetune_closing_axis_camera: [-0.9964914766084, 0.030719609390554355, -0.07785269838420857]
     cube_finetune_finger_axis_camera: [0.008596773865607941, 0.9628521848541389, 0.26989213697459724]
-    cube_finetune_closing_bounds_m: [-0.04352345527058814, -0.03940754708007975]
+    # Three physically validated repeats per side, median bounds with a
+    # 1 mm inward margin (2026-09-01 cube closing recalibration).
+    cube_finetune_closing_bounds_m: [-0.0438555537223105, -0.0369900579346173]
     cube_finetune_finger_bounds_m: [0.07775923811314761, 0.11838677790731594]
-    cube_finetune_gain: 0.7
+    cube_finetune_gain: 0.4
     cube_finetune_max_step_m: 0.008
     cube_finetune_max_total_m: 0.020
-    cube_finetune_max_corrections: 3
+    cube_finetune_max_corrections: 5
     cube_finetune_samples: 3
-    cube_finetune_max_stddev_m: 0.0015
+    cube_finetune_max_stddev_m: 0.002
     cube_finetune_settle_s: 0.5
     # All PREGRASP visual corrections use a slow uniform joint speed. Success
-    # is determined only by entering the calibrated region within three moves.
+    # is determined only by entering the calibrated region within the configured moves.
     finetune_motion_speed_deg_s: 5.0
+    finetune_completion_max_deviation_rad: 0.026179939
+    finetune_completion_stable_range_rad: 0.005235988
+    finetune_completion_stable_samples: 5
+    finetune_completion_sample_period_s: 0.12
     lift_distance_m: 0.10
     carry_joint_positions: [0.0, -1.54, 1.546, 0.0, -0.6, 1.57]
     top_observation_distance_m: 0.35
@@ -113,12 +119,12 @@ d1_pick_object:
     zucchini_finetune_closing_axis_camera: [-0.9968582850544625, 0.025625090897871242, -0.07494607551267711]
     zucchini_finetune_gravity_axis_camera: [0.0788559187407329, 0.23224371268360905, -0.9694558277706562]
     zucchini_finetune_closing_bounds_m: [-0.045322211086450064, -0.02828342224597395]
-    zucchini_finetune_gain: 0.7
+    zucchini_finetune_gain: 0.4
     zucchini_finetune_max_step_m: 0.008
     zucchini_finetune_max_total_m: 0.020
-    zucchini_finetune_max_corrections: 3
+    zucchini_finetune_max_corrections: 5
     zucchini_finetune_samples: 3
-    zucchini_finetune_max_stddev_m: 0.0015
+    zucchini_finetune_max_stddev_m: 0.002
     zucchini_finetune_settle_s: 0.5
     bowl_pregrasp_distance_max_m: 0.080
     bowl_pregrasp_distance_min_m: 0.015
@@ -145,6 +151,8 @@ d1_drop_object:
     yaw_offsets_degrees: [0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 75.0, -75.0, 90.0, -90.0]
     gripper_open_m: 0.03
     gripper_open_hold_s: 0.5
+    # Match MoveIt's FixStartStateBounds adapter before collision validation.
+    start_state_bounds_tolerance_rad: 0.1
     planning_time_s: 5.0
     planning_attempts: 6
     velocity_scaling: 0.10

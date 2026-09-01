@@ -157,7 +157,7 @@ public:
     finetune_max_total_ = parameterOrDeclare(node_, "cube_finetune_max_total_m", 0.020);
     finetune_max_corrections_ = parameterOrDeclare(node_, "cube_finetune_max_corrections", 3);
     finetune_samples_ = parameterOrDeclare(node_, "cube_finetune_samples", 3);
-    finetune_max_stddev_ = parameterOrDeclare(node_, "cube_finetune_max_stddev_m", 0.0015);
+    finetune_max_stddev_ = parameterOrDeclare(node_, "cube_finetune_max_stddev_m", 0.002);
     finetune_settle_s_ = parameterOrDeclare(node_, "cube_finetune_settle_s", 0.5);
     if (cube_size_ <= 0.0 || pregrasp_min_ < 0.0 || pregrasp_max_ < pregrasp_min_ ||
       pregrasp_step_ <= 0.0 || grasp_min_ > grasp_max_ || grasp_max_ >= 0.0 ||
@@ -503,6 +503,11 @@ public:
 
     const double closing_midpoint = 0.5 * (closing_bounds_.x() + closing_bounds_.y());
     const double finger_midpoint = 0.5 * (finger_bounds_.x() + finger_bounds_.y());
+    // Keep every stop-and-look correction tied to the gravity-aligned
+    // PREGRASP orientation selected by prepare().  Reusing getCurrentPose()'s
+    // orientation would bake each endpoint residual into the next correction
+    // and allow the tool axis to drift over repeated corrections.
+    const auto pregrasp_orientation = plan.pregrasp_pose.orientation;
     double cumulative_correction = 0.0;
     for (int correction = 0; correction <= finetune_max_corrections_; ++correction) {
       FineTuneMeasurement measurement;
@@ -583,6 +588,7 @@ public:
       target.position.x += correction_planning.x();
       target.position.y += correction_planning.y();
       target.position.z += correction_planning.z();
+      target.orientation = pregrasp_orientation;
       move_group.setStartStateToCurrentState();
       if (!move_group.setPoseTarget(target, runtime_.tcpFrame())) {
         move_group.clearPoseTargets();
@@ -836,7 +842,10 @@ private:
     plan.estimated_center.point.x = center.x();
     plan.estimated_center.point.y = center.y();
     plan.estimated_center.point.z = center.z();
-    const auto current_pose = runtime_.moveGroup().getCurrentPose(runtime_.tcpFrame()).pose;
+    auto current_pose = runtime_.moveGroup().getCurrentPose(runtime_.tcpFrame()).pose;
+    // Refresh the position from live feedback without replacing the canonical
+    // gravity-aligned PREGRASP orientation with an endpoint residual.
+    current_pose.orientation = plan.pregrasp_pose.orientation;
     plan.pregrasp_pose = current_pose;
     return runtime_.applyEstimatedGround(
       measurement.ground_normal, measurement.ground_offset);
@@ -1118,7 +1127,7 @@ private:
   double finetune_max_total_{0.020};
   int finetune_max_corrections_{3};
   int finetune_samples_{3};
-  double finetune_max_stddev_{0.0015};
+  double finetune_max_stddev_{0.002};
   double finetune_settle_s_{0.5};
 };
 

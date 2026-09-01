@@ -1,0 +1,21 @@
+# Actual stationary Joint0..5 feedback captured at the cube PREGRASP on
+# 2026-09-01. This supersedes the controller's immediate endpoint log because
+# the arm continued settling slightly after that message.
+frame_id: base_link
+joint_names: [Joint0, Joint1, Joint2, Joint3, Joint4, Joint5]
+positions_rad:
+  - -1.7016960206944711
+  - 1.1711159014565842
+  - -0.17453292519943295
+  - 0.18849556254433897
+  - 0.6213371870783704
+  - -1.8640116943931657
+gripper_opening_m: 0.030
+
+# Calibration-only motion. It is intentionally rejected when the current arm
+# is more than 30 degrees from the recorded PREGRASP or the gripper is closed.
+maximum_start_delta_rad: 0.5235987755982988
+minimum_gripper_opening_m: 0.025
+motion_profile: common_arrival
+speed_deg_s: 15.0
+action_name: /arm_controller/execute_joint_segment

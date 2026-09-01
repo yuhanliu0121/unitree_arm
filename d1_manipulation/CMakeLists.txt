@@ -193,6 +193,7 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_trajectory_smoothing moveit_core rclcpp srdfdom urdf)
   ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
   ament_add_pytest_test(test_gripper_profiles test/test_gripper_profiles.py)
+  ament_add_pytest_test(test_safe_region_calibration test/test_safe_region_calibration.py)
 endif()
 
 ament_export_dependencies(rosidl_default_runtime)

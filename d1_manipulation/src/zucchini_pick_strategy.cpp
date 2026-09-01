@@ -570,6 +570,10 @@ public:
 
     const double target_coordinate =
       0.5 * (finetune_closing_bounds_.x() + finetune_closing_bounds_.y());
+    // Reuse the gravity-aligned PREGRASP orientation for every correction.
+    // Feeding the measured FK orientation into the next target would turn
+    // each endpoint residual into cumulative tool-axis drift.
+    const auto pregrasp_orientation = plan.pregrasp_pose.orientation;
     double cumulative_correction = 0.0;
     for (int correction = 0; correction <= finetune_max_corrections_; ++correction) {
       ZucchiniFineTuneMeasurement measurement;
@@ -649,6 +653,7 @@ public:
       target.position.x += correction_planning.x();
       target.position.y += correction_planning.y();
       target.position.z += correction_planning.z();
+      target.orientation = pregrasp_orientation;
       move_group.setStartStateToCurrentState();
       if (!move_group.setPoseTarget(target, runtime_.tcpFrame())) {
         move_group.clearPoseTargets();
@@ -894,7 +899,9 @@ private:
     plan.estimated_center.point.x = measurement.center_planning.x();
     plan.estimated_center.point.y = measurement.center_planning.y();
     plan.estimated_center.point.z = measurement.center_planning.z();
-    plan.pregrasp_pose = runtime_.moveGroup().getCurrentPose(runtime_.tcpFrame()).pose;
+    auto current_pose = runtime_.moveGroup().getCurrentPose(runtime_.tcpFrame()).pose;
+    current_pose.orientation = plan.pregrasp_pose.orientation;
+    plan.pregrasp_pose = current_pose;
     return runtime_.applyEstimatedGround(
       measurement.ground_normal, measurement.ground_offset);
   }

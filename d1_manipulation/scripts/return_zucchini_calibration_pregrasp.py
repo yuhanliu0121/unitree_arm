@@ -17,7 +17,7 @@ from sensor_msgs.msg import JointState
 
 class CalibrationPoseReturn(Node):
     def __init__(self, config: dict) -> None:
-        super().__init__("return_zucchini_calibration_pregrasp")
+        super().__init__("return_calibration_pregrasp")
         self.config = config
         self.latest_joint_state = None
         self.create_subscription(JointState, "/joint_states", self._on_joint_state, 10)
@@ -97,20 +97,104 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(
         description="Return from an open-gripper zucchini calibration DESCEND to the recorded PREGRASP."
     )
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--config")
+    parser.add_argument(
+        "--session-root",
+        help="calibration root containing .active_session and recorded DESCEND",
+    )
+    parser.add_argument(
+        "--session-target", choices=("pregrasp", "descend"), default="pregrasp"
+    )
+    parser.add_argument(
+        "--record-current-as-descend", action="store_true",
+        help="save current Joint0..5 as this session's validated DESCEND target",
+    )
     parser.add_argument("--confirm", required=True)
     parser.add_argument("--feedback-timeout", type=float, default=3.0)
     parser.add_argument("--motion-timeout", type=float, default=20.0)
     options, ros_args = parser.parse_known_args(argv)
-    if options.confirm != "ZUCCHINI_CALIBRATION_MOVE":
-        parser.error("physical motion requires --confirm ZUCCHINI_CALIBRATION_MOVE")
+    if not options.config and not options.session_root:
+        parser.error("one of --config or --session-root is required")
+    if options.session_target == "descend" and not options.session_root:
+        parser.error("DESCEND target requires --session-root")
+    if options.session_root and options.session_target == "descend":
+        expected = "CUBE_CALIBRATION_DESCEND"
+    elif options.session_root:
+        expected = "CUBE_CALIBRATION_MOVE"
+    else:
+        expected = "ZUCCHINI_CALIBRATION_MOVE"
+    if options.confirm != expected:
+        parser.error(f"physical motion requires --confirm {expected}")
     return options, ros_args
+
+
+def active_session(root: Path) -> Path:
+    active_path = root / ".active_session"
+    if not active_path.is_file():
+        raise RuntimeError("no active repeated-closing calibration session")
+    return root / active_path.read_text(encoding="utf-8").strip()
+
+
+def load_session_config(root: Path, target: str) -> dict:
+    session = active_session(root)
+    if target == "descend":
+        descent_path = session / "validated_descend.yaml"
+        if not descent_path.is_file():
+            raise RuntimeError(
+                "validated DESCEND is not recorded; run the first return with "
+                "--record-current-as-descend after a successful physical descent"
+            )
+        return yaml.safe_load(descent_path.read_text(encoding="utf-8"))
+    manifest = yaml.safe_load((session / "session.json").read_text(encoding="utf-8"))
+    samples = manifest.get("samples", {})
+    if not samples:
+        raise RuntimeError("active calibration has no captured PREGRASP sample")
+    first_relative = next(iter(samples.values()))
+    sample = yaml.safe_load((session / first_relative).read_text(encoding="utf-8"))
+    return {
+        "joint_names": [f"Joint{index}" for index in range(6)],
+        "positions_rad": sample["arm_joint_positions_rad"],
+        "maximum_start_delta_rad": math.radians(30.0),
+        "minimum_gripper_opening_m": 0.025,
+        "speed_deg_s": 15.0,
+        "action_name": "/arm_controller/execute_joint_segment",
+    }
+
+
+def record_descend(root: Path, message: JointState) -> Path:
+    measured = dict(zip(message.name, message.position))
+    missing = [f"Joint{index}" for index in range(6) if f"Joint{index}" not in measured]
+    if missing:
+        raise RuntimeError("cannot record DESCEND; missing " + ", ".join(missing))
+    config = {
+        "joint_names": [f"Joint{index}" for index in range(6)],
+        "positions_rad": [float(measured[f"Joint{index}"]) for index in range(6)],
+        "maximum_start_delta_rad": math.radians(30.0),
+        "minimum_gripper_opening_m": 0.025,
+        "speed_deg_s": 15.0,
+        "action_name": "/arm_controller/execute_joint_segment",
+    }
+    path = active_session(root) / "validated_descend.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    return path
 
 
 def main(argv=None) -> int:
     options, ros_args = parse_args(sys.argv[1:] if argv is None else argv)
-    config_path = Path(options.config)
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if options.session_target == "pregrasp" and options.config:
+        config_path = Path(options.config)
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    elif options.session_root:
+        try:
+            config = load_session_config(
+                Path(options.session_root).expanduser(), options.session_target
+            )
+        except (KeyError, OSError, RuntimeError, TypeError) as exception:
+            print(f"ERROR: {exception}", file=sys.stderr)
+            return 2
+    else:
+        print("ERROR: calibration target configuration is unavailable", file=sys.stderr)
+        return 2
     rclpy.init(args=ros_args)
     node = CalibrationPoseReturn(config)
     try:
@@ -122,12 +206,31 @@ def main(argv=None) -> int:
             print(f"ERROR: {detail}", file=sys.stderr)
             return 2
         print(detail)
-        print("Returning to the recorded zucchini calibration PREGRASP...")
+        if options.record_current_as_descend:
+            if not options.session_root or options.session_target != "pregrasp":
+                print(
+                    "ERROR: --record-current-as-descend requires a cube session "
+                    "PREGRASP return",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                path = record_descend(
+                    Path(options.session_root).expanduser(), node.latest_joint_state
+                )
+            except (OSError, RuntimeError) as exception:
+                print(f"ERROR: {exception}", file=sys.stderr)
+                return 2
+            print(f"Recorded physically validated DESCEND: {path}")
+        target_label = (
+            "DESCEND" if options.session_target == "descend" else "PREGRASP"
+        )
+        print(f"Moving to the recorded calibration {target_label}...")
         succeeded, detail = node.execute(options.motion_timeout)
         if not succeeded:
             print(f"ERROR: {detail}", file=sys.stderr)
             return 1
-        print(f"ZUCCHINI CALIBRATION PREGRASP REACHED: {detail}")
+        print(f"CALIBRATION {target_label} REACHED: {detail}")
         return 0
     except KeyboardInterrupt:
         print("\nCanceled; no follow-up command was sent.", file=sys.stderr)

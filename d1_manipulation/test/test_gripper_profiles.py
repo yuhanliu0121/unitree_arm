@@ -6,6 +6,7 @@ import yaml
 
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
+SOURCE = Path(__file__).resolve().parents[1] / "src"
 
 
 def _degrees(position_m):
@@ -58,16 +59,29 @@ def test_cube_finetune_is_default_and_uses_calibrated_orthogonal_axes():
     closing_bounds = parameters["cube_finetune_closing_bounds_m"]
     finger_bounds = parameters["cube_finetune_finger_bounds_m"]
     assert closing_bounds[1] - closing_bounds[0] == pytest.approx(
-        0.004115908190508388, abs=1e-12
+        0.006865495787693202, abs=1e-12
     )
     assert finger_bounds[1] - finger_bounds[0] == pytest.approx(
         0.04062753979416833, abs=1e-12
     )
     assert parameters["cube_finetune_max_step_m"] == pytest.approx(0.008)
     assert parameters["cube_finetune_max_total_m"] == pytest.approx(0.020)
-    assert parameters["cube_finetune_max_corrections"] == 3
+    assert parameters["cube_finetune_gain"] == pytest.approx(0.4)
+    assert parameters["cube_finetune_max_corrections"] == 5
+    assert parameters["cube_finetune_max_stddev_m"] == pytest.approx(0.002)
     assert parameters["finetune_motion_speed_deg_s"] == pytest.approx(5.0)
+    assert parameters["finetune_completion_max_deviation_rad"] == pytest.approx(
+        np.deg2rad(1.5), abs=1e-9
+    )
+    assert parameters["finetune_completion_stable_range_rad"] == pytest.approx(
+        np.deg2rad(0.3), abs=1e-9
+    )
+    assert parameters["finetune_completion_stable_samples"] == 5
+    assert parameters["finetune_completion_sample_period_s"] == pytest.approx(0.12)
     assert "cube_finetune_min_improvement_ratio" not in parameters
+
+    observe_parameters = common["d1_observe_target"]["ros__parameters"]
+    assert observe_parameters["max_target_pixel_error"] == pytest.approx(50.0)
 
 
 def test_zucchini_pregrasp_uses_explicit_ground_clearance_search():
@@ -97,14 +111,31 @@ def test_zucchini_finetune_uses_physically_validated_closing_slab():
     assert bounds[1] - bounds[0] == pytest.approx(
         0.017038788840476115, abs=1e-12
     )
+    assert parameters["zucchini_finetune_gain"] == pytest.approx(0.4)
+    assert parameters["zucchini_finetune_max_corrections"] == 5
+    assert parameters["zucchini_finetune_max_stddev_m"] == pytest.approx(0.002)
     assert "zucchini_finetune_target_tolerance_m" not in parameters
-    assert parameters["zucchini_finetune_max_corrections"] == 3
     assert "zucchini_finetune_min_improvement_ratio" not in parameters
+
+
+@pytest.mark.parametrize(
+    "strategy_source",
+    ["yellow_cube_pick_strategy.cpp", "zucchini_pick_strategy.cpp"],
+)
+def test_finetune_preserves_canonical_pregrasp_orientation(strategy_source):
+    source = (SOURCE / strategy_source).read_text()
+    assert (
+        "const auto pregrasp_orientation = plan.pregrasp_pose.orientation;"
+        in source
+    )
+    assert "target.orientation = pregrasp_orientation;" in source
+    assert "current_pose.orientation = plan.pregrasp_pose.orientation;" in source
 
 
 def test_drop_search_expands_from_nominal_height_and_y():
     common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
     parameters = common["d1_drop_object"]["ros__parameters"]
+    assert parameters["start_state_bounds_tolerance_rad"] == pytest.approx(0.1)
     assert parameters["height_offsets_m"] == pytest.approx(
         [
             0.0, -0.010, 0.010, -0.020, 0.020, -0.030, 0.030,

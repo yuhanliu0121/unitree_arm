@@ -20,6 +20,14 @@ SLAB_BOUNDARY_NAMES = (
     "closing_side_b",
 )
 LEGACY_SLAB_BOUNDARY_NAMES = ("closing_negative", "closing_positive")
+REPEATED_CLOSING_BOUNDARY_NAMES = (
+    "closing_side_a_1",
+    "closing_side_a_2",
+    "closing_side_a_3",
+    "closing_side_b_1",
+    "closing_side_b_2",
+    "closing_side_b_3",
+)
 
 
 def _unit(vector: Sequence[float], name: str) -> np.ndarray:
@@ -272,5 +280,76 @@ def build_safe_slab(
             "gravity_axis_deviation_deg": _angle_degrees(
                 ordered[0]["gravity_up_camera"], ordered[1]["gravity_up_camera"]
             ),
+        },
+    }
+
+
+def build_repeated_closing_calibration(
+    samples: Mapping[str, Mapping[str, Sequence[float]]],
+    closing_axis_camera: Sequence[float],
+    closing_margin_m: float = 0.001,
+) -> dict:
+    """Estimate closing bounds from three validated repeats on each side.
+
+    The configured runtime axis is deliberately retained.  This calibration
+    updates only its scalar bounds, so the already validated finger-length
+    axis and bounds remain geometrically compatible with the running system.
+    """
+    missing = [
+        name for name in REPEATED_CLOSING_BOUNDARY_NAMES if name not in samples
+    ]
+    if missing:
+        raise ValueError(f"missing repeated closing samples: {', '.join(missing)}")
+    if closing_margin_m < 0.0:
+        raise ValueError("closing margin cannot be negative")
+
+    closing = _unit(closing_axis_camera, "configured closing axis")
+    points = np.asarray(
+        [
+            samples[name].get(
+                "reference_point_camera_m", samples[name].get("top_center_camera_m")
+            )
+            for name in REPEATED_CLOSING_BOUNDARY_NAMES
+        ],
+        dtype=np.float64,
+    )
+    if points.shape != (6, 3) or not np.all(np.isfinite(points)):
+        raise ValueError("repeated closing samples must contain six finite 3-vectors")
+
+    coordinates = points @ closing
+    side_a = coordinates[:3]
+    side_b = coordinates[3:]
+    side_medians = [float(np.median(side_a)), float(np.median(side_b))]
+    raw_bounds = sorted(side_medians)
+    safe_bounds = [
+        raw_bounds[0] + closing_margin_m,
+        raw_bounds[1] - closing_margin_m,
+    ]
+    if safe_bounds[0] >= safe_bounds[1]:
+        raise ValueError("closing margin consumes the repeated-sample span")
+
+    return {
+        "schema_version": 1,
+        "calibration_type": "cube_repeated_closing_boundaries",
+        "frame_id": samples[REPEATED_CLOSING_BOUNDARY_NAMES[0]].get(
+            "camera_frame", "wrist_camera_color_optical_frame"
+        ),
+        "basis_camera": {"closing_axis": closing.tolist()},
+        "raw_bounds_m": {"closing": raw_bounds},
+        "safe_margins_m": {"closing": float(closing_margin_m)},
+        "safe_bounds_m": {"closing": safe_bounds},
+        "recommended_runtime_parameters": {
+            "cube_finetune_closing_axis_camera": closing.tolist(),
+            "cube_finetune_closing_bounds_m": safe_bounds,
+        },
+        "diagnostics": {
+            "raw_closing_width_m": raw_bounds[1] - raw_bounds[0],
+            "safe_closing_width_m": safe_bounds[1] - safe_bounds[0],
+            "side_a_coordinates_m": side_a.tolist(),
+            "side_b_coordinates_m": side_b.tolist(),
+            "side_a_median_m": side_medians[0],
+            "side_b_median_m": side_medians[1],
+            "side_a_range_m": float(np.ptp(side_a)),
+            "side_b_range_m": float(np.ptp(side_b)),
         },
     }

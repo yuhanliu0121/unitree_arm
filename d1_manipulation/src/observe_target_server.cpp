@@ -136,7 +136,7 @@ public:
       node_, "distances_m", std::vector<double>{0.35, 0.30, 0.40, 0.45, 0.50, 0.55, 0.60});
     tf_timeout_s_ = parameterOrDeclare(node_, "tf_timeout_s", 1.0);
     camera_settle_s_ = parameterOrDeclare(node_, "camera_settle_s", 0.5);
-    max_target_pixel_error_ = parameterOrDeclare(node_, "max_target_pixel_error", 30.0);
+    max_target_pixel_error_ = parameterOrDeclare(node_, "max_target_pixel_error", 50.0);
     stowed_tolerance_rad_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.034906585);
     stowed_ = parameterOrDeclare(
       node_, "stowed_joint_positions", std::vector<double>{0.0, -1.54, 1.55, 0.0, 0.0, 0.0});

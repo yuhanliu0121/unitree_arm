@@ -18,7 +18,9 @@ from .core import (
 )
 from .safe_region_calibration import (
     BOUNDARY_NAMES,
+    REPEATED_CLOSING_BOUNDARY_NAMES,
     SLAB_BOUNDARY_NAMES,
+    build_repeated_closing_calibration,
     build_safe_region,
     build_safe_slab,
 )
@@ -39,7 +41,9 @@ __all__ = [
     "transform_rotation",
     "undistorted_rays",
     "BOUNDARY_NAMES",
+    "REPEATED_CLOSING_BOUNDARY_NAMES",
     "SLAB_BOUNDARY_NAMES",
+    "build_repeated_closing_calibration",
     "build_safe_region",
     "build_safe_slab",
 ]

@@ -2,11 +2,16 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from d1_perception_adapter import build_safe_region, build_safe_slab  # noqa: E402
+from d1_perception_adapter import (  # noqa: E402
+    build_repeated_closing_calibration,
+    build_safe_region,
+    build_safe_slab,
+)
 
 
 def _sample(point):
@@ -92,3 +97,21 @@ def test_legacy_signed_slab_names_remain_readable() -> None:
         closing_margin_m=0.0,
     )
     np.testing.assert_allclose(region["safe_bounds_m"]["closing"], [-0.025, 0.035])
+
+
+def test_repeated_closing_calibration_uses_side_medians_and_inset() -> None:
+    coordinates = [-0.051, -0.050, -0.030, -0.020, -0.019, 0.010]
+    names = (
+        "closing_side_a_1", "closing_side_a_2", "closing_side_a_3",
+        "closing_side_b_1", "closing_side_b_2", "closing_side_b_3",
+    )
+    samples = {
+        name: _sample([coordinate, 0.0, 0.25])
+        for name, coordinate in zip(names, coordinates)
+    }
+    result = build_repeated_closing_calibration(
+        samples, [1.0, 0.0, 0.0], closing_margin_m=0.001
+    )
+    np.testing.assert_allclose(result["raw_bounds_m"]["closing"], [-0.050, -0.019])
+    np.testing.assert_allclose(result["safe_bounds_m"]["closing"], [-0.049, -0.020])
+    assert result["diagnostics"]["safe_closing_width_m"] == pytest.approx(0.029)

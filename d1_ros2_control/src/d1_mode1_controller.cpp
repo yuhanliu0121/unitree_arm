@@ -259,6 +259,15 @@ private:
     double speed_deg_s{15.0};
   };
 
+  struct CompletionSettings
+  {
+    bool require_settled_feedback{false};
+    double maximum_deviation_rad{0.0};
+    double maximum_stable_range_rad{0.0};
+    std::size_t stable_samples{0U};
+    double stable_sample_period_s{0.0};
+  };
+
   static const char * profileName(const MotionProfile profile)
   {
     return profile == MotionProfile::common_arrival ?
@@ -444,9 +453,17 @@ private:
 
   rclcpp_action::GoalResponse acceptSegmentGoal(const Segment::Goal & goal)
   {
+    const bool invalid_settled_policy = goal.require_settled_feedback &&
+      (!std::isfinite(goal.maximum_deviation_rad) ||
+      !std::isfinite(goal.maximum_stable_range_rad) ||
+      !std::isfinite(goal.stable_sample_period_s) ||
+      goal.maximum_deviation_rad <= 0.0 ||
+      goal.maximum_stable_range_rad <= 0.0 ||
+      goal.stable_samples < 2U || goal.stable_sample_period_s <= 0.0);
     if (goal.joint_names.size() != 6 || goal.positions.size() != 6 ||
       !finiteVector(goal.positions) || !std::isfinite(goal.speed_deg_s) ||
       goal.speed_deg_s <= 0.0 ||
+      invalid_settled_policy ||
       (goal.motion_profile != Segment::Goal::UNIFORM_JOINT_SPEED &&
       goal.motion_profile != Segment::Goal::COMMON_ARRIVAL))
     {
@@ -518,7 +535,8 @@ private:
   template<typename CancelFunction, typename FeedbackFunction>
   SegmentOutcome runArmSegment(
     const std::array<double, 6> & target, const MotionSettings & settings,
-    const double planned_duration_s, CancelFunction canceled, FeedbackFunction feedback)
+    const double planned_duration_s, const CompletionSettings & completion,
+    CancelFunction canceled, FeedbackFunction feedback)
   {
     try {
       if (!initializeDesiredFromFeedback()) {
@@ -572,13 +590,20 @@ private:
         required_duration_s, duration_ms / 1000.0, timeout_s);
 
       const auto started = std::chrono::steady_clock::now();
+      const auto native_completion_time = started +
+        std::chrono::milliseconds(duration_ms);
       const auto deadline = started + std::chrono::duration<double>(
-        timeout_s + command_start_timeout_s_ * no_motion_max_retries_);
+        timeout_s + (completion.require_settled_feedback ? 0.0 :
+        command_start_timeout_s_ * no_motion_max_retries_));
       auto next_start_deadline = started +
         std::chrono::duration<double>(command_start_timeout_s_);
       int no_motion_retries = 0;
       int stable = 0;
       std::uint64_t observed = 0U;
+      std::deque<std::array<double, 6>> settled_window;
+      auto last_settled_sample_time = started -
+        std::chrono::duration<double>(completion.stable_sample_period_s);
+      std::array<double, 6> latest_stable_range{};
       bool motion_started = false;
       double directed_progress_rad = 0.0;
       std::array<double, 7> last = initial;
@@ -614,23 +639,100 @@ private:
               degreesString(armPositions(current)).c_str());
           }
         }
-        bool reached = true;
-        for (std::size_t joint = 0; joint < target.size(); ++joint) {
-          reached = reached &&
-            std::abs(current[joint] - target[joint]) <= position_tolerance_rad_;
-        }
-        stable = reached ? stable + 1 : 0;
-        if (stable >= stable_samples_) {
-          RCLCPP_INFO(
-            get_logger(), "Arm endpoint reached after %.3f s: final_deg=%s",
-            std::chrono::duration<double>(
-              std::chrono::steady_clock::now() - started).count(),
-            degreesString(armPositions(current)).c_str());
-          return {
-            SegmentStatus::success, "D1 native segment endpoint reached", maximum_error_rad};
-        }
         const auto now = std::chrono::steady_clock::now();
-        if (!motion_started && now >= next_start_deadline) {
+        if (completion.require_settled_feedback) {
+          const double since_last_sample = std::chrono::duration<double>(
+            now - last_settled_sample_time).count();
+          if (now >= native_completion_time &&
+            since_last_sample + 1e-9 >= completion.stable_sample_period_s)
+          {
+            std::array<double, 6> sample{};
+            std::copy_n(current.begin(), sample.size(), sample.begin());
+            settled_window.push_back(sample);
+            last_settled_sample_time = now;
+            while (settled_window.size() > completion.stable_samples) {
+              settled_window.pop_front();
+            }
+            if (settled_window.size() == completion.stable_samples) {
+              bool stopped = true;
+              latest_stable_range.fill(0.0);
+              for (std::size_t joint = 0; joint < target.size(); ++joint) {
+                double minimum = settled_window.front()[joint];
+                double maximum = minimum;
+                for (const auto & value : settled_window) {
+                  minimum = std::min(minimum, value[joint]);
+                  maximum = std::max(maximum, value[joint]);
+                }
+                latest_stable_range[joint] = maximum - minimum;
+                stopped = stopped && latest_stable_range[joint] <=
+                  completion.maximum_stable_range_rad;
+              }
+              if (stopped) {
+                const auto error = [&target, &current]() {
+                    std::array<double, 6> value{};
+                    for (std::size_t joint = 0; joint < value.size(); ++joint) {
+                      value[joint] = target[joint] - current[joint];
+                    }
+                    return value;
+                  }();
+                const double elapsed = std::chrono::duration<double>(now - started).count();
+                if (maximum_error_rad > completion.maximum_deviation_rad) {
+                  std::ostringstream detail;
+                  detail << std::fixed << std::setprecision(2)
+                         << "visual-correction segment settled outside the "
+                         << "plan-deviation guard: max_error="
+                         << maximum_error_rad * kRadiansToDegrees
+                         << " deg limit="
+                         << completion.maximum_deviation_rad * kRadiansToDegrees
+                         << " deg error_deg=" << degreesString(error)
+                         << " stable_range_deg=" << degreesString(latest_stable_range);
+                  RCLCPP_ERROR(
+                    get_logger(),
+                    "Visual-correction segment stopped too far from plan after %.3f s: "
+                    "error_deg=%s stable_range_deg=%s max_error=%.2f deg limit=%.2f deg",
+                    elapsed, degreesString(error).c_str(),
+                    degreesString(latest_stable_range).c_str(),
+                    maximum_error_rad * kRadiansToDegrees,
+                    completion.maximum_deviation_rad * kRadiansToDegrees);
+                  return {
+                    SegmentStatus::failed,
+                    detail.str(),
+                    maximum_error_rad};
+                }
+                RCLCPP_INFO(
+                  get_logger(),
+                  "Visual-correction segment settled after native duration: elapsed=%.3f s "
+                  "native=%.3f s final_deg=%s error_deg=%s stable_range_deg=%s",
+                  elapsed, duration_ms / 1000.0,
+                  degreesString(armPositions(current)).c_str(),
+                  degreesString(error).c_str(),
+                  degreesString(latest_stable_range).c_str());
+                return {
+                  SegmentStatus::success,
+                  "D1 visual-correction segment settled within the plan-deviation guard",
+                  maximum_error_rad};
+              }
+            }
+          }
+        } else {
+          bool reached = true;
+          for (std::size_t joint = 0; joint < target.size(); ++joint) {
+            reached = reached &&
+              std::abs(current[joint] - target[joint]) <= position_tolerance_rad_;
+          }
+          stable = reached ? stable + 1 : 0;
+          if (stable >= stable_samples_) {
+            RCLCPP_INFO(
+              get_logger(), "Arm endpoint reached after %.3f s: final_deg=%s",
+              std::chrono::duration<double>(now - started).count(),
+              degreesString(armPositions(current)).c_str());
+            return {
+              SegmentStatus::success, "D1 native segment endpoint reached", maximum_error_rad};
+          }
+        }
+        if (!completion.require_settled_feedback &&
+          !motion_started && now >= next_start_deadline)
+        {
           if (no_motion_retries >= no_motion_max_retries_) {
             RCLCPP_ERROR(
               get_logger(),
@@ -668,9 +770,11 @@ private:
       }
       RCLCPP_ERROR(
         get_logger(),
-        "Arm endpoint timeout: motion_started=%s final_deg=%s error_deg=%s",
+        "Arm endpoint timeout: motion_started=%s final_deg=%s error_deg=%s "
+        "stable_range_deg=%s settled_policy=%s",
         motion_started ? "true" : "false", degreesString(armPositions(last)).c_str(),
-        degreesString(final_error).c_str());
+        degreesString(final_error).c_str(), degreesString(latest_stable_range).c_str(),
+        completion.require_settled_feedback ? "true" : "false");
       double maximum_error_rad = 0.0;
       for (std::size_t joint = 0; joint < final_error.size(); ++joint) {
         maximum_error_rad = std::max(maximum_error_rad, std::abs(final_error[joint]));
@@ -690,7 +794,8 @@ private:
     const auto outcome = runArmSegment(
       armTarget(*handle->get_goal()),
       MotionSettings{MotionProfile::uniform_joint_speed, native_joint_speed_deg_s_},
-      planned_duration_s, [handle]() {return handle->is_canceling();}, [](double) {});
+      planned_duration_s, CompletionSettings{},
+      [handle]() {return handle->is_canceling();}, [](double) {});
     auto result = std::make_shared<Arm::Result>();
     result->error_string = outcome.detail;
     if (outcome.status == SegmentStatus::success) {
@@ -715,8 +820,14 @@ private:
       goal->motion_profile == Segment::Goal::COMMON_ARRIVAL ?
       MotionProfile::common_arrival : MotionProfile::uniform_joint_speed,
       goal->speed_deg_s};
+    const CompletionSettings completion{
+      goal->require_settled_feedback,
+      goal->maximum_deviation_rad,
+      goal->maximum_stable_range_rad,
+      static_cast<std::size_t>(goal->stable_samples),
+      goal->stable_sample_period_s};
     const auto outcome = runArmSegment(
-      segmentTarget(*goal), settings, 0.0,
+      segmentTarget(*goal), settings, 0.0, completion,
       [handle]() {return handle->is_canceling();},
       [handle](const double error) {
         auto value = std::make_shared<Segment::Feedback>();

@@ -5,6 +5,15 @@ string[] joint_names
 float64[] positions
 uint8 motion_profile
 float64 speed_deg_s
+
+# Optional completion policy for stop-and-look visual corrections.  Normal
+# callers leave this false and retain the controller's standard endpoint
+# semantics.
+bool require_settled_feedback
+float64 maximum_deviation_rad
+float64 maximum_stable_range_rad
+uint32 stable_samples
+float64 stable_sample_period_s
 ---
 bool success
 string detail

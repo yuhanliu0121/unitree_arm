@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import rclpy
+import yaml
 from builtin_interfaces.msg import Time as TimeMessage
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -34,7 +35,9 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from d1_manipulation.srv import EstimateCube, EstimateZucchini
 from d1_perception_adapter import (
     BOUNDARY_NAMES,
+    REPEATED_CLOSING_BOUNDARY_NAMES,
     SLAB_BOUNDARY_NAMES,
+    build_repeated_closing_calibration,
     build_safe_region,
     build_safe_slab,
     fit_ground_plane_ransac,
@@ -52,7 +55,11 @@ BOUNDARY_LABELS = {
 }
 
 
-def _boundary_names(object_class: str):
+def _boundary_names(object_class: str, scheme: str = "default"):
+    if scheme == "repeated_closing":
+        if object_class != "yellow_cube":
+            raise ValueError("repeated-closing calibration is cube-only")
+        return REPEATED_CLOSING_BOUNDARY_NAMES
     return BOUNDARY_NAMES if object_class == "yellow_cube" else SLAB_BOUNDARY_NAMES
 
 
@@ -445,18 +452,29 @@ class CaptureNode(Node):
 
 
 def _resolve_session(
-    output_root: Path, boundary: int, force_new: bool, object_class: str
+    output_root: Path, boundary: int, force_new: bool, object_class: str,
+    scheme: str, replace: bool,
 ):
     output_root.mkdir(parents=True, exist_ok=True)
     active_path = output_root / ".active_session"
     if boundary == 1:
+        if replace:
+            if not active_path.exists():
+                raise RuntimeError("no active session; cannot replace boundary 1")
+            session = output_root / active_path.read_text(encoding="utf-8").strip()
+            if not session.is_dir():
+                raise RuntimeError(f"active session directory is missing: {session}")
+            return session, active_path, False
         if active_path.exists() and not force_new:
             active = active_path.read_text(encoding="utf-8").strip()
             raise RuntimeError(
                 f"an unfinished calibration session is active: {active}; "
                 "use --new only if you intend to start another session"
             )
-        prefix = "cube" if object_class == "yellow_cube" else object_class
+        if scheme == "repeated_closing":
+            prefix = "cube_closing_recalibration"
+        else:
+            prefix = "cube" if object_class == "yellow_cube" else object_class
         name = f"{prefix}_safe_region_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         session = output_root / name
         return session, active_path, True
@@ -501,13 +519,24 @@ def _stationary_spread(messages, target_ns: int, window_s: float = 1.0) -> float
 def _capture(args) -> tuple[Path, dict]:
     output_root = Path(args.output_root).expanduser().resolve()
     session, active_path, new_session = _resolve_session(
-        output_root, args.boundary, args.new, args.object_class
+        output_root, args.boundary, args.new, args.object_class, args.scheme,
+        args.replace,
     )
-    names = _boundary_names(args.object_class)
+    names = _boundary_names(args.object_class, args.scheme)
     boundary_name = names[args.boundary - 1]
     sample_directory = session / f"{args.boundary}_{boundary_name}"
     if sample_directory.exists():
-        raise RuntimeError(f"boundary already captured: {sample_directory}")
+        if not args.replace:
+            raise RuntimeError(
+                f"boundary already captured: {sample_directory}; "
+                "use --replace only after its DESCEND validation failed"
+            )
+        rejected = session / "rejected"
+        rejected.mkdir(exist_ok=True)
+        replacement = rejected / (
+            sample_directory.name + "_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+        sample_directory.rename(replacement)
 
     node = CaptureNode(args)
     try:
@@ -678,11 +707,12 @@ def _capture(args) -> tuple[Path, dict]:
         }
         if manifest_path.exists():
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest["samples"]:
-            reference_relative = next(iter(manifest["samples"].values()))
-            reference = json.loads(
-                (session / reference_relative).read_text(encoding="utf-8")
-            )
+        reference_paths = [
+            session / relative for relative in manifest["samples"].values()
+            if (session / relative).is_file()
+        ]
+        if reference_paths:
+            reference = json.loads(reference_paths[0].read_text(encoding="utf-8"))
             pose_delta_deg = float(np.degrees(np.max(np.abs(
                 np.asarray(sample["arm_joint_positions_rad"])
                 - np.asarray(reference["arm_joint_positions_rad"])
@@ -735,7 +765,17 @@ def _capture(args) -> tuple[Path, dict]:
                 if not relative:
                     raise RuntimeError(f"session is missing {name}")
                 loaded[name] = json.loads((session / relative).read_text(encoding="utf-8"))
-            if args.object_class == "yellow_cube":
+            if args.scheme == "repeated_closing":
+                runtime_config = yaml.safe_load(
+                    Path(args.runtime_config).expanduser().read_text(encoding="utf-8")
+                )
+                runtime_parameters = runtime_config["d1_pick_object"]["ros__parameters"]
+                region = build_repeated_closing_calibration(
+                    loaded,
+                    runtime_parameters["cube_finetune_closing_axis_camera"],
+                    closing_margin_m=args.closing_margin_mm / 1000.0,
+                )
+            elif args.object_class == "yellow_cube":
                 region = build_safe_region(
                     loaded,
                     closing_margin_m=args.closing_margin_mm / 1000.0,
@@ -748,12 +788,16 @@ def _capture(args) -> tuple[Path, dict]:
                 )
             region["source_session"] = session.name
             region["status"] = "provisional_pending_descend_validation"
-            (session / "safe_region.json").write_text(
+            result_name = (
+                "closing_recalibration.json"
+                if args.scheme == "repeated_closing" else "safe_region.json"
+            )
+            (session / result_name).write_text(
                 json.dumps(region, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
             )
-            manifest["status"] = "complete"
-            manifest["safe_region"] = "safe_region.json"
-            if active_path.exists():
+            manifest["status"] = "provisional_pending_final_descend_validation"
+            manifest["safe_region"] = result_name
+            if args.scheme != "repeated_closing" and active_path.exists():
                 active_path.unlink()
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -767,8 +811,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Capture one boundary of an object safe-descend region"
     )
-    parser.add_argument("boundary", type=int, choices=(1, 2, 3, 4))
+    parser.add_argument("boundary", type=int, choices=(1, 2, 3, 4, 5, 6))
     parser.add_argument("--new", action="store_true", help="start a new session at boundary 1")
+    parser.add_argument(
+        "--replace", action="store_true",
+        help="replace this boundary after its physical DESCEND validation failed",
+    )
+    parser.add_argument(
+        "--scheme", choices=("default", "repeated_closing"), default="default"
+    )
+    parser.add_argument(
+        "--runtime-config", default="d1_manipulation/config/observe_target.yaml",
+        help="runtime YAML supplying the closing axis for repeated calibration",
+    )
     parser.add_argument("--output-root", required=True)
     parser.add_argument(
         "--object-class", choices=("yellow_cube", "zucchini"),
@@ -811,7 +866,7 @@ def main() -> int:
     parser.add_argument("--ground-iterations", type=int, default=160)
     parser.add_argument("--cube-size-m", type=float, default=0.05)
     args = parser.parse_args()
-    boundary_count = len(_boundary_names(args.object_class))
+    boundary_count = len(_boundary_names(args.object_class, args.scheme))
     if args.boundary > boundary_count:
         parser.error(
             f"{args.object_class} calibration has {boundary_count} boundaries; "
@@ -829,7 +884,11 @@ def main() -> int:
         )
         print(f"Data: {session}")
         if args.boundary == boundary_count:
-            print(f"SAFE REGION GENERATED: {session / 'safe_region.json'}")
+            result_name = (
+                "closing_recalibration.json"
+                if args.scheme == "repeated_closing" else "safe_region.json"
+            )
+            print(f"CALIBRATION RESULT GENERATED: {session / result_name}")
         else:
             print(f"Next boundary: {args.boundary + 1}/{boundary_count}")
         return 0

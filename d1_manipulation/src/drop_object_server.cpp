@@ -5,6 +5,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -14,8 +15,10 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <moveit/robot_state/conversions.h>
 #include <moveit_msgs/msg/attached_collision_object.hpp>
 #include <moveit_msgs/msg/collision_object.hpp>
+#include <moveit_msgs/srv/get_state_validity.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
@@ -93,6 +96,11 @@ public:
     segment_action_name_ = parameterOrDeclare(
       node_, "joint_segment_action_name", std::string("/arm_controller/execute_joint_segment"));
     real_motion_speed_deg_s_ = parameterOrDeclare(node_, "real_motion_speed_deg_s", 15.0);
+    start_state_bounds_tolerance_ = parameterOrDeclare(
+      node_, "start_state_bounds_tolerance_rad", 0.1);
+    if (start_state_bounds_tolerance_ < 0.0) {
+      throw std::invalid_argument("start_state_bounds_tolerance_rad must be non-negative");
+    }
 
     move_group_.setEndEffectorLink(tcp_frame_);
     move_group_.setPoseReferenceFrame(planning_frame_);
@@ -105,6 +113,8 @@ public:
     move_group_.setGoalOrientationTolerance(parameterOrDeclare(node_, "orientation_tolerance_rad", 0.03));
     gripper_client_ = rclcpp_action::create_client<Gripper>(node_, "/gripper_controller/gripper_cmd");
     segment_client_ = rclcpp_action::create_client<Segment>(node_, segment_action_name_);
+    state_validity_client_ = node_->create_client<moveit_msgs::srv::GetStateValidity>(
+      "/check_state_validity");
 
     server_ = rclcpp_action::create_server<Drop>(
       node_, action_name_,
@@ -124,6 +134,88 @@ public:
   }
 
 private:
+  bool currentStartStateValid(std::string& detail)
+  {
+    const auto state = move_group_.getCurrentState(2.0);
+    if (!state) {
+      detail = "current MoveIt start state is unavailable";
+      return false;
+    }
+
+    const auto* joint_group = state->getJointModelGroup(move_group_.getName());
+    if (!joint_group) {
+      detail = "MoveIt arm joint group is unavailable";
+      return false;
+    }
+    if (!state->satisfiesBounds(joint_group)) {
+      if (state->satisfiesBounds(joint_group, start_state_bounds_tolerance_)) {
+        RCLCPP_WARN(
+          node_->get_logger(),
+          "Drop start state is slightly outside joint limits; enforcing bounds within "
+          "MoveIt-compatible tolerance %.3f rad before collision precheck",
+          start_state_bounds_tolerance_);
+        state->enforceBounds(joint_group);
+      } else {
+        std::ostringstream violated;
+        bool first = true;
+        for (const auto* joint : joint_group->getActiveJointModels()) {
+          if (state->satisfiesBounds(joint, start_state_bounds_tolerance_)) continue;
+          if (!first) violated << ", ";
+          violated << joint->getName();
+          first = false;
+        }
+        detail = "current MoveIt start state exceeds joint-limit tolerance";
+        if (!first) detail += ": [" + violated.str() + "]";
+        return false;
+      }
+    }
+
+    if (!state_validity_client_->wait_for_service(2s)) {
+      detail = "MoveIt /check_state_validity service is unavailable";
+      return false;
+    }
+    auto request = std::make_shared<moveit_msgs::srv::GetStateValidity::Request>();
+    moveit::core::robotStateToRobotStateMsg(*state, request->robot_state);
+    request->group_name = move_group_.getName();
+    auto future = state_validity_client_->async_send_request(request);
+    if (future.wait_for(2s) != std::future_status::ready) {
+      detail = "MoveIt /check_state_validity timed out";
+      return false;
+    }
+
+    const auto response = future.get();
+    if (response->valid) {
+      detail = "current MoveIt start state is valid";
+      return true;
+    }
+
+    std::vector<std::string> contacts;
+    contacts.reserve(response->contacts.size());
+    for (const auto& contact : response->contacts) {
+      std::string pair = contact.contact_body_1 + "<->" + contact.contact_body_2;
+      if (std::find(contacts.begin(), contacts.end(), pair) == contacts.end()) {
+        contacts.push_back(pair);
+      }
+    }
+    std::ostringstream message;
+    message << "current MoveIt start state is invalid";
+    if (contacts.empty()) {
+      message << "; no collision contacts were reported";
+    } else {
+      message << "; collision contacts=[";
+      constexpr std::size_t kMaximumReportedContacts = 8;
+      const std::size_t count = std::min(contacts.size(), kMaximumReportedContacts);
+      for (std::size_t index = 0; index < count; ++index) {
+        if (index > 0) message << ", ";
+        message << contacts[index];
+      }
+      if (contacts.size() > count) message << ", ...";
+      message << "]";
+    }
+    detail = message.str();
+    return false;
+  }
+
   bool nearPose(const std::vector<double>& target, double tolerance)
   {
     const auto current = move_group_.getCurrentJointValues();
@@ -349,6 +441,12 @@ private:
         fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
           "CHECK_PRECONDITIONS", "multiple held objects are attached in MoveIt"); return;
       }
+      std::string start_state_detail;
+      if (!currentStartStateValid(start_state_detail)) {
+        fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
+          "CHECK_PRECONDITIONS", start_state_detail); return;
+      }
+      RCLCPP_INFO(node_->get_logger(), "Drop start-state precheck passed");
       const Eigen::Vector3d bottom = pointInPlanningFrame(handle->get_goal()->target);
       const Eigen::Vector3d up = gravityUp();
       const Eigen::Vector3d horizontal = bottom - bottom.dot(up) * up;
@@ -492,6 +590,7 @@ private:
   tf2_ros::Buffer tf_buffer_; tf2_ros::TransformListener tf_listener_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Client<Segment>::SharedPtr segment_client_;
+  rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr state_validity_client_;
   rclcpp_action::Server<Drop>::SharedPtr server_;
   std::atomic<bool> cancel_{false};
   std::mutex active_goal_mutex_;
@@ -502,6 +601,7 @@ private:
   std::vector<double> stowed_, height_offsets_, y_offsets_, yaw_offsets_;
   double stowed_tolerance_{};
   double gripper_open_{}, gripper_open_hold_{}, real_motion_speed_deg_s_{};
+  double start_state_bounds_tolerance_{};
 };
 }  // namespace d1_manipulation
 
