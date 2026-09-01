@@ -1,6 +1,7 @@
 # This file describes the physical deployment. Values under `site` are owned
-# by the Go2/integration side; values under `arm` and `wrist_camera` are owned
-# by the D1 manipulation stack.
+# by the Go2/integration side; values under `arm` and most `wrist_camera`
+# fields are owned by the D1 manipulation stack. The integration side selects
+# `wrist_camera.frame_rate_hz` according to its total camera/network budget.
 deployment:
   backend: real
   # ROS 2 discovery/data domain. All cooperating ROS 2 processes must use it.
@@ -40,10 +41,17 @@ arm:
 
 wrist_camera:
   model: Intel RealSense D435i
+  # local: this stack starts realsense2_camera for a USB camera attached to the
+  # development computer. remote: another computer owns the USB device and
+  # publishes the canonical topics below on deployment.ros_domain_id.
+  driver_location: local
   serial_no: "250122077729"
   name: wrist_camera
-  color_profile: "1280x720x30"
-  depth_profile: "848x480x30"
+  color_resolution: "1280x720"
+  depth_resolution: "848x480"
+  # D435i supports these resolutions at 6, 15, or 30 Hz. Use 6 by default so
+  # two uncompressed RGB-D cameras can share a 1 GbE deployment link.
+  frame_rate_hz: 6
   color_camera_info_topic: /wrist_camera/color/camera_info
   aligned_depth_camera_info_topic: /wrist_camera/aligned_depth_to_color/camera_info
   imu_topic: /wrist_camera/imu

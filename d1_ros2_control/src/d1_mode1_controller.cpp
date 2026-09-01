@@ -262,7 +262,7 @@ private:
   struct CompletionSettings
   {
     bool require_settled_feedback{false};
-    double maximum_deviation_rad{0.0};
+    double execution_guard_margin_rad{0.0};
     double maximum_stable_range_rad{0.0};
     std::size_t stable_samples{0U};
     double stable_sample_period_s{0.0};
@@ -454,10 +454,10 @@ private:
   rclcpp_action::GoalResponse acceptSegmentGoal(const Segment::Goal & goal)
   {
     const bool invalid_settled_policy = goal.require_settled_feedback &&
-      (!std::isfinite(goal.maximum_deviation_rad) ||
+      (!std::isfinite(goal.execution_guard_margin_rad) ||
       !std::isfinite(goal.maximum_stable_range_rad) ||
       !std::isfinite(goal.stable_sample_period_s) ||
-      goal.maximum_deviation_rad <= 0.0 ||
+      goal.execution_guard_margin_rad <= 0.0 ||
       goal.maximum_stable_range_rad <= 0.0 ||
       goal.stable_samples < 2U || goal.stable_sample_period_s <= 0.0);
     if (goal.joint_names.size() != 6 || goal.positions.size() != 6 ||
@@ -676,24 +676,39 @@ private:
                     return value;
                   }();
                 const double elapsed = std::chrono::duration<double>(now - started).count();
-                if (maximum_error_rad > completion.maximum_deviation_rad) {
+                std::array<double, 6> envelope_violation{};
+                double maximum_envelope_violation_rad = 0.0;
+                for (std::size_t joint = 0; joint < target.size(); ++joint) {
+                  const double lower = std::min(initial[joint], target[joint]) -
+                    completion.execution_guard_margin_rad;
+                  const double upper = std::max(initial[joint], target[joint]) +
+                    completion.execution_guard_margin_rad;
+                  if (current[joint] < lower) {
+                    envelope_violation[joint] = current[joint] - lower;
+                  } else if (current[joint] > upper) {
+                    envelope_violation[joint] = current[joint] - upper;
+                  }
+                  maximum_envelope_violation_rad = std::max(
+                    maximum_envelope_violation_rad, std::abs(envelope_violation[joint]));
+                }
+                if (maximum_envelope_violation_rad > 0.0) {
                   std::ostringstream detail;
                   detail << std::fixed << std::setprecision(2)
-                         << "visual-correction segment settled outside the "
-                         << "plan-deviation guard: max_error="
-                         << maximum_error_rad * kRadiansToDegrees
-                         << " deg limit="
-                         << completion.maximum_deviation_rad * kRadiansToDegrees
-                         << " deg error_deg=" << degreesString(error)
+                         << "visual-correction segment settled outside the expanded "
+                         << "start-to-target execution envelope: margin="
+                         << completion.execution_guard_margin_rad * kRadiansToDegrees
+                         << " deg violation_deg=" << degreesString(envelope_violation)
+                         << " endpoint_error_deg=" << degreesString(error)
                          << " stable_range_deg=" << degreesString(latest_stable_range);
                   RCLCPP_ERROR(
                     get_logger(),
-                    "Visual-correction segment stopped too far from plan after %.3f s: "
-                    "error_deg=%s stable_range_deg=%s max_error=%.2f deg limit=%.2f deg",
-                    elapsed, degreesString(error).c_str(),
+                    "Visual-correction segment left its execution envelope after %.3f s: "
+                    "violation_deg=%s endpoint_error_deg=%s stable_range_deg=%s "
+                    "margin=%.2f deg",
+                    elapsed, degreesString(envelope_violation).c_str(),
+                    degreesString(error).c_str(),
                     degreesString(latest_stable_range).c_str(),
-                    maximum_error_rad * kRadiansToDegrees,
-                    completion.maximum_deviation_rad * kRadiansToDegrees);
+                    completion.execution_guard_margin_rad * kRadiansToDegrees);
                   return {
                     SegmentStatus::failed,
                     detail.str(),
@@ -702,14 +717,16 @@ private:
                 RCLCPP_INFO(
                   get_logger(),
                   "Visual-correction segment settled after native duration: elapsed=%.3f s "
-                  "native=%.3f s final_deg=%s error_deg=%s stable_range_deg=%s",
+                  "native=%.3f s final_deg=%s endpoint_error_deg=%s stable_range_deg=%s "
+                  "execution_margin=%.2f deg",
                   elapsed, duration_ms / 1000.0,
                   degreesString(armPositions(current)).c_str(),
                   degreesString(error).c_str(),
-                  degreesString(latest_stable_range).c_str());
+                  degreesString(latest_stable_range).c_str(),
+                  completion.execution_guard_margin_rad * kRadiansToDegrees);
                 return {
                   SegmentStatus::success,
-                  "D1 visual-correction segment settled within the plan-deviation guard",
+                  "D1 visual-correction segment settled inside the execution envelope",
                   maximum_error_rad};
               }
             }
@@ -822,7 +839,7 @@ private:
       goal->speed_deg_s};
     const CompletionSettings completion{
       goal->require_settled_feedback,
-      goal->maximum_deviation_rad,
+      goal->execution_guard_margin_rad,
       goal->maximum_stable_range_rad,
       static_cast<std::size_t>(goal->stable_samples),
       goal->stable_sample_period_s};

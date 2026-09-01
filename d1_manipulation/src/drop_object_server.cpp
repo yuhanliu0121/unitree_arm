@@ -26,6 +26,9 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "d1_manipulation/action/drop_object.hpp"
+#include "d1_manipulation/msg/arm_task_status.hpp"
+#include "d1_manipulation/srv/apply_task_event.hpp"
+#include "d1_manipulation/task_state_client.hpp"
 #include "d1_ros2_control/action/execute_joint_segment.hpp"
 
 using namespace std::chrono_literals;
@@ -68,7 +71,7 @@ public:
   explicit DropObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
     move_group_(node, parameterOrDeclare(node, "arm_group", std::string("arm"))),
-    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_)
+    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_), task_state_client_(node)
   {
     backend_ = parameterOrDeclare(node_, "backend", std::string{});
     if (backend_ != "simulation" && backend_ != "real") {
@@ -79,6 +82,8 @@ public:
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.54, 1.55, 0, 0, 0});
+    carry_ = parameterOrDeclare(
+      node_, "carry_joint_positions", std::vector<double>{0, -1.54, 1.546, 0, -0.6, 1.57});
     stowed_tolerance_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.034906585);
     height_offsets_ = parameterOrDeclare(
       node_, "height_offsets_m",
@@ -120,6 +125,20 @@ public:
       node_, action_name_,
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Drop::Goal> goal) {
         if (goal->target.header.frame_id.empty()) return rclcpp_action::GoalResponse::REJECT;
+        bool expected = false;
+        if (!drop_executing_.compare_exchange_strong(expected, true)) {
+          RCLCPP_WARN(node_->get_logger(), "Rejecting concurrent drop_object goal");
+          return rclcpp_action::GoalResponse::REJECT;
+        }
+        const auto transition = task_state_client_.apply(
+          srv::ApplyTaskEvent::Request::START_DROP, "CHECK_PRECONDITIONS", {},
+          "Accepted drop_object task");
+        if (!transition.accepted) {
+          drop_executing_.store(false);
+          RCLCPP_WARN(
+            node_->get_logger(), "Rejecting drop_object goal: %s", transition.detail.c_str());
+          return rclcpp_action::GoalResponse::REJECT;
+        }
         cancel_.store(false); return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [this](const std::shared_ptr<Handle>) {
@@ -316,6 +335,14 @@ private:
   void feedback(const std::shared_ptr<Handle>& handle, const std::string& state,
     float progress, const std::string& detail)
   {
+    const auto transition = task_state_client_.apply(
+      srv::ApplyTaskEvent::Request::UPDATE_PHASE, state, {}, detail);
+    if (!transition.accepted || transition.state == msg::ArmTaskStatus::FAULTED) {
+      RCLCPP_ERROR(
+        node_->get_logger(), "Task-state synchronization failed during %s: %s",
+        state.c_str(), transition.detail.c_str());
+      requestCancel();
+    }
     auto message = std::make_shared<Drop::Feedback>();
     message->current_state = state; message->progress = progress; message->detail = detail;
     handle->publish_feedback(message);
@@ -334,13 +361,44 @@ private:
     const std::string& state, const std::string& detail, bool canceled = false)
   {
     move_group_.stop();
-    const bool returned = nearPose(stowed_, stowed_tolerance_);
     auto result = std::make_shared<Drop::Result>();
     result->success = false; result->failure_category = category;
     result->failed_state = state;
-    result->detail = detail + "; motion stopped and current position held";
-    result->returned_to_stowed = returned;
     const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
+    bool returned = nearPose(stowed_, stowed_tolerance_);
+    result->outcome = Drop::Result::OUTCOME_ARM_FAULTED;
+    result->final_task_state = msg::ArmTaskStatus::FAULTED;
+    result->payload_state = msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
+    if (!was_canceled && category == Drop::Result::FAILURE_REPOSITION_REQUIRED) {
+      const auto recovering = task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::DROP_REPOSITION_REQUIRED, state,
+        "DROP_REPOSITION_REQUIRED", detail);
+      const bool at_carry = recovering.accepted &&
+        (nearPose(carry_, stowed_tolerance_) || moveTo(carry_));
+      if (recovering.accepted && at_carry) {
+        const auto recovered = task_state_client_.apply(
+          srv::ApplyTaskEvent::Request::RECOVERY_SUCCEEDED, "", {},
+          "Arm recovered to canonical CARRY with payload retained");
+        if (recovered.accepted) {
+          result->outcome = Drop::Result::OUTCOME_REPOSITION_REQUIRED;
+          result->final_task_state = recovered.state;
+          result->payload_state = recovered.payload_state;
+          result->detail = detail + "; arm recovered to CARRY";
+        }
+      }
+      if (result->outcome != Drop::Result::OUTCOME_REPOSITION_REQUIRED) {
+        task_state_client_.apply(
+          srv::ApplyTaskEvent::Request::FAULT, state, "DROP_RECOVERY_FAILED",
+          detail + "; recovery to CARRY failed");
+        result->detail = detail + "; recovery to CARRY failed";
+      }
+    } else {
+      task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::FAULT, state,
+        was_canceled ? "DROP_CANCELED" : "DROP_EXECUTION_ERROR", detail);
+      result->detail = detail + "; no further motion command was issued";
+    }
+    result->returned_to_stowed = returned;
     RCLCPP_ERROR(
       node_->get_logger(),
       "DROP FAILED: category=%u failed_state=%s detail=%s returned_to_stowed=%s action_status=%s",
@@ -434,6 +492,12 @@ private:
 
   void execute(const std::shared_ptr<Handle>& handle)
   {
+    struct ExecutionGuard
+    {
+      explicit ExecutionGuard(std::atomic<bool>& executing) : executing_(executing) {}
+      ~ExecutionGuard() {executing_.store(false);}
+      std::atomic<bool>& executing_;
+    } execution_guard(drop_executing_);
     try {
       feedback(handle, "CHECK_PRECONDITIONS", 0.05F, "Resolving bin target, gravity and held object state");
       const auto held_ids = heldObjectIds();
@@ -576,6 +640,15 @@ private:
       result->release_pose.header.frame_id = planning_frame_;
       result->release_pose.header.stamp = node_->now(); result->release_pose.pose = selected_pose;
       result->height_offset_m = selected_height; result->release_yaw_degrees = selected_yaw;
+      const auto completed = task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::DROP_SUCCEEDED, "STOWED", {}, result->detail);
+      if (!completed.accepted) {
+        fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR, "STATE_SYNC", completed.detail);
+        return;
+      }
+      result->outcome = Drop::Result::OUTCOME_SUCCESS;
+      result->final_task_state = completed.state;
+      result->payload_state = completed.payload_state;
       handle->succeed(result);
       RCLCPP_INFO(node_->get_logger(), "DROP SUCCEEDED");
     } catch (const std::exception& error) {
@@ -588,17 +661,19 @@ private:
   moveit::planning_interface::MoveGroupInterface move_group_;
   moveit::planning_interface::PlanningSceneInterface planning_scene_;
   tf2_ros::Buffer tf_buffer_; tf2_ros::TransformListener tf_listener_;
+  TaskStateClient task_state_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp_action::Client<Segment>::SharedPtr segment_client_;
   rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr state_validity_client_;
   rclcpp_action::Server<Drop>::SharedPtr server_;
   std::atomic<bool> cancel_{false};
+  std::atomic<bool> drop_executing_{false};
   std::mutex active_goal_mutex_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
   rclcpp_action::ClientGoalHandle<Segment>::SharedPtr active_segment_goal_;
   std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;
   std::string segment_action_name_;
-  std::vector<double> stowed_, height_offsets_, y_offsets_, yaw_offsets_;
+  std::vector<double> stowed_, carry_, height_offsets_, y_offsets_, yaw_offsets_;
   double stowed_tolerance_{};
   double gripper_open_{}, gripper_open_hold_{}, real_motion_speed_deg_s_{};
   double start_state_bounds_tolerance_{};

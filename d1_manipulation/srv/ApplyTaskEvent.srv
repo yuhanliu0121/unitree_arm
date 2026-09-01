@@ -1,0 +1,21 @@
+uint8 INITIALIZATION_SUCCEEDED=0
+uint8 INITIALIZATION_FAILED=1
+uint8 START_PICK=2
+uint8 PICK_SUCCEEDED=3
+uint8 PICK_REPOSITION_REQUIRED=4
+uint8 START_DROP=5
+uint8 DROP_SUCCEEDED=6
+uint8 DROP_REPOSITION_REQUIRED=7
+uint8 RECOVERY_SUCCEEDED=8
+uint8 UPDATE_PHASE=9
+uint8 FAULT=10
+uint8 event
+string active_phase
+string failure_code
+string detail
+---
+bool accepted
+uint8 state
+uint8 payload_state
+uint8 canonical_pose
+string detail

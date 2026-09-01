@@ -16,6 +16,11 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from d1_bringup.deployment_config import (
+    resolve_camera_driver_location,
+    resolve_camera_stream_profiles,
+)
+
 
 def _static_tf(parent, child, translation, quaternion):
     return Node(
@@ -80,6 +85,10 @@ def _launch_setup(context):
             "deploy and verify it before setting arm.onboard_streaming_deployed: true"
         )
     camera = config["wrist_camera"]
+    camera_driver_location = resolve_camera_driver_location(
+        camera, LaunchConfiguration("camera_driver_location").perform(context).strip()
+    )
+    color_profile, depth_profile = resolve_camera_stream_profiles(camera)
     site = config["site"]
     gravity_config = site["gravity"]
     arm_serial = LaunchConfiguration("arm_serial").perform(context).strip() or str(
@@ -119,28 +128,34 @@ def _launch_setup(context):
     if abs(quaternion_norm - 1.0) > 1e-3:
         raise RuntimeError(f"gravity calibration quaternion norm is {quaternion_norm:.6f}")
 
-    rs_launch = Path(get_package_share_directory("realsense2_camera")) / "launch" / "rs_launch.py"
-    realsense = GroupAction(
-        scoped=True,
-        forwarding=False,
-        actions=[IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(rs_launch)),
-            launch_arguments={
-                "camera_namespace": "/",
-                "camera_name": camera["name"],
-                "serial_no": "_" + camera["serial_no"],
-                "enable_color": "true",
-                "enable_depth": "true",
-                "align_depth.enable": "true",
-                "enable_accel": "true",
-                "enable_gyro": "true",
-                "unite_imu_method": "2",
-                "rgb_camera.color_profile": camera["color_profile"],
-                "depth_module.depth_profile": camera["depth_profile"],
-                "publish_tf": "true",
-            }.items(),
-        )],
-    )
+    realsense_actions = []
+    if camera_driver_location == "local":
+        rs_launch = (
+            Path(get_package_share_directory("realsense2_camera"))
+            / "launch"
+            / "rs_launch.py"
+        )
+        realsense_actions.append(GroupAction(
+            scoped=True,
+            forwarding=False,
+            actions=[IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(str(rs_launch)),
+                launch_arguments={
+                    "camera_namespace": "/",
+                    "camera_name": camera["name"],
+                    "serial_no": "_" + camera["serial_no"],
+                    "enable_color": "true",
+                    "enable_depth": "true",
+                    "align_depth.enable": "true",
+                    "enable_accel": "true",
+                    "enable_gyro": "true",
+                    "unite_imu_method": "2",
+                    "rgb_camera.color_profile": color_profile,
+                    "depth_module.depth_profile": depth_profile,
+                    "publish_tf": "true",
+                }.items(),
+            )],
+        ))
 
     manipulation_launch = (
         Path(get_package_share_directory("d1_manipulation"))
@@ -189,11 +204,12 @@ def _launch_setup(context):
         LogInfo(
             msg=(
                 f"Starting REAL D1 system: serial={arm_serial} config={config_path} "
+                f"camera_driver={camera_driver_location} "
                 f"command_rate={command_rate_hz:g}Hz "
                 f"servo_duration={effective_duration_ms}ms"
             )
         ),
-        realsense,
+        *realsense_actions,
         _configured_static_tf("go2_base", "base_link", site["go2_base_to_arm_base"]),
         _configured_static_tf("Link6", "wrist_camera_link", camera["link6_to_camera_link"]),
         _static_tf(
@@ -211,6 +227,11 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=""),
         DeclareLaunchArgument("arm_serial", default_value=""),
+        DeclareLaunchArgument(
+            "camera_driver_location",
+            default_value="",
+            description="Override wrist camera driver location: local or remote",
+        ),
         DeclareLaunchArgument("gravity_calibration"),
         DeclareLaunchArgument("launch_rviz", default_value="false"),
         DeclareLaunchArgument("native_joint_speed_deg_s", default_value=""),

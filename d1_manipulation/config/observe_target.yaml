@@ -76,8 +76,9 @@ d1_pick_object:
     cube_finetune_settle_s: 0.5
     # All PREGRASP visual corrections use a slow uniform joint speed. Success
     # is determined only by entering the calibrated region within the configured moves.
+    # Joint feedback only guards against leaving the start-to-target interval by 4 deg.
     finetune_motion_speed_deg_s: 5.0
-    finetune_completion_max_deviation_rad: 0.026179939
+    finetune_execution_guard_margin_rad: 0.069813170
     finetune_completion_stable_range_rad: 0.005235988
     finetune_completion_stable_samples: 5
     finetune_completion_sample_period_s: 0.12

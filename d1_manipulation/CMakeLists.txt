@@ -1,12 +1,22 @@
 cmake_minimum_required(VERSION 3.8)
 project(d1_manipulation)
 
+include(FetchContent)
+FetchContent_Declare(
+  boost_sml
+  GIT_REPOSITORY https://github.com/boost-ext/sml.git
+  GIT_TAG b7df6180d20422b2724d26007aebb24066f2a6a9
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(boost_sml)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
@@ -30,6 +40,7 @@ find_package(urdf REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/ArmTaskStatus.msg"
   "action/ObserveTarget.action"
   "action/PickObject.action"
   "action/DropObject.action"
@@ -38,7 +49,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/EstimateBowl.srv"
   "srv/EstimateZucchini.srv"
   "srv/VerifyHeldObject.srv"
-  DEPENDENCIES geometry_msgs
+  "srv/ApplyTaskEvent.srv"
+  DEPENDENCIES builtin_interfaces geometry_msgs
 )
 
 ament_python_install_package(d1_perception_adapter
@@ -60,6 +72,29 @@ target_include_directories(trajectory_smoothing PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(trajectory_smoothing moveit_core rclcpp)
+
+add_library(arm_task_state_machine src/arm_task_state_machine.cpp)
+target_compile_features(arm_task_state_machine PUBLIC cxx_std_17)
+target_include_directories(arm_task_state_machine PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(arm_task_state_machine PRIVATE sml)
+
+add_library(task_state_client src/task_state_client.cpp)
+target_compile_features(task_state_client PUBLIC cxx_std_17)
+target_include_directories(task_state_client PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(task_state_client rclcpp)
+
+add_executable(arm_task_state_manager src/arm_task_state_manager.cpp)
+target_compile_features(arm_task_state_manager PRIVATE cxx_std_17)
+target_include_directories(arm_task_state_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(arm_task_state_manager arm_task_state_machine)
+ament_target_dependencies(
+  arm_task_state_manager control_msgs rclcpp rclcpp_action sensor_msgs trajectory_msgs)
 
 add_executable(observe_target_server src/observe_target_server.cpp)
 target_compile_features(observe_target_server PRIVATE cxx_std_17)
@@ -94,6 +129,7 @@ target_link_libraries(
   pick_object_server
   Eigen3::Eigen
   trajectory_smoothing
+  task_state_client
   d1_ros2_control::d1_ros2_control__rosidl_typesupport_cpp
 )
 ament_target_dependencies(pick_object_server
@@ -123,6 +159,7 @@ target_link_libraries(
   drop_object_server
   Eigen3::Eigen
   d1_ros2_control::d1_ros2_control__rosidl_typesupport_cpp
+  task_state_client
 )
 ament_target_dependencies(drop_object_server
   control_msgs geometry_msgs moveit_core moveit_msgs
@@ -134,13 +171,19 @@ rosidl_get_typesupport_target(cpp_typesupport_target
 target_link_libraries(observe_target_server "${cpp_typesupport_target}")
 target_link_libraries(pick_object_server "${cpp_typesupport_target}")
 target_link_libraries(drop_object_server "${cpp_typesupport_target}")
+target_link_libraries(arm_task_state_manager "${cpp_typesupport_target}")
+target_link_libraries(task_state_client "${cpp_typesupport_target}")
 
 install(TARGETS observation_geometry trajectory_smoothing
   EXPORT export_observation_geometry
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
 )
-install(TARGETS observe_target_server pick_object_server drop_object_server
+install(TARGETS arm_task_state_machine task_state_client
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+)
+install(TARGETS arm_task_state_manager observe_target_server pick_object_server drop_object_server
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)
@@ -191,6 +234,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_trajectory_smoothing test/test_trajectory_smoothing.cpp)
   target_link_libraries(test_trajectory_smoothing trajectory_smoothing)
   ament_target_dependencies(test_trajectory_smoothing moveit_core rclcpp srdfdom urdf)
+  ament_add_gtest(test_arm_task_state_machine test/test_arm_task_state_machine.cpp)
+  target_link_libraries(test_arm_task_state_machine arm_task_state_machine)
   ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
   ament_add_pytest_test(test_gripper_profiles test/test_gripper_profiles.py)
   ament_add_pytest_test(test_safe_region_calibration test/test_safe_region_calibration.py)

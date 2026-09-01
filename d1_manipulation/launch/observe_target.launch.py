@@ -101,6 +101,14 @@ def _launch_setup(context):
         ),
         Node(
                 package="d1_manipulation",
+                executable="arm_task_state_manager",
+                output="screen",
+                parameters=[
+                    str(fixed_poses_config),
+                ],
+        ),
+        Node(
+                package="d1_manipulation",
                 executable="observe_target_server",
                 output="screen",
                 parameters=[

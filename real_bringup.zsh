@@ -9,6 +9,7 @@ COMMAND_RATE_HZ=""
 COMMAND_DURATION_MS=""
 JOINT_SPEED_DEG_S=""
 GRAVITY_CALIBRATION=""
+CAMERA_DRIVER_LOCATION=""
 LAUNCH_PID=""
 
 launch_process_group_alive() {
@@ -53,7 +54,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 usage() {
-  print "Usage: ./real_bringup.zsh [--rviz] [--config PATH] [--arm-serial SERIAL] [--joint-speed-deg-s DEG_S] [--command-rate-hz HZ] [--command-duration-ms MS]"
+  print "Usage: ./real_bringup.zsh [--rviz] [--config PATH] [--arm-serial SERIAL] [--camera-driver-location local|remote] [--joint-speed-deg-s DEG_S] [--command-rate-hz HZ] [--command-duration-ms MS]"
   print ""
   print "Runs the motionless real-machine preflight first. Controllers, MoveIt,"
   print "camera perception, and task Actions start only after the preflight passes."
@@ -79,6 +80,14 @@ while (( $# > 0 )); do
         exit 2
       fi
       ARM_SERIAL=$2
+      shift 2
+      ;;
+    --camera-driver-location)
+      if (( $# < 2 )); then
+        print -u2 "--camera-driver-location requires local or remote"
+        exit 2
+      fi
+      CAMERA_DRIVER_LOCATION=$2
       shift 2
       ;;
     --command-rate-hz)
@@ -149,6 +158,10 @@ if [[ -z "${ARM_SERIAL}" ]]; then
   print -u2 "Physical arm serial must be set in YAML or with --arm-serial"
   exit 2
 fi
+if [[ -n "${CAMERA_DRIVER_LOCATION}" ]] && [[ "${CAMERA_DRIVER_LOCATION}" != "local" && "${CAMERA_DRIVER_LOCATION}" != "remote" ]]; then
+  print -u2 "--camera-driver-location must be local or remote"
+  exit 2
+fi
 if [[ -n "${COMMAND_RATE_HZ}" ]] && ! python3 -c 'import math,sys; value=float(sys.argv[1]); raise SystemExit(0 if math.isfinite(value) and value > 0.0 else 1)' "${COMMAND_RATE_HZ}"; then
   print -u2 "--command-rate-hz must be a finite positive number"
   exit 2
@@ -169,14 +182,26 @@ mkdir -p "${ROS_LOG_DIR}"
 
 GRAVITY_CALIBRATION=$(mktemp --suffix=.yaml /tmp/d1_gravity_calibration.XXXXXX)
 
-print "[1/2] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
-"${SCRIPT_DIR}/real_preflight.zsh" \
-  --arm-serial "${ARM_SERIAL}" \
-  "config:=${CONFIG_PATH}" \
+PREFLIGHT_ARGS=(
+  --arm-serial "${ARM_SERIAL}"
+  "config:=${CONFIG_PATH}"
   "gravity_output_path:=${GRAVITY_CALIBRATION}"
+)
+[[ -z "${CAMERA_DRIVER_LOCATION}" ]] || PREFLIGHT_ARGS+=("camera_driver_location:=${CAMERA_DRIVER_LOCATION}")
 
-print "Waiting 2 seconds for the RealSense USB streams to be released..."
-sleep 2
+print "[1/2] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
+"${SCRIPT_DIR}/real_preflight.zsh" "${PREFLIGHT_ARGS[@]}"
+
+EFFECTIVE_CAMERA_DRIVER_LOCATION=${CAMERA_DRIVER_LOCATION}
+if [[ -z "${EFFECTIVE_CAMERA_DRIVER_LOCATION}" ]]; then
+  EFFECTIVE_CAMERA_DRIVER_LOCATION=$(python3 -c 'import sys,yaml; c=yaml.safe_load(open(sys.argv[1], encoding="utf-8")); print(str(c["wrist_camera"].get("driver_location", "local")).strip().lower())' "${CONFIG_PATH}")
+fi
+if [[ "${EFFECTIVE_CAMERA_DRIVER_LOCATION}" == "local" ]]; then
+  print "Waiting 2 seconds for the local RealSense USB streams to be released..."
+  sleep 2
+else
+  print "Remote RealSense selected; keeping the external camera publisher running."
+fi
 
 print "[2/2] Preflight passed; starting physical control, MoveIt, perception, and task Actions..."
 print "Press Ctrl+C to stop the stack and all of its child processes."
@@ -186,6 +211,7 @@ LAUNCH_ARGS=(
   "arm_serial:=${ARM_SERIAL}"
   "gravity_calibration:=${GRAVITY_CALIBRATION}"
   "launch_rviz:=${LAUNCH_RVIZ}"
+  "camera_driver_location:=${EFFECTIVE_CAMERA_DRIVER_LOCATION}"
 )
 [[ -z "${COMMAND_RATE_HZ}" ]] || LAUNCH_ARGS+=("real_command_rate_hz:=${COMMAND_RATE_HZ}")
 [[ -z "${COMMAND_DURATION_MS}" ]] || LAUNCH_ARGS+=("real_command_duration_ms:=${COMMAND_DURATION_MS}")

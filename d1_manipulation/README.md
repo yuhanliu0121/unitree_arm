@@ -139,15 +139,36 @@ ros2 launch d1_manipulation observe_target.launch.py backend:=simulation
 ros2 launch d1_manipulation observe_target.launch.py backend:=real
 ```
 
-`backend` is required and cannot fall back automatically. The public
-`PickObject` and `DropObject` actions are mutually exclusive across their
-separate server processes. Canceling either action stops the active arm
-trajectory, cancels any nested observation or gripper goal, and leaves the
-controller holding the current measured position. A physical arm execution
-timeout does not enqueue a measured-position hold command; it reports failure
-without issuing another arm target. Failures do not automatically command
-STOWED. A successful `DropObject` still returns to STOWED as part of its normal
-task sequence.
+`backend` is required and cannot fall back automatically. One
+`arm_task_state_manager` process is the authority for both public Actions, so
+`PickObject` and `DropObject` cannot overlap even though their strategy servers
+remain separate processes. The latched `/arm/task_status` topic exposes the
+exact state, payload knowledge, canonical-pose knowledge, active phase and last
+failure. Full tasks follow this contract:
+
+| Current state | Accepted task | Success state | Recoverable business failure |
+|---|---|---|---|
+| `READY_STOWED` | `PickObject` | `READY_CARRY` | collision-checked recovery to `READY_STOWED` |
+| `READY_CARRY` | `DropObject` | `READY_STOWED` | recovery to `READY_CARRY` with payload retained |
+
+Startup remains `INITIALIZING` until fresh Joint0--Joint5 feedback verifies the
+canonical STOWED pose. If the arm starts within the configured 45-degree
+per-joint near-STOWED envelope, the manager commands one bounded recovery target
+and verifies the resulting feedback; larger deviations enter `FAULTED` without
+motion. Stale joint feedback, cancellation, controller/TF/camera
+failure, ambiguous payload state, or failed recovery enters terminal
+`FAULTED`. A fault stops/cancels the active command and does not enqueue a
+measured-position hold or another motion target. New pick/drop goals are then
+rejected. `PickObject` results reduce the caller decision to `SUCCESS`,
+`REPOSITION_REQUIRED`, or `ARM_FAULTED`; `DropObject` uses the same outcomes.
+Partial `stop_after` goals and the debug continuation services are commissioning
+tools and intentionally bypass the production task-state contract.
+
+Inspect the externally visible state with:
+
+```zsh
+ros2 topic echo /arm/task_status
+```
 
 Every `PickObject` starts with `ENSURE_STOWED`. If the current pose is within
 45 degrees per joint of `[0, -1.54, 1.55, 0, 0, 0]`, the server sends that
@@ -164,11 +185,11 @@ replace the physical emergency stop during real-machine tests.
 ## Gravity-aligned object release
 
 The external release Action is `/arm/tasks/drop_object`. Its stamped target is
-the trash-bin bottom centre estimated by Go2. It plans from the arm's current
-pose and supports both a held MoveIt object and an empty gripper. When one held
-object exists it is detached after release; with none, the same release motion
-is executed without detachment. More than one attached object is treated as an
-invalid planning-scene state. For reliable reachability and Go2 body clearance,
+the trash-bin bottom centre estimated by Go2. The production state contract
+accepts it only from `READY_CARRY`; the legacy empty-gripper path remains an
+internal commissioning behavior rather than a public precondition. When one
+held MoveIt object exists it is detached after release. More than one attached
+object is treated as an invalid planning-scene state. For reliable reachability and Go2 body clearance,
 navigation should place the bin centre approximately 0.35--0.45 m
 horizontally from `base_link`; this is a recommendation rather than an Action
 precondition. The server searches the configured release candidates and only

@@ -70,8 +70,8 @@ def test_cube_finetune_is_default_and_uses_calibrated_orthogonal_axes():
     assert parameters["cube_finetune_max_corrections"] == 5
     assert parameters["cube_finetune_max_stddev_m"] == pytest.approx(0.002)
     assert parameters["finetune_motion_speed_deg_s"] == pytest.approx(5.0)
-    assert parameters["finetune_completion_max_deviation_rad"] == pytest.approx(
-        np.deg2rad(1.5), abs=1e-9
+    assert parameters["finetune_execution_guard_margin_rad"] == pytest.approx(
+        np.deg2rad(4.0), abs=1e-9
     )
     assert parameters["finetune_completion_stable_range_rad"] == pytest.approx(
         np.deg2rad(0.3), abs=1e-9

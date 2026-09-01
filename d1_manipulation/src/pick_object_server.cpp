@@ -34,8 +34,11 @@
 
 #include "d1_manipulation/action/observe_target.hpp"
 #include "d1_manipulation/action/pick_object.hpp"
+#include "d1_manipulation/msg/arm_task_status.hpp"
 #include "d1_manipulation/pick_strategy.hpp"
 #include "d1_manipulation/srv/detect_target.hpp"
+#include "d1_manipulation/srv/apply_task_event.hpp"
+#include "d1_manipulation/task_state_client.hpp"
 #include "d1_manipulation/trajectory_smoothing.hpp"
 #include "d1_ros2_control/action/execute_joint_segment.hpp"
 
@@ -90,7 +93,7 @@ public:
     uint8_t motion_profile{Segment::Goal::UNIFORM_JOINT_SPEED};
     double speed_deg_s{15.0};
     bool require_settled_feedback{false};
-    double maximum_deviation_rad{0.0};
+    double execution_guard_margin_rad{0.0};
     double maximum_stable_range_rad{0.0};
     std::uint32_t stable_samples{0U};
     double stable_sample_period_s{0.0};
@@ -104,7 +107,7 @@ public:
   explicit PickObjectServer(const rclcpp::Node::SharedPtr& node)
   : node_(node),
     move_group_(node, parameterOrDeclare(node, "arm_group", std::string("arm"))),
-    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_)
+    tf_buffer_(node->get_clock()), tf_listener_(tf_buffer_), task_state_client_(node)
   {
     backend_ = parameterOrDeclare(node_, "backend", std::string{});
     if (backend_ != "simulation" && backend_ != "real") {
@@ -148,8 +151,8 @@ public:
       node_, "debug_resume_joint_tolerance_rad", 0.087266463);
     finetune_motion_speed_deg_s_ = parameterOrDeclare(
       node_, "finetune_motion_speed_deg_s", 5.0);
-    finetune_completion_max_deviation_rad_ = parameterOrDeclare(
-      node_, "finetune_completion_max_deviation_rad", 0.026179939);
+    finetune_execution_guard_margin_rad_ = parameterOrDeclare(
+      node_, "finetune_execution_guard_margin_rad", 0.069813170);
     finetune_completion_stable_range_rad_ = parameterOrDeclare(
       node_, "finetune_completion_stable_range_rad", 0.005235988);
     finetune_completion_stable_samples_ = parameterOrDeclare(
@@ -175,7 +178,7 @@ public:
     if (finetune_motion_speed_deg_s_ <= 0.0) {
       throw std::invalid_argument("finetune_motion_speed_deg_s must be positive");
     }
-    if (finetune_completion_max_deviation_rad_ <= 0.0 ||
+    if (finetune_execution_guard_margin_rad_ <= 0.0 ||
       finetune_completion_stable_range_rad_ <= 0.0 ||
       finetune_completion_stable_samples_ < 2 ||
       finetune_completion_sample_period_s_ <= 0.0)
@@ -229,6 +232,22 @@ public:
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Pick::Goal> goal) {
         if (goal->target.header.frame_id.empty() ||
           goal->stop_after > Pick::Goal::GRASP_AND_CARRY) return rclcpp_action::GoalResponse::REJECT;
+        bool expected = false;
+        if (!pick_executing_.compare_exchange_strong(expected, true)) {
+          RCLCPP_WARN(node_->get_logger(), "Rejecting concurrent pick_object goal");
+          return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (isManagedGoal(*goal)) {
+          const auto transition = task_state_client_.apply(
+            srv::ApplyTaskEvent::Request::START_PICK, "ENSURE_STOWED", {},
+            "Accepted full pick_object task");
+          if (!transition.accepted) {
+            pick_executing_.store(false);
+            RCLCPP_WARN(
+              node_->get_logger(), "Rejecting pick_object goal: %s", transition.detail.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+          }
+        }
         cancel_.store(false);
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
@@ -263,6 +282,11 @@ public:
   }
 
 private:
+  static bool isManagedGoal(const Pick::Goal& goal)
+  {
+    return goal.stop_after == Pick::Goal::GRASP_AND_CARRY;
+  }
+
   void clearDebugPregrasp()
   {
     std::lock_guard<std::mutex> lock(debug_pregrasp_mutex_);
@@ -455,6 +479,16 @@ private:
   void feedback(const std::shared_ptr<PickHandle>& handle, const std::string& state,
     float progress, const std::string& detail)
   {
+    if (isManagedGoal(*handle->get_goal())) {
+      const auto transition = task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::UPDATE_PHASE, state, {}, detail);
+      if (!transition.accepted || transition.state == msg::ArmTaskStatus::FAULTED) {
+        RCLCPP_ERROR(
+          node_->get_logger(), "Task-state synchronization failed during %s: %s",
+          state.c_str(), transition.detail.c_str());
+        requestCancel();
+      }
+    }
     auto value = std::make_shared<Pick::Feedback>();
     value->current_state = state; value->progress = progress; value->detail = detail;
     handle->publish_feedback(value);
@@ -574,6 +608,30 @@ private:
     return true;
   }
 
+  bool recoverToStowed(std::string& detail)
+  {
+    if (isStowed()) {
+      detail = "arm already satisfies the canonical STOWED pose";
+      return true;
+    }
+    move_group_.setStartStateToCurrentState();
+    if (!move_group_.setJointValueTarget(stowed_)) {
+      detail = "canonical STOWED has no valid joint target";
+      return false;
+    }
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+      detail = "collision-free recovery plan to STOWED was unavailable";
+      return false;
+    }
+    if (!executePlan(plan) || !isStowed()) {
+      detail = "recovery trajectory did not reach canonical STOWED";
+      return false;
+    }
+    detail = "arm recovered to canonical STOWED through a collision-checked plan";
+    return true;
+  }
+
   void requestCancel()
   {
     cancel_.store(true);
@@ -600,13 +658,50 @@ private:
     const std::string& state, const std::string& detail, bool canceled = false)
   {
     move_group_.stop();
-    const bool returned = isStowed();
     auto result = std::make_shared<Pick::Result>();
     result->success = false; result->failure_category = category;
     result->failed_state = state;
-    result->detail = detail + "; motion stopped and current position held";
-    result->returned_to_stowed = returned;
     const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
+    bool returned = isStowed();
+    result->outcome = Pick::Result::OUTCOME_ARM_FAULTED;
+    result->final_task_state = msg::ArmTaskStatus::FAULTED;
+    result->payload_state = msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
+
+    if (isManagedGoal(*handle->get_goal()) && !was_canceled &&
+      (category == Pick::Result::FAILURE_INCOMPLETE_INFORMATION ||
+      category == Pick::Result::FAILURE_THEORETICALLY_INFEASIBLE ||
+      category == Pick::Result::FAILURE_REPOSITION_REQUIRED))
+    {
+      const auto recovering = task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::PICK_REPOSITION_REQUIRED, state,
+        "PICK_REPOSITION_REQUIRED", detail);
+      std::string recovery_detail;
+      if (recovering.accepted && recoverToStowed(recovery_detail)) {
+        const auto recovered = task_state_client_.apply(
+          srv::ApplyTaskEvent::Request::RECOVERY_SUCCEEDED, "", {}, recovery_detail);
+        if (recovered.accepted) {
+          returned = true;
+          result->outcome = Pick::Result::OUTCOME_REPOSITION_REQUIRED;
+          result->final_task_state = recovered.state;
+          result->payload_state = recovered.payload_state;
+          result->detail = detail + "; " + recovery_detail;
+        }
+      }
+      if (result->outcome != Pick::Result::OUTCOME_REPOSITION_REQUIRED) {
+        task_state_client_.apply(
+          srv::ApplyTaskEvent::Request::FAULT, state, "PICK_RECOVERY_FAILED",
+          detail + "; " + recovery_detail);
+        result->detail = detail + "; recovery to STOWED failed: " + recovery_detail;
+      }
+    } else if (isManagedGoal(*handle->get_goal())) {
+      task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::FAULT, state,
+        was_canceled ? "PICK_CANCELED" : "PICK_EXECUTION_ERROR", detail);
+      result->detail = detail + "; no further motion command was issued";
+    } else {
+      result->detail = detail + "; no further motion command was issued";
+    }
+    result->returned_to_stowed = returned;
     if (was_canceled) handle->canceled(result); else handle->abort(result);
   }
 
@@ -721,6 +816,13 @@ public:
 
 private:
 
+  enum class HoldVerification
+  {
+    held,
+    not_held,
+    unavailable,
+  };
+
   bool commandGripper(double position)
   {
     if (!gripper_client_->wait_for_action_server(5s)) return false;
@@ -764,7 +866,7 @@ private:
     options.motion_profile = Segment::Goal::UNIFORM_JOINT_SPEED;
     options.speed_deg_s = finetune_motion_speed_deg_s_;
     options.require_settled_feedback = true;
-    options.maximum_deviation_rad = finetune_completion_max_deviation_rad_;
+    options.execution_guard_margin_rad = finetune_execution_guard_margin_rad_;
     options.maximum_stable_range_rad = finetune_completion_stable_range_rad_;
     options.stable_samples =
       static_cast<std::uint32_t>(finetune_completion_stable_samples_);
@@ -796,7 +898,7 @@ private:
     goal.motion_profile = options.motion_profile;
     goal.speed_deg_s = options.speed_deg_s;
     goal.require_settled_feedback = options.require_settled_feedback;
-    goal.maximum_deviation_rad = options.maximum_deviation_rad;
+    goal.execution_guard_margin_rad = options.execution_guard_margin_rad;
     goal.maximum_stable_range_rad = options.maximum_stable_range_rad;
     goal.stable_samples = options.stable_samples;
     goal.stable_sample_period_s = options.stable_sample_period_s;
@@ -1002,6 +1104,54 @@ private:
     return true;
   }
 
+  std::vector<std::string> heldObjectIds()
+  {
+    std::vector<std::string> ids;
+    for (const auto& [id, object] : planning_scene_.getAttachedObjects()) {
+      (void)object;
+      if (id.rfind("held/", 0) == 0) ids.push_back(id);
+    }
+    return ids;
+  }
+
+  bool detachAndForgetHeldObjects(std::string& detail)
+  {
+    const auto ids = heldObjectIds();
+    for (const auto& id : ids) {
+      auto objects = planning_scene_.getAttachedObjects({id});
+      if (objects.size() != 1) {
+        detail = "attached collision object " + id + " could not be retrieved";
+        return false;
+      }
+      auto attached = objects.begin()->second;
+      attached.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+      if (!planning_scene_.applyAttachedCollisionObject(attached)) {
+        detail = "failed to detach collision object " + id;
+        return false;
+      }
+      std::this_thread::sleep_for(100ms);
+      planning_scene_.removeCollisionObjects({id});
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto remaining = heldObjectIds();
+      const auto known = planning_scene_.getKnownObjectNames();
+      const bool world_copy_present = std::any_of(
+        ids.begin(), ids.end(), [&known](const std::string& id) {
+          return std::find(known.begin(), known.end(), id) != known.end();
+        });
+      if (remaining.empty() && !world_copy_present) {
+        detail = ids.empty() ? "no held collision object remained" :
+          "held collision object was detached and removed";
+        return true;
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    detail = "held collision object cleanup did not converge";
+    return false;
+  }
+
   bool moveToCarry()
   {
     move_group_.setStartStateToCurrentState();
@@ -1018,16 +1168,16 @@ private:
       (gripper_safe_open_angle_deg_ - gripper_safe_closed_angle_deg_);
   }
 
-  bool verifyHeldObject(const PreparedPick& pick, std::string& detail)
+  HoldVerification verifyHeldObject(const PreparedPick& pick, std::string& detail)
   {
     if (!waitCancelable(gripper_verify_settle_)) {
       detail = "canceled while waiting for gripper feedback to settle";
-      return false;
+      return HoldVerification::unavailable;
     }
     const auto window_start = std::chrono::steady_clock::now();
     if (!waitCancelable(gripper_verify_sample_)) {
       detail = "canceled while sampling gripper feedback";
-      return false;
+      return HoldVerification::unavailable;
     }
 
     std::vector<double> positions;
@@ -1041,7 +1191,7 @@ private:
       detail = "insufficient fresh Joint6 feedback samples: " +
         std::to_string(positions.size()) + "/" +
         std::to_string(gripper_verify_min_samples_);
-      return false;
+      return HoldVerification::unavailable;
     }
 
     std::sort(positions.begin(), positions.end());
@@ -1064,7 +1214,74 @@ private:
            << " threshold=" << gripperPositionToDegrees(pick.gripper_held_threshold_m)
            << " deg pass=" << passing << "/" << positions.size();
     detail = stream.str();
-    return held;
+    return held ? HoldVerification::held : HoldVerification::not_held;
+  }
+
+  void recoverUnsecuredGrasp(
+    const std::shared_ptr<PickHandle>& handle, double gripper_open_position,
+    const std::string& verification_detail)
+  {
+    RCLCPP_WARN(
+      node_->get_logger(),
+      "VERIFY_GRASP confirmed that the payload was not retained: %s; recovering to STOWED",
+      verification_detail.c_str());
+    auto result = std::make_shared<Pick::Result>();
+    result->success = false;
+    result->failure_category = Pick::Result::FAILURE_GRASP_NOT_SECURED;
+    result->failed_state = "VERIFY_GRASP";
+    result->outcome = Pick::Result::OUTCOME_ARM_FAULTED;
+    result->final_task_state = msg::ArmTaskStatus::FAULTED;
+    result->payload_state = msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
+
+    const auto recovering = task_state_client_.apply(
+      srv::ApplyTaskEvent::Request::PICK_REPOSITION_REQUIRED, "VERIFY_GRASP",
+      "PICK_GRASP_NOT_SECURED", verification_detail);
+    std::string recovery_detail;
+    std::string cleanup_detail;
+    bool recovery_ok = recovering.accepted;
+    if (!recovery_ok) {
+      recovery_detail = "task-state recovery transition was rejected: " + recovering.detail;
+    }
+    if (recovery_ok) {
+      feedback(
+        handle, "RECOVERING_TO_STOWED", 0.995F,
+        "Grasp was not retained; returning to STOWED before reporting failure");
+      recovery_ok = recoverToStowed(recovery_detail);
+    }
+    if (recovery_ok) {
+      recovery_ok = detachAndForgetHeldObjects(cleanup_detail);
+    }
+    if (recovery_ok && !commandGripper(gripper_open_position)) {
+      cleanup_detail += "; gripper failed to reach its fully open target";
+      recovery_ok = false;
+    }
+    if (recovery_ok) {
+      const auto recovered = task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::RECOVERY_SUCCEEDED, "", {},
+        "unsecured grasp recovered to STOWED");
+      if (recovered.accepted) {
+        result->outcome = Pick::Result::OUTCOME_REPOSITION_REQUIRED;
+        result->final_task_state = recovered.state;
+        result->payload_state = recovered.payload_state;
+        result->returned_to_stowed = true;
+        result->detail = verification_detail + "; " + recovery_detail + "; " +
+          cleanup_detail + "; gripper fully opened; reposition and retry pick_object";
+        RCLCPP_WARN(node_->get_logger(), "%s", result->detail.c_str());
+        handle->abort(result);
+        return;
+      }
+      cleanup_detail += "; task-state recovery transition was rejected: " + recovered.detail;
+    }
+
+    task_state_client_.apply(
+      srv::ApplyTaskEvent::Request::FAULT, "VERIFY_GRASP", "PICK_RECOVERY_FAILED",
+      verification_detail + "; " + recovery_detail + "; " + cleanup_detail);
+    result->returned_to_stowed = isStowed();
+    result->detail = verification_detail + "; automatic recovery failed: " +
+      recovery_detail + "; " + cleanup_detail +
+      "; no further motion command was issued";
+    RCLCPP_ERROR(node_->get_logger(), "%s", result->detail.c_str());
+    handle->abort(result);
   }
 
   bool restoreTargetCollision(
@@ -1265,14 +1482,28 @@ private:
       feedback(handle, "VERIFY_GRASP", 0.99F,
         "Checking retained Joint6 opening for " + prepared.class_name);
       std::string verification_detail;
-      if (!verifyHeldObject(prepared, verification_detail)) {
+      const auto verification = verifyHeldObject(prepared, verification_detail);
+      if (verification == HoldVerification::unavailable) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "VERIFY_GRASP", verification_detail);
+        return;
+      }
+      if (verification == HoldVerification::not_held) {
+        recoverUnsecuredGrasp(handle, prepared.gripper_open_m, verification_detail);
         return;
       }
       RCLCPP_INFO(node_->get_logger(), "%s", verification_detail.c_str());
       result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
       result->detail = prepared.class_name + " grasped, carried and mechanically verified: " +
         verification_detail;
+      const auto completed = task_state_client_.apply(
+        srv::ApplyTaskEvent::Request::PICK_SUCCEEDED, "VERIFY_GRASP", {}, result->detail);
+      if (!completed.accepted) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "STATE_SYNC", completed.detail);
+        return;
+      }
+      result->outcome = Pick::Result::OUTCOME_SUCCESS;
+      result->final_task_state = completed.state;
+      result->payload_state = completed.payload_state;
       handle->succeed(result);
       RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_CARRY");
     } catch (const std::exception& error) {
@@ -1286,6 +1517,7 @@ private:
   moveit::planning_interface::PlanningSceneInterface planning_scene_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
+  TaskStateClient task_state_client_;
   rclcpp_action::Client<Observe>::SharedPtr observe_client_;
   rclcpp_action::Client<Arm>::SharedPtr arm_client_;
   rclcpp_action::Client<Segment>::SharedPtr segment_client_;
@@ -1322,7 +1554,7 @@ private:
   double gripper_travel_m_{};
   double debug_resume_joint_tolerance_{};
   double finetune_motion_speed_deg_s_{};
-  double finetune_completion_max_deviation_rad_{};
+  double finetune_execution_guard_margin_rad_{};
   double finetune_completion_stable_range_rad_{};
   int finetune_completion_stable_samples_{};
   double finetune_completion_sample_period_s_{};

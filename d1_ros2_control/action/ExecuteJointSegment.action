@@ -10,7 +10,10 @@ float64 speed_deg_s
 # callers leave this false and retain the controller's standard endpoint
 # semantics.
 bool require_settled_feedback
-float64 maximum_deviation_rad
+# FINETUNE-only safety envelope. Once settled, every actual joint position
+# must remain inside the start-to-target interval expanded by this margin.
+# Under-travel inside that interval is intentionally accepted.
+float64 execution_guard_margin_rad
 float64 maximum_stable_range_rad
 uint32 stable_samples
 float64 stable_sample_period_s
