@@ -79,10 +79,10 @@ def _launch_setup(context):
     )
     if not math.isfinite(native_joint_speed_deg_s) or native_joint_speed_deg_s <= 0.0:
         raise RuntimeError("native_joint_speed_deg_s must be a finite positive number")
-    if not bool(arm.get("onboard_streaming_deployed", False)):
+    if not bool(arm.get("onboard_control_deployed", False)):
         raise RuntimeError(
-            "real_system requires the grouped D1 onboard streaming controller; "
-            "deploy and verify it before setting arm.onboard_streaming_deployed: true"
+            "real_system requires the D1 onboard control node; deploy and verify "
+            "it before setting arm.onboard_control_deployed: true"
         )
     camera = config["wrist_camera"]
     camera_driver_location = resolve_camera_driver_location(
@@ -174,8 +174,7 @@ def _launch_setup(context):
             "command_port": str(arm["loopback_command_port"]),
             "feedback_port": str(arm["loopback_feedback_port"]),
             "command_topic": arm["command_topic"],
-            "servo_command_topic": arm["servo_command_topic"],
-            "native_segment_topic": arm["native_segment_topic"],
+            "joint_segment_topic": arm["joint_segment_topic"],
             "native_joint_speed_deg_s": str(native_joint_speed_deg_s),
             "real_command_rate_hz": str(command_rate_hz),
             "real_command_duration_ms": str(command_duration_ms),

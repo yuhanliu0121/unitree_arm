@@ -1,4 +1,4 @@
-"""Decoder for the loopback JointPacket shared with d1-streaming-control."""
+"""Decoder for the loopback JointPacket shared with unitree-d1-control."""
 
 import struct
 from typing import Tuple

@@ -71,8 +71,7 @@ def _launch_setup(context):
                     "command_port": LaunchConfiguration("command_port"),
                     "feedback_port": LaunchConfiguration("feedback_port"),
                     "command_topic": LaunchConfiguration("command_topic"),
-                    "servo_command_topic": LaunchConfiguration("servo_command_topic"),
-                    "native_segment_topic": LaunchConfiguration("native_segment_topic"),
+                    "joint_segment_topic": LaunchConfiguration("joint_segment_topic"),
                     "native_joint_speed_deg_s": LaunchConfiguration(
                         "native_joint_speed_deg_s"
                     ),
@@ -136,9 +135,8 @@ def generate_launch_description():
             DeclareLaunchArgument("command_port", default_value="15000"),
             DeclareLaunchArgument("feedback_port", default_value="15001"),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
-            DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
             DeclareLaunchArgument(
-                "native_segment_topic", default_value="d1_native_joint_segment"
+                "joint_segment_topic", default_value="d1_joint_segment"
             ),
             DeclareLaunchArgument("native_joint_speed_deg_s", default_value="15.0"),
             DeclareLaunchArgument("real_command_rate_hz", default_value="20.0"),

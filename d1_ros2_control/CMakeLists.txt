@@ -60,12 +60,12 @@ foreach(required_value
 endforeach()
 
 set(D1_SDK_MSG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../D1_SDK/src/msg")
-set(D1_STREAMING_CONTROL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../unitree-d1-streaming-control")
+set(D1_CONTROL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../unitree-d1-control")
 if(NOT EXISTS "${D1_SDK_MSG_DIR}/ArmString_.hpp")
   message(FATAL_ERROR "Expected D1 SDK messages at ${D1_SDK_MSG_DIR}")
 endif()
-if(NOT EXISTS "${D1_STREAMING_CONTROL_DIR}/host/src/d1_dds_gateway.cpp")
-  message(FATAL_ERROR "Expected unitree-d1-streaming-control at ${D1_STREAMING_CONTROL_DIR}")
+if(NOT EXISTS "${D1_CONTROL_DIR}/host/src/d1_control_gateway.cpp")
+  message(FATAL_ERROR "Expected unitree-d1-control at ${D1_CONTROL_DIR}")
 endif()
 
 set(D1_HARDWARE_TARGET ${PROJECT_NAME}_hardware)
@@ -82,7 +82,7 @@ target_include_directories(
   ${D1_HARDWARE_TARGET}
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${D1_STREAMING_CONTROL_DIR}/include>
+    $<BUILD_INTERFACE:${D1_CONTROL_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(
@@ -94,24 +94,23 @@ ament_target_dependencies(
 )
 
 add_executable(
-  d1_dds_gateway
-  ${D1_STREAMING_CONTROL_DIR}/host/src/d1_dds_gateway.cpp
+  d1_control_gateway
+  ${D1_CONTROL_DIR}/host/src/d1_control_gateway.cpp
   ${D1_SDK_MSG_DIR}/ArmString_.cpp
   ${D1_SDK_MSG_DIR}/PubServoInfo_.cpp
-  ${D1_SDK_MSG_DIR}/SetServoAngle_.cpp
 )
-target_compile_features(d1_dds_gateway PUBLIC cxx_std_17)
+target_compile_features(d1_control_gateway PUBLIC cxx_std_17)
 target_include_directories(
-  d1_dds_gateway
+  d1_control_gateway
   PRIVATE
     include
-    ${D1_STREAMING_CONTROL_DIR}/include
+    ${D1_CONTROL_DIR}/include
     ${D1_SDK_MSG_DIR}
     ${UNITREE_SDK2_INCLUDE_DIR}
     ${CYCLONEDDS_CXX_INCLUDE_DIR}
 )
 target_link_libraries(
-  d1_dds_gateway
+  d1_control_gateway
   ${UNITREE_SDK2_LIBRARY}
   ${CYCLONEDDS_C_LIBRARY}
   ${CYCLONEDDS_CXX_LIBRARY}
@@ -123,16 +122,16 @@ target_link_libraries(
 # /usr/local's C++ library corrupts topic metadata. DT_RPATH intentionally
 # takes precedence over an inherited ROS LD_LIBRARY_PATH for this executable.
 target_link_options(
-  d1_dds_gateway
+  d1_control_gateway
   PRIVATE "-Wl,--disable-new-dtags,-rpath,/usr/local/lib"
 )
 
-add_executable(d1_native_segment_controller src/d1_mode1_controller.cpp)
-target_compile_features(d1_native_segment_controller PUBLIC cxx_std_17)
+add_executable(d1_joint_segment_controller src/d1_joint_segment_controller.cpp)
+target_compile_features(d1_joint_segment_controller PUBLIC cxx_std_17)
 target_include_directories(
-  d1_native_segment_controller PRIVATE include ${D1_STREAMING_CONTROL_DIR}/include)
+  d1_joint_segment_controller PRIVATE include ${D1_CONTROL_DIR}/include)
 ament_target_dependencies(
-  d1_native_segment_controller
+  d1_joint_segment_controller
   control_msgs
   rclcpp
   rclcpp_action
@@ -140,7 +139,7 @@ ament_target_dependencies(
 )
 rosidl_get_typesupport_target(d1_controller_typesupport_target
   ${PROJECT_NAME} rosidl_typesupport_cpp)
-target_link_libraries(d1_native_segment_controller "${d1_controller_typesupport_target}")
+target_link_libraries(d1_joint_segment_controller "${d1_controller_typesupport_target}")
 
 pluginlib_export_plugin_description_file(
   hardware_interface
@@ -152,7 +151,7 @@ install(
   DESTINATION include
 )
 install(
-  DIRECTORY ${D1_STREAMING_CONTROL_DIR}/include/d1_streaming_control
+  DIRECTORY ${D1_CONTROL_DIR}/include/d1_control
   DESTINATION include
 )
 install(
@@ -170,11 +169,11 @@ install(
   LIBRARY DESTINATION lib
 )
 install(
-  TARGETS d1_dds_gateway d1_native_segment_controller
+  TARGETS d1_control_gateway d1_joint_segment_controller
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(
-  PROGRAMS scripts/d1_mode1_gripper_goal.py
+  PROGRAMS scripts/d1_gripper_goal.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

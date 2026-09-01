@@ -43,7 +43,7 @@ assert ctypes.sizeof(JointPacket) == 88
 
 class FeedbackReader(Node):
     def __init__(self) -> None:
-        super().__init__("d1_mode1_gripper_goal")
+        super().__init__("d1_gripper_goal")
         self.positions = None
         self.received_at = 0.0
         self.create_subscription(

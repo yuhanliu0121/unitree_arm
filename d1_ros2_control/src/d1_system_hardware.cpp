@@ -1,6 +1,6 @@
 #include "d1_ros2_control/d1_system_hardware.hpp"
 
-#include "d1_streaming_control/local_protocol.hpp"
+#include "d1_control/local_protocol.hpp"
 
 #include <hardware_interface/types/hardware_interface_type_values.hpp>
 #include <pluginlib/class_list_macros.hpp>
@@ -21,10 +21,10 @@
 
 namespace d1_ros2_control
 {
-using d1_streaming_control::JointPacket;
-using d1_streaming_control::PacketKind;
-using d1_streaming_control::kD1JointCount;
-using d1_streaming_control::packet_header_is_valid;
+using d1_control::JointPacket;
+using d1_control::PacketKind;
+using d1_control::kD1JointCount;
+using d1_control::packet_header_is_valid;
 
 namespace
 {

@@ -113,7 +113,7 @@ MoveIt 2：IK、关节限位、自碰撞/Go2/地面碰撞、OMPL 与笛卡尔路
         ↓
 ROS 2 Action / ros2_control 适配
         ↓
-自研 unitree-d1-streaming-control
+自研 unitree-d1-control
         ↓
 D1 板端串口舵机接口
 ```

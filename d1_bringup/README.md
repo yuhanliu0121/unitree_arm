@@ -63,10 +63,10 @@ With `real_bringup.zsh` already running, recover the arm without switching back
 to the vendor controller:
 
 ```bash
-./arm_stowed_streaming.zsh --confirm STOWED_MOVE
+./arm_stowed_control.zsh --confirm STOWED_MOVE
 ```
 
 The command first sends Joint0--5 to the canonical STOWED pose while preserving
 the current gripper target, then fully opens Joint6. It refuses to run when the
-streaming Action servers are unavailable. Ctrl+C cancels the active Action and
+control Action servers are unavailable. Ctrl+C cancels the active Action and
 asks the controller to hold the measured position.

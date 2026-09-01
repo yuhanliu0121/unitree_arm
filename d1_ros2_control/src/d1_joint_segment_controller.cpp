@@ -1,4 +1,4 @@
-#include "d1_streaming_control/local_protocol.hpp"
+#include "d1_control/local_protocol.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -36,8 +36,8 @@ using namespace std::chrono_literals;
 
 namespace d1_ros2_control
 {
-using d1_streaming_control::JointPacket;
-using d1_streaming_control::PacketKind;
+using d1_control::JointPacket;
+using d1_control::PacketKind;
 
 namespace
 {
@@ -102,7 +102,7 @@ public:
   using GripperHandle = rclcpp_action::ServerGoalHandle<Gripper>;
 
   D1NativeSegmentController()
-  : Node("d1_native_segment_controller")
+  : Node("d1_joint_segment_controller")
   {
     gateway_host_ = declare_parameter<std::string>("gateway_host", "127.0.0.1");
     command_port_ = declare_parameter<int>("command_port", 15000);

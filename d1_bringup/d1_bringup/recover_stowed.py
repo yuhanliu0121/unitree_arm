@@ -27,7 +27,7 @@ class StowedRecovery(Node):
         self.active_goal = None
 
     def wait_for_servers(self, timeout_s: float) -> bool:
-        print("Waiting for the streaming arm controller...")
+        print("Waiting for the D1 arm controller...")
         if not self.arm.wait_for_server(timeout_sec=timeout_s):
             print(f"ERROR: action server unavailable: {ARM_ACTION}", file=sys.stderr)
             return False
@@ -56,14 +56,14 @@ class StowedRecovery(Node):
         point.time_from_start.nanosec = nanoseconds % 1_000_000_000
         goal.trajectory.points = [point]
 
-        print("[1/2] Moving Joint0..5 to canonical STOWED through the streaming controller...")
+        print("[1/2] Moving Joint0..5 to canonical STOWED through the arm controller...")
         sent = self.arm.send_goal_async(goal)
         if not self._wait(sent, 5.0) or sent.result() is None:
             print("ERROR: timed out while sending the STOWED arm goal", file=sys.stderr)
             return False
         self.active_goal = sent.result()
         if not self.active_goal.accepted:
-            print("ERROR: the streaming arm controller rejected the STOWED goal", file=sys.stderr)
+            print("ERROR: the arm controller rejected the STOWED goal", file=sys.stderr)
             self.active_goal = None
             return False
 
@@ -93,14 +93,14 @@ class StowedRecovery(Node):
         goal = GripperCommand.Goal()
         goal.command.position = OPEN_GRIPPER_M
         goal.command.max_effort = 0.0
-        print("[2/2] Opening Joint6 fully through the streaming controller...")
+        print("[2/2] Opening Joint6 fully through the arm controller...")
         sent = self.gripper.send_goal_async(goal)
         if not self._wait(sent, 5.0) or sent.result() is None:
             print("ERROR: timed out while sending the gripper goal", file=sys.stderr)
             return False
         self.active_goal = sent.result()
         if not self.active_goal.accepted:
-            print("ERROR: the streaming controller rejected the gripper goal", file=sys.stderr)
+            print("ERROR: the arm controller rejected the gripper goal", file=sys.stderr)
             self.active_goal = None
             return False
 
@@ -125,7 +125,7 @@ class StowedRecovery(Node):
 
 def parse_arguments(argv):
     parser = argparse.ArgumentParser(
-        description="Recover a physical D1 to STOWED through the active streaming controller."
+        description="Recover a physical D1 to STOWED through the active arm controller."
     )
     parser.add_argument("--confirm", required=True)
     parser.add_argument("--server-timeout", type=float, default=5.0)
@@ -149,7 +149,7 @@ def main(args: Optional[list] = None) -> int:
     rclpy.init(args=ros_args)
     node = StowedRecovery()
     try:
-        print("WARNING: this commands the physical D1 through the active streaming stack.")
+        print("WARNING: this commands the physical D1 through the active control stack.")
         print("Support the arm and clear its workspace before continuing.")
         if not node.wait_for_servers(options.server_timeout):
             return 2

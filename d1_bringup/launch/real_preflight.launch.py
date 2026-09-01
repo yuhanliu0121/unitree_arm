@@ -90,7 +90,7 @@ def _launch_setup(context):
         Path(get_package_prefix("d1_ros2_control"))
         / "lib"
         / "d1_ros2_control"
-        / "d1_dds_gateway"
+        / "d1_control_gateway"
     )
     # This is intentionally ExecuteProcess: the isolated gateway is not a ROS
     # node and must not receive the implicit `--ros-args` suffix from Node().
@@ -108,7 +108,7 @@ def _launch_setup(context):
         },
         output="screen",
     )
-    onboard_executor = bool(arm.get("onboard_streaming_deployed", False))
+    onboard_executor = bool(arm.get("onboard_control_deployed", False))
     status_gateway = None if onboard_executor else ExecuteProcess(
         cmd=[str(gateway),
             "--domain", str(arm["d1_native_domain_id"]),

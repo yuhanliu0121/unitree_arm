@@ -5,9 +5,9 @@ SCRIPT_DIR=${0:A:h}
 CONFIG_PATH="${SCRIPT_DIR}/d1_bringup/config/real_machine.yaml"
 
 usage() {
-  print "Usage: ./arm_stowed_streaming.zsh --confirm STOWED_MOVE [--config PATH]"
+  print "Usage: ./arm_stowed_control.zsh --confirm STOWED_MOVE [--config PATH]"
   print ""
-  print "Uses the already-running real_bringup streaming controller."
+  print "Uses the already-running real_bringup arm controller."
   print "It does not start, stop, or switch either onboard controller service."
 }
 

@@ -127,7 +127,7 @@ def launch_setup(context):
     )
     controllers = control_share / "config" / "controllers.yaml"
     rviz_config = description_share / "config" / "display.rviz"
-    gateway = control_prefix / "lib" / "d1_ros2_control" / "d1_dds_gateway"
+    gateway = control_prefix / "lib" / "d1_ros2_control" / "d1_control_gateway"
     gateway_common = [
         str(gateway),
         "--domain",
@@ -138,10 +138,8 @@ def launch_setup(context):
         gateway_common.extend(["--interface", interface])
     command_gateway_cmd = gateway_common + [
         "--direction", "command",
-        "--command-transport", "servo_angle" if backend == "real" else "arm_command",
         "--command-topic", LaunchConfiguration("command_topic").perform(context),
-        "--servo-command-topic", LaunchConfiguration("servo_command_topic").perform(context),
-        "--native-segment-topic", LaunchConfiguration("native_segment_topic").perform(context),
+        "--joint-segment-topic", LaunchConfiguration("joint_segment_topic").perform(context),
         "--command-port", LaunchConfiguration("command_port").perform(context),
         "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
     ]
@@ -206,8 +204,8 @@ def launch_setup(context):
     else:
         controller_actions.append(Node(
             package="d1_ros2_control",
-            executable="d1_native_segment_controller",
-            name="d1_native_segment_controller",
+            executable="d1_joint_segment_controller",
+            name="d1_joint_segment_controller",
             parameters=[{
                 "gateway_host": "127.0.0.1",
                 "command_port": int(LaunchConfiguration("command_port").perform(context)),
@@ -296,9 +294,8 @@ def generate_launch_description():
                 description="D1 native hardware status/ACK topic",
             ),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
-            DeclareLaunchArgument("servo_command_topic", default_value="set_servo_angle"),
             DeclareLaunchArgument(
-                "native_segment_topic", default_value="d1_native_joint_segment"
+                "joint_segment_topic", default_value="d1_joint_segment"
             ),
             DeclareLaunchArgument(
                 "native_joint_speed_deg_s",

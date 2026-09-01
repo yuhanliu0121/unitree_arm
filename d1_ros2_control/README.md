@@ -34,7 +34,7 @@ two controllers to command one arm.
   verifies a fresh powered/enabled status before controllers become active.
 - Simulation uses the standard `joint_trajectory_controller` and
   `GripperActionController`. Physical motion uses
-  `d1_native_segment_controller`, exposed under the same Action names.
+  `d1_joint_segment_controller`, exposed under the same Action names.
 - Each physical task stage sends one coherent Joint0--6 target, one common
   arrival time and one acceleration/deceleration profile. The onboard executor
   translates it to FashionStar native interval commands and compensates UART
@@ -45,7 +45,7 @@ two controllers to command one arm.
 - Joint feedback remains authoritative for motion and completion. The 100 Hz
   ros2_control loop may read the most recent sample repeatedly, while freshness
   and velocity calculations use the native feedback arrival time.
-- Physical deployment is paired with `unitree-d1-streaming-control`'s thin
+- Physical deployment is paired with `unitree-d1-control`'s thin
   onboard executor, which gives one I/O thread exclusive ownership of command,
   damping and feedback serial traffic.
 - Simulation hardware deactivation emits one short measured-position target.
@@ -80,7 +80,7 @@ There is no process-global motion-profile state to switch or restore. The
 gripper always uses its own uniform-speed segment. Simulation does not use the
 native-segment controller.
 
-`d1_mode1_gripper_goal.py` is a low-level diagnostic helper, not a normal task
+`d1_gripper_goal.py` is a low-level diagnostic helper, not a normal task
 interface. It bypasses the Action controller, so stop and restart the real
 control stack after using it before resuming task execution.
 
