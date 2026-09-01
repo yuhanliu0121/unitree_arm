@@ -17,9 +17,9 @@ setup(
     install_requires=["setuptools"],
     tests_require=["pytest"],
     zip_safe=True,
-    maintainer="D1 Bringup Maintainers",
-    maintainer_email="maintainer@example.com",
-    description="Motionless real-machine preflight for the Unitree D1 stack.",
+    maintainer="Yuhan Liu",
+    maintainer_email="yuhanliu0813@gmail.com",
+    description="Real-machine bringup, preflight, and recovery for the Unitree D1 stack.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [

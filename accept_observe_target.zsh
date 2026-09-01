@@ -147,7 +147,7 @@ if [[ ${server_only} == true ]]; then
   print
   print 'ObserveTarget and DetectTarget are ready for manual calls in another sourced terminal.'
   print
-  print 'ros2 action send_goal /arm/debug/observe_target \
+  print 'ros2 action send_goal /arm/internal/observe_target \
   d1_manipulation/action/ObserveTarget \
   "{target: {header: {frame_id: go2_base}, point: {x: 0.45, y: 0.0, z: -0.14}}}" \
   --feedback'

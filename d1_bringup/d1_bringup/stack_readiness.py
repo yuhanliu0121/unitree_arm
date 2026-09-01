@@ -33,7 +33,7 @@ class StackReadiness(Node):
                 "/move_action",
                 "/arm_controller/follow_joint_trajectory",
                 "/gripper_controller/gripper_cmd",
-                "/arm/debug/observe_target",
+                "/arm/internal/observe_target",
                 "/arm/tasks/pick_object",
                 "/arm/tasks/drop_object",
             ],

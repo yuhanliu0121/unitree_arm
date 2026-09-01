@@ -143,7 +143,7 @@ INTERNAL_ERROR
 开发阶段提供一个调试 Action：
 
 ```text
-/arm/debug/observe_target
+/arm/internal/observe_target
 ```
 
 该接口只执行：

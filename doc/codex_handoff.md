@@ -137,7 +137,7 @@
 
 2026-08-11 目标引导观测第一阶段结果：
 
-- 新增 `d1_manipulation` 和调试 Action `/arm/debug/observe_target`；
+- 新增 `d1_manipulation` 和内部观测 Action `/arm/internal/observe_target`；
 - 在实时重力法平面中，以固定 `beta → alpha → distance` 顺序生成 441 个
   相机候选，不使用加权评分；
 - 每个候选通过手眼外参换算为 `Link6` 位姿，顺序执行 IK、限位、碰撞和

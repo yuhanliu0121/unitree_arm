@@ -3,10 +3,11 @@
 ROS 2 Humble and MuJoCo development workspace for the Unitree D1 arm. The
 current stack provides a calibrated robot description, a D1 protocol-compatible
 MuJoCo simulator, `ros2_control`, MoveIt configuration, RGB-D simulation for a
-wrist-mounted RealSense D435i, and a fixed-cube grasp acceptance flow.
+wrist-mounted RealSense D435i, and object-specific pick/drop task flows.
 
 ## Packages
 
+- `d1_interfaces`: the public Go2-facing pick/drop Actions and task-status message.
 - `d1_constrained_description_20260728`: calibrated URDF, meshes and display.
 - `d1_mujoco_sim`: physics scene, D1 DDS protocol and wrist RGB-D publishers.
 - `d1_ros2_control`: D1 hardware interface and trajectory controllers.
@@ -14,7 +15,6 @@ wrist-mounted RealSense D435i, and a fixed-cube grasp acceptance flow.
   host gateway, timed seven-joint targets, feedback and guarded maintenance
   tools; built and deployed separately from ROS 2.
 - `d1_moveit_config`: MoveIt planning and RViz configuration.
-- `d1_grasp_demo`: grasp baseline and application-level fixed poses.
 - `d1_manipulation`: gravity-aligned eye-in-hand observation Action and
   ordered MoveIt candidate search.
 - `d1_bringup`: explicit real-machine configuration and motionless preflight.
@@ -37,14 +37,17 @@ select the simulation or real-machine DDS domain explicitly.
 After loading the development environment, run:
 
 ```zsh
-./accept_cube_grasp.zsh
+./accept_visual_cube_grasp.zsh
 ```
+
+Staged commissioning clients are excluded from production installs. Enable
+them in a development build with
+`--cmake-args -DD1_BUILD_COMMISSIONING_TOOLS=ON`.
 
 Optional visualization modes:
 
 ```zsh
-./accept_cube_grasp.zsh --rviz
-./accept_cube_grasp.zsh --headless --rviz
+./accept_visual_cube_grasp.zsh --rviz
 ```
 
 Run the automatic seed-0 target-observation acceptance:
@@ -54,7 +57,7 @@ Run the automatic seed-0 target-observation acceptance:
 ./accept_observe_target.zsh --rviz
 ```
 
-Keep the stack running and send `/arm/debug/observe_target` goals manually:
+Keep the commissioning stack running and send `/arm/internal/observe_target` goals manually:
 
 ```zsh
 ./accept_observe_target.zsh --rviz --server-only

@@ -11,7 +11,7 @@ import time
 import rclpy
 from rclpy.action import ActionClient
 
-from d1_manipulation.action import DropObject
+from d1_interfaces.action import DropObject
 
 
 def wait_for_result_or_cancel(node, handle):

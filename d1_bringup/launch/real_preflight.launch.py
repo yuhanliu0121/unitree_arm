@@ -27,6 +27,7 @@ from d1_constrained_description import (
 from d1_bringup.deployment_config import (
     resolve_camera_driver_location,
     resolve_camera_stream_profiles,
+    resolve_perception_model_path,
 )
 
 
@@ -52,6 +53,7 @@ def _launch_setup(context):
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if config["deployment"]["backend"] != "real":
         raise RuntimeError("real_preflight requires deployment.backend: real")
+    resolve_perception_model_path(config, config_path)
     expected_ros_domain = int(config["deployment"]["ros_domain_id"])
     actual_ros_domain = int(os.environ.get("ROS_DOMAIN_ID", "0"))
     if actual_ros_domain != expected_ros_domain:

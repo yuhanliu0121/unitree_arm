@@ -18,6 +18,7 @@ d1_detect_target:
     minimum_target_confidence: 0.70
     max_optical_center_mask_distance_px: 200.0
     depth_scale_m_per_unit: 0.001
+    enable_debug_outputs: false
     debug_overlay_topic: /arm/perception/debug/overlay
     cube_debug_overlay_topic: /arm/perception/debug/cube_geometry
     zucchini_debug_overlay_topic: /arm/perception/debug/zucchini_geometry

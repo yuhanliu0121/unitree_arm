@@ -19,6 +19,7 @@ from launch_ros.actions import Node
 from d1_bringup.deployment_config import (
     resolve_camera_driver_location,
     resolve_camera_stream_profiles,
+    resolve_perception_model_path,
 )
 
 
@@ -62,6 +63,7 @@ def _launch_setup(context):
     config = _load_yaml(config_path, "real-machine config")
     if config.get("deployment", {}).get("backend") != "real":
         raise RuntimeError("real_system requires deployment.backend: real")
+    perception_model = resolve_perception_model_path(config, config_path)
 
     expected_ros_domain = int(config["deployment"]["ros_domain_id"])
     actual_ros_domain = int(os.environ.get("ROS_DOMAIN_ID", "0"))
@@ -183,6 +185,7 @@ def _launch_setup(context):
             "gripper_closed_angle_deg": str(arm["gripper_closed_angle_deg"]),
             "gripper_open_angle_deg": str(arm["gripper_open_angle_deg"]),
             "gripper_travel_m": str(arm["gripper_travel_m"]),
+            "perception_model_path": str(perception_model),
         }.items(),
     )
 
@@ -204,6 +207,7 @@ def _launch_setup(context):
             msg=(
                 f"Starting REAL D1 system: serial={arm_serial} config={config_path} "
                 f"camera_driver={camera_driver_location} "
+                f"perception_model={perception_model} "
                 f"command_rate={command_rate_hz:g}Hz "
                 f"servo_duration={effective_duration_ms}ms"
             )

@@ -92,9 +92,9 @@ From the repository root:
 source /opt/ros/humble/setup.zsh
 colcon build --symlink-install \
   --base-paths d1_constrained_description_20260728 d1_ros2_control \
-    d1_moveit_config d1_grasp_demo \
+    d1_moveit_config d1_manipulation \
   --packages-select d1_constrained_description d1_ros2_control \
-    d1_moveit_config d1_grasp_demo
+    d1_moveit_config d1_manipulation
 source install/setup.zsh
 ```
 

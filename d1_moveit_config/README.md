@@ -16,7 +16,7 @@ ros2 launch d1_moveit_config move_group.launch.py backend:=simulation
 Run the fixed-cube grasp after all controllers and `move_group` are ready:
 
 ```bash
-ros2 launch d1_moveit_config pick_cube.launch.py
+ros2 launch d1_manipulation observe_target.launch.py backend:=simulation
 ```
 
 The demo is intentionally simulation-only. Object truth uses UDP loopback port
@@ -44,7 +44,7 @@ For routine acceptance from the workspace root, one command starts MuJoCo,
 the complete ROS 2/MoveIt stack and the grasp node, then shuts everything down:
 
 ```bash
-./accept_cube_grasp.zsh
+./accept_visual_cube_grasp.zsh
 ```
 
 Use `--headless` in a terminal-only session, or `--rviz` when the MoveIt scene

@@ -5,7 +5,7 @@
   <description>
     ros2_control position hardware interface and isolated DDS gateway for Unitree D1.
   </description>
-  <maintainer email="maintainer@example.com">D1 Control Maintainers</maintainer>
+  <maintainer email="yuhanliu0813@gmail.com">Yuhan Liu</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

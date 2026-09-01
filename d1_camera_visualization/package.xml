@@ -3,7 +3,7 @@
   <name>d1_camera_visualization</name>
   <version>0.1.0</version>
   <description>Backend-neutral camera diagnostics for the D1 stack.</description>
-  <maintainer email="maintainer@example.com">D1 Visualization Maintainers</maintainer>
+  <maintainer email="yuhanliu0813@gmail.com">Yuhan Liu</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>

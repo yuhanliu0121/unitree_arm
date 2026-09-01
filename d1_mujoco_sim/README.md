@@ -214,10 +214,8 @@ RViz with the robot, object meshes, optional MuJoCo/MoveIt collision layers,
 RGB, aligned-depth plasma and optional raw-depth plasma panels:
 
 ```bash
-./accept_cube_grasp.zsh
-./accept_cube_grasp.zsh --headless
-./accept_cube_grasp.zsh --rviz
-./accept_cube_grasp.zsh --headless --rviz
+./accept_visual_cube_grasp.zsh
+./accept_visual_cube_grasp.zsh --rviz
 ```
 
 RViz defaults to `RobotModel`, `Go2 Mesh` and `Object Meshes` enabled, with

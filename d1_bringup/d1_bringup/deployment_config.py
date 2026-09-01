@@ -1,6 +1,7 @@
 """Validation helpers shared by physical D1 launch files."""
 
 import re
+from pathlib import Path
 
 
 CAMERA_DRIVER_LOCATIONS = ("local", "remote")
@@ -60,3 +61,21 @@ def resolve_camera_stream_profiles(camera_config):
         f"{color_resolution}x{frame_rate_hz}",
         f"{depth_resolution}x{frame_rate_hz}",
     )
+
+
+def resolve_perception_model_path(config, config_path):
+    """Resolve the explicitly configured real-machine perception weights."""
+
+    configured = str(config.get("perception", {}).get("model_path", "")).strip()
+    if not configured:
+        raise ValueError(
+            "perception.model_path is required for real deployment; configure "
+            "the weight file selected by the Go2 integration"
+        )
+    model_path = Path(configured).expanduser()
+    if not model_path.is_absolute():
+        model_path = Path(config_path).resolve().parent / model_path
+    model_path = model_path.resolve()
+    if not model_path.is_file():
+        raise ValueError(f"perception.model_path is not a file: {model_path}")
+    return model_path

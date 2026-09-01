@@ -18,7 +18,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "d1_manipulation/action/pick_object.hpp"
+#include "d1_interfaces/action/pick_object.hpp"
 #include "d1_manipulation/srv/estimate_zucchini.hpp"
 
 using namespace std::chrono_literals;
@@ -267,7 +267,7 @@ public:
   {
     const auto coarse = estimate(srv::EstimateZucchini::Request::COARSE, hint);
     if (!coarse || !coarse->success) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", coarse ? coarse->detail : "zucchini coarse estimation unavailable"};
       return false;
     }
@@ -277,19 +277,19 @@ public:
     const Eigen::Vector3d coarse_center(
       coarse->center.point.x, coarse->center.point.y, coarse->center.point.z);
     if (!runtime_.applyEstimatedGround(up, coarse->ground_offset)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply perception-fitted ground to MoveIt"};
       return false;
     }
     if (!runtime_.moveCameraTopDown(coarse_center, up)) {
-      failure = {action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
         "MOVE_TOP_OBSERVE", "top observation pose is not plannable"};
       return false;
     }
     const auto fine = estimate(
       srv::EstimateZucchini::Request::FINE, coarse->center, up, coarse->ground_offset);
     if (!fine || !fine->success) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", fine ? fine->detail : "zucchini fine estimation unavailable"};
       return false;
     }
@@ -297,26 +297,26 @@ public:
     const Eigen::Vector3d surface_up_raw(
       fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
     if (!surface_up_raw.allFinite() || surface_up_raw.norm() < 0.9) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "zucchini fine ground normal is invalid"};
       return false;
     }
     const Eigen::Vector3d surface_up = surface_up_raw.normalized();
     Eigen::Vector3d gravity_up = runtime_.gravityUp();
     if (!gravity_up.allFinite() || gravity_up.norm() < 0.9) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "zucchini IMU gravity direction is invalid"};
       return false;
     }
     gravity_up.normalize();
     const double ground_gravity_alignment = surface_up.dot(gravity_up);
     if (ground_gravity_alignment < 0.8) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "zucchini ground plane is inconsistent with IMU gravity"};
       return false;
     }
     if (!runtime_.applyEstimatedGround(surface_up, fine->ground_offset)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
       return false;
     }
@@ -327,7 +327,7 @@ public:
       fine->axis_direction.x, fine->axis_direction.y, fine->axis_direction.z);
     axis = (axis - axis.dot(gravity_up) * gravity_up).normalized();
     if (!axis.allFinite()) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "zucchini local axis is invalid"};
       return false;
     }
@@ -365,13 +365,13 @@ public:
     for (const double pregrasp_ground_clearance : pregrasp_ground_clearances) {
       const auto current_state = move_group.getCurrentState();
       if (!current_state) {
-        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
           "PLAN_PREGRASP", "current robot state is unavailable for zucchini candidate ranking"};
         return false;
       }
       const auto* joint_group = current_state->getJointModelGroup(move_group.getName());
       if (!joint_group) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "MoveIt arm joint model group is unavailable"};
         return false;
       }
@@ -422,7 +422,7 @@ public:
       }
 
       if (!runtime_.removeTargetCollision(target_ids)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
         return false;
       }
@@ -447,7 +447,7 @@ public:
         }
       }
       if (!runtime_.restoreTargetCollision(target_objects)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
         return false;
       }
@@ -488,7 +488,7 @@ public:
         moveit::planning_interface::MoveGroupInterface::Plan plan;
         if (move_group.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
         if (!runtime_.removeTargetCollision(target_ids)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
           return false;
         }
@@ -496,7 +496,7 @@ public:
         const double fraction = runtime_.computeCartesianFromPlanEnd(
           plan, candidate.grasp_pose, true, verified_descent);
         if (!runtime_.restoreTargetCollision(target_objects)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
           return false;
         }
@@ -511,7 +511,7 @@ public:
       if (found) break;
     }
     if (!found) {
-      failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
         "PLAN_PREGRASP", "no zucchini pregrasp has a feasible downstream grasp; reposition Go2"};
       return false;
     }
@@ -556,14 +556,14 @@ public:
       return true;
     }
     if (runtime_.cameraFrame() != finetune_camera_frame_) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "FINETUNE_GRASP",
         "configured camera frame does not match the calibrated zucchini safe slab"};
       return false;
     }
     const auto state = std::dynamic_pointer_cast<ZucchiniState>(plan.strategy_state);
     if (!state) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "FINETUNE_GRASP", "zucchini strategy state is missing"};
       return false;
     }
@@ -579,7 +579,7 @@ public:
       ZucchiniFineTuneMeasurement measurement;
       std::string measurement_error;
       if (!measureFineTune(plan, measurement, measurement_error)) {
-        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
           "FINETUNE_GRASP", measurement_error};
         return false;
       }
@@ -608,14 +608,14 @@ public:
                << "zucchini centre is unstable across " << finetune_samples_
                << " frames: closing_std=" << 1000.0 * measurement.closing_stddev
                << " mm; keep PREGRASP and reposition Go2";
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
           "FINETUNE_GRASP", detail.str()};
         return false;
       }
 
       if (inside_slab) {
         if (!acceptFineTune(plan, *state, measurement)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "FINETUNE_GRASP", "failed to update the refreshed zucchini geometry"};
           return false;
         }
@@ -657,7 +657,7 @@ public:
       move_group.setStartStateToCurrentState();
       if (!move_group.setPoseTarget(target, runtime_.tcpFrame())) {
         move_group.clearPoseTargets();
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
           "FINETUNE_GRASP", "zucchini visual correction has no IK solution; reposition Go2"};
         return false;
       }
@@ -666,7 +666,7 @@ public:
         move_group.plan(correction_plan) == moveit::core::MoveItErrorCode::SUCCESS;
       move_group.clearPoseTargets();
       if (!planned) {
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
           "FINETUNE_GRASP",
           "zucchini visual correction is not collision-free/plannable; reposition Go2"};
         return false;
@@ -680,7 +680,7 @@ public:
         1000.0 * correction_planning.x(), 1000.0 * correction_planning.y(),
         1000.0 * correction_planning.z());
       if (!runtime_.executeFineTunePlan(correction_plan)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "FINETUNE_GRASP", "zucchini visual correction execution failed; motion stopped"};
         return false;
       }
@@ -692,7 +692,7 @@ public:
     detail << "zucchini centre remains outside the calibrated safe slab after "
            << finetune_max_corrections_
            << " corrections; keep PREGRASP and reposition Go2";
-    failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+    failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
       "FINETUNE_GRASP", detail.str()};
     return false;
   }
@@ -701,19 +701,19 @@ public:
   {
     const auto state = std::dynamic_pointer_cast<ZucchiniState>(plan.strategy_state);
     if (!state) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "zucchini strategy state is missing"};
       return false;
     }
     if (!runtime_.removeTargetCollision(state->target_collision_ids)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "target collision removal did not reach the planning scene"};
       return false;
     }
     auto& move_group = runtime_.moveGroup();
     const auto descent_start = move_group.getCurrentState(2.0);
     if (!descent_start) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "DESCEND", "current robot state is unavailable at the actual zucchini pregrasp"};
       return false;
     }
@@ -746,7 +746,7 @@ public:
       plan.descent_trajectory = std::move(descent);
       return true;
     }
-    failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+    failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
       "DESCEND", "no ground-referenced zucchini grasp height is reachable from the actual "
       "pregrasp; reposition Go2"};
     return false;

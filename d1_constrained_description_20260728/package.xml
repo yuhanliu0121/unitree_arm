@@ -6,7 +6,7 @@
     Mechanically constrained Unitree D1 ROS 2 description and read-only
     hardware joint-state bridge.
   </description>
-  <maintainer email="maintainer@example.com">D1 Calibration Maintainers</maintainer>
+  <maintainer email="yuhanliu0813@gmail.com">Yuhan Liu</maintainer>
   <license>LicenseRef-Unitree-D1-Assets</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

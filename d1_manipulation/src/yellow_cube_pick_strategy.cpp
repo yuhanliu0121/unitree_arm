@@ -19,7 +19,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "d1_manipulation/action/pick_object.hpp"
+#include "d1_interfaces/action/pick_object.hpp"
 #include "d1_manipulation/srv/estimate_cube.hpp"
 
 using namespace std::chrono_literals;
@@ -196,7 +196,7 @@ public:
   {
     const auto coarse = estimate(srv::EstimateCube::Request::COARSE, hint);
     if (!coarse || !coarse->success) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", coarse ? coarse->detail : "cube coarse estimation unavailable"};
       return false;
     }
@@ -207,19 +207,19 @@ public:
     Eigen::Vector3d coarse_center(
       coarse->center.point.x, coarse->center.point.y, coarse->center.point.z);
     if (!runtime_.applyEstimatedGround(surface_up, coarse->ground_offset)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply perception-fitted ground to MoveIt"};
       return false;
     }
     if (!runtime_.moveCameraTopDown(coarse_center, gravity_up)) {
-      failure = {action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
         "MOVE_TOP_OBSERVE", "top observation pose is not plannable"};
       return false;
     }
     const auto fine = estimate(
       srv::EstimateCube::Request::FINE, coarse->center, surface_up, coarse->ground_offset);
     if (!fine || !fine->success) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", fine ? fine->detail : "cube fine estimation unavailable"};
       return false;
     }
@@ -227,13 +227,13 @@ public:
     surface_up = Eigen::Vector3d(
       fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
     if (!surface_up.allFinite() || surface_up.norm() < 0.9) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "cube fine ground normal is invalid"};
       return false;
     }
     surface_up.normalize();
     if (!runtime_.applyEstimatedGround(surface_up, fine->ground_offset)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
       return false;
     }
@@ -245,7 +245,7 @@ public:
     Eigen::Vector3d grasp_edge =
       object_edge - object_edge.dot(gravity_up) * gravity_up;
     if (!object_edge.allFinite() || grasp_edge.norm() < 1e-6) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "cube edge is invalid after gravity projection"};
       return false;
     }
@@ -274,13 +274,13 @@ public:
     for (const double pregrasp_distance : pregrasp_distances) {
       const auto current_state = move_group.getCurrentState();
       if (!current_state) {
-        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
           "PLAN_PREGRASP", "current robot state is unavailable for cube candidate ranking"};
         return false;
       }
       const auto* joint_model_group = current_state->getJointModelGroup(move_group.getName());
       if (!joint_model_group) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "MoveIt arm joint model group is unavailable"};
         return false;
       }
@@ -338,7 +338,7 @@ public:
       // Validate downstream grasp depth from each IK endpoint without first
       // computing an OMPL path to that endpoint.
       if (!runtime_.removeTargetCollision(target_ids)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
         return false;
       }
@@ -363,7 +363,7 @@ public:
         }
       }
       if (!runtime_.restoreTargetCollision(target_objects)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
         return false;
       }
@@ -413,7 +413,7 @@ public:
           continue;
         }
         if (!runtime_.removeTargetCollision(target_ids)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
           return false;
         }
@@ -421,7 +421,7 @@ public:
         const double fraction = runtime_.computeCartesianFromPlanEnd(
           plan, candidate.grasp_pose, true, verified_descent);
         if (!runtime_.restoreTargetCollision(target_objects)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
           return false;
         }
@@ -442,7 +442,7 @@ public:
       if (found) break;
     }
     if (!found) {
-      failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
         "PLAN_PREGRASP", "no cube pregrasp has a feasible downstream grasp; reposition Go2"};
       return false;
     }
@@ -490,13 +490,13 @@ public:
       return true;
     }
     if (runtime_.cameraFrame() != finetune_camera_frame_) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "FINETUNE_GRASP", "configured camera frame does not match the calibrated safe region"};
       return false;
     }
     const auto state = std::dynamic_pointer_cast<YellowCubeState>(plan.strategy_state);
     if (!state) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "FINETUNE_GRASP", "yellow-cube strategy state is missing"};
       return false;
     }
@@ -513,7 +513,7 @@ public:
       FineTuneMeasurement measurement;
       std::string measurement_error;
       if (!measureFineTune(plan, measurement, measurement_error)) {
-        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
           "FINETUNE_GRASP", measurement_error};
         return false;
       }
@@ -544,14 +544,14 @@ public:
                << " frames: closing_std=" << 1000.0 * measurement.closing_stddev
                << " mm finger_std=" << 1000.0 * measurement.finger_stddev
                << " mm; keep PREGRASP and reposition Go2";
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
           "FINETUNE_GRASP", detail.str()};
         return false;
       }
 
       if (outside_error <= 1e-9) {
         if (!acceptFineTune(plan, *state, measurement)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "FINETUNE_GRASP", "failed to update MoveIt with the refreshed ground plane"};
           return false;
         }
@@ -592,7 +592,7 @@ public:
       move_group.setStartStateToCurrentState();
       if (!move_group.setPoseTarget(target, runtime_.tcpFrame())) {
         move_group.clearPoseTargets();
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
           "FINETUNE_GRASP", "visual correction endpoint has no IK solution; reposition Go2"};
         return false;
       }
@@ -601,7 +601,7 @@ public:
         move_group.plan(correction_plan) == moveit::core::MoveItErrorCode::SUCCESS;
       move_group.clearPoseTargets();
       if (!planned) {
-        failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
           "FINETUNE_GRASP", "visual correction is not collision-free/plannable; reposition Go2"};
         return false;
       }
@@ -613,7 +613,7 @@ public:
         1000.0 * correction_planning.x(), 1000.0 * correction_planning.y(),
         1000.0 * correction_planning.z());
       if (!runtime_.executeFineTunePlan(correction_plan)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "FINETUNE_GRASP", "visual correction execution failed; motion stopped"};
         return false;
       }
@@ -625,7 +625,7 @@ public:
     detail << "cube top centre remains outside the calibrated safe prism after "
            << finetune_max_corrections_
            << " corrections; keep PREGRASP and reposition Go2";
-    failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+    failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
       "FINETUNE_GRASP", detail.str()};
     return false;
   }
@@ -634,25 +634,25 @@ public:
   {
     const auto state = std::dynamic_pointer_cast<YellowCubeState>(plan.strategy_state);
     if (!state) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "yellow-cube strategy state is missing"};
       return false;
     }
     if (!runtime_.removeTargetCollision(state->target_collision_ids)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "target collision removal did not reach the planning scene"};
       return false;
     }
     auto& move_group = runtime_.moveGroup();
     const auto descent_start = move_group.getCurrentState(2.0);
     if (!descent_start) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "DESCEND", "current robot state is unavailable at the actual pregrasp"};
       return false;
     }
     const auto* arm_group = descent_start->getJointModelGroup(move_group.getName());
     if (!arm_group) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "MoveIt arm joint model group is unavailable at pregrasp"};
       return false;
     }
@@ -703,7 +703,7 @@ public:
       plan.descent_trajectory = std::move(descent);
       return true;
     }
-    failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+    failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
       "DESCEND", "no cube grasp is reachable from the actual pregrasp; reposition Go2"};
     return false;
   }

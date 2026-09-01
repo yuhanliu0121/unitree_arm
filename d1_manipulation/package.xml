@@ -3,7 +3,7 @@
   <name>d1_manipulation</name>
   <version>0.1.0</version>
   <description>Task-level observation and manipulation orchestration for the Unitree D1.</description>
-  <maintainer email="maintainer@example.com">D1 Manipulation Maintainers</maintainer>
+  <maintainer email="yuhanliu0813@gmail.com">Yuhan Liu</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -13,6 +13,7 @@
   <depend>geometry_msgs</depend>
   <depend>builtin_interfaces</depend>
   <depend>control_msgs</depend>
+  <depend>d1_interfaces</depend>
   <depend>d1_ros2_control</depend>
   <depend>moveit_msgs</depend>
   <depend>moveit_core</depend>

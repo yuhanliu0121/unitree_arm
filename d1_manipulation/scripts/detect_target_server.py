@@ -126,6 +126,9 @@ class DetectTargetServer(Node):
         self._depth_scale = float(
             self.declare_parameter("depth_scale_m_per_unit", 0.001).value
         )
+        self._enable_debug_outputs = bool(
+            self.declare_parameter("enable_debug_outputs", False).value
+        )
         self._debug_topic = self.declare_parameter(
             "debug_overlay_topic", "/arm/perception/debug/overlay"
         ).value
@@ -431,11 +434,12 @@ class DetectTargetServer(Node):
                 cv2.putText(debug, f"{label} area={int(area)} px", (20, 32),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
                             cv2.LINE_AA)
-                debug_directory.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(
-                    str(debug_directory /
-                        f"held_verify_{len(areas)}.png"), debug
-                )
+                if self._enable_debug_outputs:
+                    debug_directory.mkdir(parents=True, exist_ok=True)
+                    cv2.imwrite(
+                        str(debug_directory /
+                            f"held_verify_{len(areas)}.png"), debug
+                    )
             response.success = True
             response.mean_area_px = float(np.mean(areas))
             response.held = all(
@@ -533,6 +537,8 @@ class DetectTargetServer(Node):
         self, color_bgr: np.ndarray, detections, matched, header,
         selected_mask=None, selected_label="",
     ) -> None:
+        if not self._enable_debug_outputs:
+            return
         overlay = color_bgr.copy()
         if matched is not None or selected_mask is not None:
             selected = (
@@ -909,7 +915,10 @@ class DetectTargetServer(Node):
                 cv2.drawContours(debug, [contour.astype(np.int32)], -1, (255, 0, 255), 2)
                 cv2.putText(debug, f"yellow_cube {stage_name} top face", (20, 32),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2, cv2.LINE_AA)
-                self._cube_debug_publisher.publish(self._to_ros_image(debug, color_message.header))
+                if self._enable_debug_outputs:
+                    self._cube_debug_publisher.publish(
+                        self._to_ros_image(debug, color_message.header)
+                    )
             else:
                 raise ValueError(
                     f"unsupported yellow_cube estimation stage {request.stage}"
@@ -940,11 +949,6 @@ class DetectTargetServer(Node):
                 "yellow_cube selected finetune top" if
                 request.stage == EstimateCube.Request.FINETUNE else "",
             )
-            self._cube_debug_directory.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(
-                str(self._cube_debug_directory / f"{stage_name}.png"),
-                color_bgr if request.stage == EstimateCube.Request.COARSE else debug,
-            )
             geometry = {
                 "stage": stage_name,
                 "class_name": "yellow_cube",
@@ -955,9 +959,15 @@ class DetectTargetServer(Node):
                 "edge_direction_base": edge.tolist(),
                 "top_corners_base_m": corners.tolist(),
             }
-            (self._cube_debug_directory / f"{stage_name}.json").write_text(
-                json.dumps(geometry, indent=2), encoding="utf-8"
-            )
+            if self._enable_debug_outputs:
+                self._cube_debug_directory.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(
+                    str(self._cube_debug_directory / f"{stage_name}.png"),
+                    color_bgr if request.stage == EstimateCube.Request.COARSE else debug,
+                )
+                (self._cube_debug_directory / f"{stage_name}.json").write_text(
+                    json.dumps(geometry, indent=2), encoding="utf-8"
+                )
             self.get_logger().info(
                 "Cube %s estimate: center=(%.3f, %.3f, %.3f) normal=(%.3f, %.3f, %.3f)"
                 % (stage_name, *center, *normal)
@@ -1073,9 +1083,10 @@ class DetectTargetServer(Node):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
                 cv2.LINE_AA,
             )
-            self._bowl_debug_publisher.publish(
-                self._to_ros_image(debug, color_message.header)
-            )
+            if self._enable_debug_outputs:
+                self._bowl_debug_publisher.publish(
+                    self._to_ros_image(debug, color_message.header)
+                )
             self._publish_overlay(
                 color_bgr, detections, detection, color_message.header
             )
@@ -1176,9 +1187,10 @@ class DetectTargetServer(Node):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2,
                     cv2.LINE_AA,
                 )
-                self._zucchini_debug_publisher.publish(
-                    self._to_ros_image(debug, color_message.header)
-                )
+                if self._enable_debug_outputs:
+                    self._zucchini_debug_publisher.publish(
+                        self._to_ros_image(debug, color_message.header)
+                    )
             else:
                 raise ValueError(
                     f"unsupported zucchini estimation stage {request.stage}"
@@ -1210,12 +1222,6 @@ class DetectTargetServer(Node):
             self._publish_overlay(
                 color_bgr, detections, detection, color_message.header
             )
-            self._zucchini_debug_directory.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(
-                str(self._zucchini_debug_directory /
-                    ("coarse.png" if request.stage == 0 else "fine.png")),
-                debug,
-            )
             geometry = {
                 "stage": "coarse" if request.stage == 0 else "fine",
                 "class_name": detection.class_name,
@@ -1228,10 +1234,17 @@ class DetectTargetServer(Node):
                 "visible_width_m": float(width),
                 "axis_segment_base_m": segment.tolist(),
             }
-            (self._zucchini_debug_directory /
-             ("coarse.json" if request.stage == 0 else "fine.json")).write_text(
-                json.dumps(geometry, indent=2), encoding="utf-8"
-            )
+            if self._enable_debug_outputs:
+                self._zucchini_debug_directory.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(
+                    str(self._zucchini_debug_directory /
+                        ("coarse.png" if request.stage == 0 else "fine.png")),
+                    debug,
+                )
+                (self._zucchini_debug_directory /
+                 ("coarse.json" if request.stage == 0 else "fine.json")).write_text(
+                    json.dumps(geometry, indent=2), encoding="utf-8"
+                )
             self.get_logger().info(
                 "Zucchini %s estimate: center=(%.3f, %.3f, %.3f) "
                 "axis=(%.3f, %.3f, %.3f) size=(%.3f, %.3f)"

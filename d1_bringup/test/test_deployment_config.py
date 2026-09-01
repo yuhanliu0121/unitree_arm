@@ -3,6 +3,7 @@ import pytest
 from d1_bringup.deployment_config import (
     resolve_camera_driver_location,
     resolve_camera_stream_profiles,
+    resolve_perception_model_path,
 )
 
 
@@ -52,3 +53,26 @@ def test_camera_stream_profiles_reject_malformed_resolution():
             "depth_resolution": "848x480",
             "frame_rate_hz": 6,
         })
+
+
+def test_perception_model_path_is_required(tmp_path):
+    with pytest.raises(ValueError, match="perception.model_path is required"):
+        resolve_perception_model_path({}, tmp_path / "real_machine.yaml")
+
+
+def test_perception_model_path_resolves_relative_to_config(tmp_path):
+    model = tmp_path / "weights" / "best.pt"
+    model.parent.mkdir()
+    model.write_bytes(b"weights")
+    assert resolve_perception_model_path(
+        {"perception": {"model_path": "weights/best.pt"}},
+        tmp_path / "real_machine.yaml",
+    ) == model
+
+
+def test_perception_model_path_rejects_missing_file(tmp_path):
+    with pytest.raises(ValueError, match="is not a file"):
+        resolve_perception_model_path(
+            {"perception": {"model_path": "weights/missing.pt"}},
+            tmp_path / "real_machine.yaml",
+        )

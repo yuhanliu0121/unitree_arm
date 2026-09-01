@@ -4,7 +4,7 @@ The first implemented task primitive is the internal eye-in-hand observation
 step exposed for development as:
 
 ```text
-/arm/debug/observe_target
+/arm/internal/observe_target
 ```
 
 It accepts a stamped coarse target centre, constructs the configured ordered
@@ -26,7 +26,7 @@ Keep the stack running for manual goals:
 Then send a goal from another sourced terminal:
 
 ```zsh
-ros2 action send_goal /arm/debug/observe_target \
+ros2 action send_goal /arm/internal/observe_target \
   d1_manipulation/action/ObserveTarget \
   "{target: {header: {frame_id: go2_base}, point: {x: 0.45, y: 0.0, z: -0.14}}}" \
   --feedback
@@ -69,7 +69,8 @@ thresholds, or depth filter.
 
 ## Visual yellow-cube grasp
 
-The formal staged development Action is `/arm/tasks/pick_object`. For the
+The public `d1_interfaces/action/PickObject` Action is served at
+`/arm/tasks/pick_object`. For the
 seed-0 simulation scene, run one of:
 
 ```zsh
@@ -162,7 +163,10 @@ measured-position hold or another motion target. New pick/drop goals are then
 rejected. `PickObject` results reduce the caller decision to `SUCCESS`,
 `REPOSITION_REQUIRED`, or `ARM_FAULTED`; `DropObject` uses the same outcomes.
 Partial `stop_after` goals and the debug continuation services are commissioning
-tools and intentionally bypass the production task-state contract.
+tools and intentionally bypass the production task-state contract. They are
+rejected/absent unless launch explicitly sets `enable_commissioning_api:=true`.
+The corresponding seed and calibration executables are installed only when
+building with `-DD1_BUILD_COMMISSIONING_TOOLS=ON`.
 
 Inspect the externally visible state with:
 
@@ -184,7 +188,8 @@ replace the physical emergency stop during real-machine tests.
 
 ## Gravity-aligned object release
 
-The external release Action is `/arm/tasks/drop_object`. Its stamped target is
+The external `d1_interfaces/action/DropObject` Action is served at
+`/arm/tasks/drop_object`. Its stamped target is
 the trash-bin bottom centre estimated by Go2. The production state contract
 accepts it only from `READY_CARRY`; the legacy empty-gripper path remains an
 internal commissioning behavior rather than a public precondition. When one

@@ -25,8 +25,8 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
-#include "d1_manipulation/action/drop_object.hpp"
-#include "d1_manipulation/msg/arm_task_status.hpp"
+#include "d1_interfaces/action/drop_object.hpp"
+#include "d1_interfaces/msg/arm_task_status.hpp"
 #include "d1_manipulation/srv/apply_task_event.hpp"
 #include "d1_manipulation/task_state_client.hpp"
 #include "d1_ros2_control/action/execute_joint_segment.hpp"
@@ -63,7 +63,7 @@ geometry_msgs::msg::Pose poseMessage(const Eigen::Isometry3d& value)
 class DropObjectServer
 {
 public:
-  using Drop = action::DropObject;
+  using Drop = d1_interfaces::action::DropObject;
   using Handle = rclcpp_action::ServerGoalHandle<Drop>;
   using Gripper = control_msgs::action::GripperCommand;
   using Segment = d1_ros2_control::action::ExecuteJointSegment;
@@ -337,7 +337,7 @@ private:
   {
     const auto transition = task_state_client_.apply(
       srv::ApplyTaskEvent::Request::UPDATE_PHASE, state, {}, detail);
-    if (!transition.accepted || transition.state == msg::ArmTaskStatus::FAULTED) {
+    if (!transition.accepted || transition.state == d1_interfaces::msg::ArmTaskStatus::FAULTED) {
       RCLCPP_ERROR(
         node_->get_logger(), "Task-state synchronization failed during %s: %s",
         state.c_str(), transition.detail.c_str());
@@ -367,8 +367,8 @@ private:
     const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
     bool returned = nearPose(stowed_, stowed_tolerance_);
     result->outcome = Drop::Result::OUTCOME_ARM_FAULTED;
-    result->final_task_state = msg::ArmTaskStatus::FAULTED;
-    result->payload_state = msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
+    result->final_task_state = d1_interfaces::msg::ArmTaskStatus::FAULTED;
+    result->payload_state = d1_interfaces::msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
     if (!was_canceled && category == Drop::Result::FAILURE_REPOSITION_REQUIRED) {
       const auto recovering = task_state_client_.apply(
         srv::ApplyTaskEvent::Request::DROP_REPOSITION_REQUIRED, state,

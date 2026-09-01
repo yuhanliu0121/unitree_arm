@@ -120,7 +120,7 @@ public:
     if (backend_ != "simulation" && backend_ != "real") {
       throw std::invalid_argument("backend must be explicitly set to 'simulation' or 'real'");
     }
-    action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/debug/observe_target"));
+    action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/internal/observe_target"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     link6_frame_ = parameterOrDeclare(node_, "link6_frame", std::string("Link6"));

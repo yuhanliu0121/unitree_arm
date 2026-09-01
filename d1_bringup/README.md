@@ -13,6 +13,11 @@ RealSense, perception, and the public pick/drop Action servers. The preflight
 gravity estimate is frozen for the task run so wrist acceleration during arm
 motion cannot rotate the gravity reference.
 
+`perception.model_path` is a required deployment value. The Go2 integration
+owner must select an existing weights file explicitly; real bringup has no
+implicit development-model fallback. Relative paths are resolved from the
+deployment YAML, while absolute paths are recommended on the deployed system.
+
 When the wrist RealSense USB cable is attached to another computer, start its
 ROS driver there on the configured ROS domain, then run:
 

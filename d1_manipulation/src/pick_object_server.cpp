@@ -33,8 +33,8 @@
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
 #include "d1_manipulation/action/observe_target.hpp"
-#include "d1_manipulation/action/pick_object.hpp"
-#include "d1_manipulation/msg/arm_task_status.hpp"
+#include "d1_interfaces/action/pick_object.hpp"
+#include "d1_interfaces/msg/arm_task_status.hpp"
 #include "d1_manipulation/pick_strategy.hpp"
 #include "d1_manipulation/srv/detect_target.hpp"
 #include "d1_manipulation/srv/apply_task_event.hpp"
@@ -81,7 +81,7 @@ std_msgs::msg::ColorRGBA color(float r, float g, float b, float a = 1.0F)
 class PickObjectServer : public PickStrategyRuntime
 {
 public:
-  using Pick = action::PickObject;
+  using Pick = d1_interfaces::action::PickObject;
   using PickHandle = rclcpp_action::ServerGoalHandle<Pick>;
   using Observe = action::ObserveTarget;
   using Arm = control_msgs::action::FollowJointTrajectory;
@@ -114,7 +114,9 @@ public:
       throw std::invalid_argument("backend must be explicitly set to 'simulation' or 'real'");
     }
     action_name_ = parameterOrDeclare(node_, "action_name", std::string("/arm/tasks/pick_object"));
-    observe_name_ = parameterOrDeclare(node_, "observe_action_name", std::string("/arm/debug/observe_target"));
+    enable_commissioning_api_ = parameterOrDeclare(
+      node_, "enable_commissioning_api", false);
+    observe_name_ = parameterOrDeclare(node_, "observe_action_name", std::string("/arm/internal/observe_target"));
     detect_name_ = parameterOrDeclare(
       node_, "target_detection_service_name", std::string("/arm/perception/detect_target"));
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
@@ -231,7 +233,11 @@ public:
       node_, action_name_,
       [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const Pick::Goal> goal) {
         if (goal->target.header.frame_id.empty() ||
-          goal->stop_after > Pick::Goal::GRASP_AND_CARRY) return rclcpp_action::GoalResponse::REJECT;
+          goal->stop_after > Pick::Goal::GRASP_AND_CARRY ||
+          (!enable_commissioning_api_ && goal->stop_after != Pick::Goal::GRASP_AND_CARRY))
+        {
+          return rclcpp_action::GoalResponse::REJECT;
+        }
         bool expected = false;
         if (!pick_executing_.compare_exchange_strong(expected, true)) {
           RCLCPP_WARN(node_->get_logger(), "Rejecting concurrent pick_object goal");
@@ -258,27 +264,27 @@ public:
       [this](const std::shared_ptr<PickHandle> handle) {
         std::thread([this, handle]() { execute(handle); }).detach();
       });
-    debug_service_callback_group_ = node_->create_callback_group(
-      rclcpp::CallbackGroupType::MutuallyExclusive);
-    continue_descend_service_ = node_->create_service<std_srvs::srv::Trigger>(
-      "/arm/debug/continue_descend",
-      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-      {
-        continueDescend(response);
-      }, rmw_qos_profile_services_default, debug_service_callback_group_);
-    finetune_grasp_service_ = node_->create_service<std_srvs::srv::Trigger>(
-      "/arm/debug/finetune_grasp",
-      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-        std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-      {
-        fineTuneDebugPregrasp(response);
-      }, rmw_qos_profile_services_default, debug_service_callback_group_);
+    if (enable_commissioning_api_) {
+      debug_service_callback_group_ = node_->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+      continue_descend_service_ = node_->create_service<std_srvs::srv::Trigger>(
+        "/arm/debug/continue_descend",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+          std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+        {
+          continueDescend(response);
+        }, rmw_qos_profile_services_default, debug_service_callback_group_);
+      finetune_grasp_service_ = node_->create_service<std_srvs::srv::Trigger>(
+        "/arm/debug/finetune_grasp",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+          std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+        {
+          fineTuneDebugPregrasp(response);
+        }, rmw_qos_profile_services_default, debug_service_callback_group_);
+    }
     RCLCPP_INFO(
-      node_->get_logger(),
-      "PickObject action server ready: %s backend=%s "
-      "debug_finetune=/arm/debug/finetune_grasp debug_resume=/arm/debug/continue_descend",
-      action_name_.c_str(), backend_.c_str());
+      node_->get_logger(), "PickObject action server ready: %s backend=%s commissioning_api=%s",
+      action_name_.c_str(), backend_.c_str(), enable_commissioning_api_ ? "enabled" : "disabled");
   }
 
 private:
@@ -482,7 +488,7 @@ private:
     if (isManagedGoal(*handle->get_goal())) {
       const auto transition = task_state_client_.apply(
         srv::ApplyTaskEvent::Request::UPDATE_PHASE, state, {}, detail);
-      if (!transition.accepted || transition.state == msg::ArmTaskStatus::FAULTED) {
+      if (!transition.accepted || transition.state == d1_interfaces::msg::ArmTaskStatus::FAULTED) {
         RCLCPP_ERROR(
           node_->get_logger(), "Task-state synchronization failed during %s: %s",
           state.c_str(), transition.detail.c_str());
@@ -664,8 +670,8 @@ private:
     const bool was_canceled = canceled || cancel_.load() || handle->is_canceling();
     bool returned = isStowed();
     result->outcome = Pick::Result::OUTCOME_ARM_FAULTED;
-    result->final_task_state = msg::ArmTaskStatus::FAULTED;
-    result->payload_state = msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
+    result->final_task_state = d1_interfaces::msg::ArmTaskStatus::FAULTED;
+    result->payload_state = d1_interfaces::msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
 
     if (isManagedGoal(*handle->get_goal()) && !was_canceled &&
       (category == Pick::Result::FAILURE_INCOMPLETE_INFORMATION ||
@@ -1230,8 +1236,8 @@ private:
     result->failure_category = Pick::Result::FAILURE_GRASP_NOT_SECURED;
     result->failed_state = "VERIFY_GRASP";
     result->outcome = Pick::Result::OUTCOME_ARM_FAULTED;
-    result->final_task_state = msg::ArmTaskStatus::FAULTED;
-    result->payload_state = msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
+    result->final_task_state = d1_interfaces::msg::ArmTaskStatus::FAULTED;
+    result->payload_state = d1_interfaces::msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
 
     const auto recovering = task_state_client_.apply(
       srv::ApplyTaskEvent::Request::PICK_REPOSITION_REQUIRED, "VERIFY_GRASP",
@@ -1531,6 +1537,7 @@ private:
   std::map<std::string, std::unique_ptr<PickStrategy>> strategies_;
   std::atomic<bool> cancel_{false};
   std::atomic<bool> pick_executing_{false};
+  bool enable_commissioning_api_{false};
   std::mutex debug_pregrasp_mutex_;
   std::shared_ptr<PreparedPick> debug_pregrasp_;
   std::string debug_pregrasp_class_;

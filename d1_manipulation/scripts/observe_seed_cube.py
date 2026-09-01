@@ -61,7 +61,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=15002)
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument(
-        "--action", default="/arm/debug/observe_target"
+        "--action", default="/arm/internal/observe_target"
     )
     parser.add_argument(
         "--detect-service", default="/arm/perception/detect_target"

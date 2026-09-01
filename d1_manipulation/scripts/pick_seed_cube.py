@@ -9,7 +9,7 @@ import time
 import rclpy
 from rclpy.action import ActionClient
 
-from d1_manipulation.action import PickObject
+from d1_interfaces.action import PickObject
 
 
 def wait_for_result_or_cancel(node, handle):

@@ -16,8 +16,8 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="D1 Visualization Maintainers",
-    maintainer_email="maintainer@example.com",
+    maintainer="Yuhan Liu",
+    maintainer_email="yuhanliu0813@gmail.com",
     description="Backend-neutral camera diagnostics for D1 simulation and hardware.",
     license="Apache-2.0",
     entry_points={

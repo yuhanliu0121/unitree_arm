@@ -3,7 +3,7 @@
   <name>d1_bringup</name>
   <version>0.1.0</version>
   <description>Explicit real-machine bringup and motionless preflight for the Unitree D1 stack.</description>
-  <maintainer email="maintainer@example.com">D1 Bringup Maintainers</maintainer>
+  <maintainer email="yuhanliu0813@gmail.com">Yuhan Liu</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>

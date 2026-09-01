@@ -1,6 +1,6 @@
 d1_observe_target:
   ros__parameters:
-    action_name: /arm/debug/observe_target
+    action_name: /arm/internal/observe_target
     planning_frame: base_link
     gravity_frame: world
     arm_group: arm
@@ -37,7 +37,7 @@ d1_observe_target:
 d1_pick_object:
   ros__parameters:
     action_name: /arm/tasks/pick_object
-    observe_action_name: /arm/debug/observe_target
+    observe_action_name: /arm/internal/observe_target
     target_detection_service_name: /arm/perception/detect_target
     cube_estimation_service_name: /arm/perception/estimate_cube
     zucchini_estimation_service_name: /arm/perception/estimate_zucchini

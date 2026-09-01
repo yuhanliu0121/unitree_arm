@@ -43,6 +43,19 @@ def _launch_setup(context):
     gravity_frame = LaunchConfiguration("gravity_frame").perform(context).strip()
     if not gravity_frame:
         raise RuntimeError("gravity_frame must not be empty")
+    commissioning_text = LaunchConfiguration("enable_commissioning_api").perform(
+        context
+    ).strip().lower()
+    rviz_text = LaunchConfiguration("launch_rviz").perform(context).strip().lower()
+    if commissioning_text not in {"true", "false"} or rviz_text not in {"true", "false"}:
+        raise RuntimeError("launch_rviz and enable_commissioning_api must be true or false")
+    enable_commissioning_api = commissioning_text == "true"
+    debug_text = LaunchConfiguration("enable_debug_outputs").perform(context).strip().lower()
+    if debug_text and debug_text not in {"true", "false"}:
+        raise RuntimeError("enable_debug_outputs must be empty, true, or false")
+    enable_debug_outputs = (
+        debug_text == "true" if debug_text else enable_commissioning_api or rviz_text == "true"
+    )
     moveit_config = build_moveit_config(arm_serial)
     move_group_launch = Path(
         get_package_share_directory("d1_moveit_config")
@@ -66,9 +79,13 @@ def _launch_setup(context):
         perception_model = Path(requested_model).expanduser()
         if not perception_model.is_absolute():
             perception_model = runtime_root / perception_model
+    elif backend == "real":
+        raise RuntimeError(
+            "real backend requires an explicit perception_model_path from the "
+            "deployment configuration"
+        )
     else:
-        model_name = "paper_objects_dev_best.pt" if backend == "real" else "best.pt"
-        perception_model = runtime_root / "weights" / model_name
+        perception_model = runtime_root / "weights" / "best.pt"
     if not perception_model.is_file():
         raise RuntimeError(f"perception model is unavailable: {perception_model}")
     return [
@@ -116,6 +133,7 @@ def _launch_setup(context):
                     {
                         "backend": backend,
                         "gravity_frame": gravity_frame,
+                        "enable_commissioning_api": enable_commissioning_api,
                     },
                 ],
         ),
@@ -156,6 +174,7 @@ def _launch_setup(context):
                         "perception_runtime_root": str(runtime_root),
                         "model_path": str(perception_model),
                         "gravity_frame": gravity_frame,
+                        "enable_debug_outputs": enable_debug_outputs,
                     },
                 ],
         ),
@@ -178,11 +197,27 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("gravity_frame", default_value="world"),
             DeclareLaunchArgument(
+                "enable_commissioning_api",
+                default_value="false",
+                description=(
+                    "Enable partial pick stages and manual continuation services; "
+                    "must remain false in production"
+                ),
+            ),
+            DeclareLaunchArgument(
+                "enable_debug_outputs",
+                default_value="",
+                description=(
+                    "Enable overlay publishers and debug image files. Empty enables "
+                    "them only for RViz or commissioning launches."
+                ),
+            ),
+            DeclareLaunchArgument(
                 "perception_model_path",
                 default_value="",
                 description=(
-                    "Optional perception weight path. Relative paths are resolved "
-                    "under perception_runtime_v1; empty selects the backend default."
+                    "Perception weight path. Required for real deployment; simulation "
+                    "uses weights/best.pt when empty."
                 ),
             ),
             DeclareLaunchArgument("dds_domain_id", default_value="42"),

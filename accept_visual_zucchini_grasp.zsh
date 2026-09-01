@@ -73,7 +73,7 @@ cd ${workspace}
 setsid ${sim_args[@]} >${sim_log} 2>&1 &
 sim_pid=$!
 print '[2/3] Starting control, MoveIt, perception, and PickObject...'
-setsid ${conda_bin} run --no-capture-output -n trash_collection ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} backend:=simulation >${stack_log} 2>&1 &
+setsid ${conda_bin} run --no-capture-output -n trash_collection ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} backend:=simulation enable_commissioning_api:=true >${stack_log} 2>&1 &
 stack_pid=$!
 
 ready=false

@@ -13,7 +13,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "d1_manipulation/action/pick_object.hpp"
+#include "d1_interfaces/action/pick_object.hpp"
 #include "d1_manipulation/srv/estimate_bowl.hpp"
 
 using namespace std::chrono_literals;
@@ -140,7 +140,7 @@ public:
   {
     const auto coarse = estimate(srv::EstimateBowl::Request::COARSE, hint);
     if (!coarse || !coarse->success) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", coarse ? coarse->detail : "bowl coarse estimation unavailable"};
       return false;
     }
@@ -151,32 +151,32 @@ public:
       coarse->bottom_center.point.x, coarse->bottom_center.point.y,
       coarse->bottom_center.point.z);
     if (!runtime_.applyEstimatedGround(up, coarse->ground_offset)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply perception-fitted ground to MoveIt"};
       return false;
     }
     if (!runtime_.moveCameraTopDown(coarse_bottom, up)) {
-      failure = {action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
         "MOVE_TOP_OBSERVE", "top observation pose is not plannable"};
       return false;
     }
     const auto fine = estimate(
       srv::EstimateBowl::Request::FINE, coarse->bottom_center, up, coarse->ground_offset);
     if (!fine || !fine->success) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", fine ? fine->detail : "bowl fine estimation unavailable"};
       return false;
     }
     up = Eigen::Vector3d(
       fine->ground_normal.x, fine->ground_normal.y, fine->ground_normal.z);
     if (!up.allFinite() || up.norm() < 0.9) {
-      failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
         "ESTIMATE_POSE", "bowl fine ground normal is invalid"};
       return false;
     }
     up.normalize();
     if (!runtime_.applyEstimatedGround(up, fine->ground_offset)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "ESTIMATE_POSE", "failed to apply fine-observation ground to MoveIt"};
       return false;
     }
@@ -218,13 +218,13 @@ public:
     for (const double pregrasp_distance : descending()) {
       const auto current_state = move_group.getCurrentState();
       if (!current_state) {
-        failure = {action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_INCOMPLETE_INFORMATION,
           "PLAN_PREGRASP", "current robot state is unavailable for bowl candidate ranking"};
         return false;
       }
       const auto* joint_group = current_state->getJointModelGroup(move_group.getName());
       if (!joint_group) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "MoveIt arm joint model group is unavailable"};
         return false;
       }
@@ -272,7 +272,7 @@ public:
       }
 
       if (!runtime_.removeTargetCollision(target_ids)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
         return false;
       }
@@ -287,7 +287,7 @@ public:
         candidate.grasp_feasible = fraction >= runtime_.minimumCartesianFraction();
       }
       if (!runtime_.restoreTargetCollision(target_objects)) {
-        failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+        failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
           "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
         return false;
       }
@@ -329,7 +329,7 @@ public:
           continue;
         }
         if (!runtime_.removeTargetCollision(target_ids)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_PREGRASP", "target collision removal did not reach the planning scene"};
           return false;
         }
@@ -337,7 +337,7 @@ public:
         const double fraction = runtime_.computeCartesianFromPlanEnd(
           plan, candidate.grasp_pose, true, verified_descent);
         if (!runtime_.restoreTargetCollision(target_objects)) {
-          failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+          failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
             "PLAN_PREGRASP", "target collision restoration did not reach the planning scene"};
           return false;
         }
@@ -358,7 +358,7 @@ public:
       if (found) break;
     }
     if (!found) {
-      failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
         "PLAN_PREGRASP", "no bowl-rim candidate has a feasible approach; reposition Go2"};
       return false;
     }
@@ -392,12 +392,12 @@ public:
   {
     const auto state = std::dynamic_pointer_cast<BowlState>(plan.strategy_state);
     if (!state) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "bowl strategy state is missing"};
       return false;
     }
     if (!runtime_.removeTargetCollision(state->target_collision_ids)) {
-      failure = {action::PickObject::Result::FAILURE_EXECUTION_ERROR,
+      failure = {d1_interfaces::action::PickObject::Result::FAILURE_EXECUTION_ERROR,
         "DESCEND", "target collision removal did not reach the planning scene"};
       return false;
     }
@@ -412,7 +412,7 @@ public:
       plan.descent_trajectory = std::move(descent);
       return true;
     }
-    failure = {action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
+    failure = {d1_interfaces::action::PickObject::Result::FAILURE_REPOSITION_REQUIRED,
       "DESCEND", "bowl-rim grasp is unreachable from actual pregrasp; reposition Go2"};
     return false;
   }

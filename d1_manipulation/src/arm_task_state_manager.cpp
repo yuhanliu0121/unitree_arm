@@ -14,7 +14,7 @@
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
 #include "d1_manipulation/arm_task_state_machine.hpp"
-#include "d1_manipulation/msg/arm_task_status.hpp"
+#include "d1_interfaces/msg/arm_task_status.hpp"
 #include "d1_manipulation/srv/apply_task_event.hpp"
 
 namespace d1_manipulation
@@ -45,7 +45,8 @@ public:
     }
 
     auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
-    status_publisher_ = node_->create_publisher<msg::ArmTaskStatus>("/arm/task_status", qos);
+    status_publisher_ = node_->create_publisher<d1_interfaces::msg::ArmTaskStatus>(
+      "/arm/task_status", qos);
     event_service_ = node_->create_service<srv::ApplyTaskEvent>(
       "/arm/tasks/apply_state_event",
       [this](const std::shared_ptr<srv::ApplyTaskEvent::Request> request,
@@ -260,7 +261,7 @@ private:
   void publishStatusLocked()
   {
     const auto snapshot = machine_.snapshot();
-    msg::ArmTaskStatus message;
+    d1_interfaces::msg::ArmTaskStatus message;
     message.stamp = node_->now();
     message.state = static_cast<std::uint8_t>(snapshot.state);
     message.payload_state = static_cast<std::uint8_t>(snapshot.payload);
@@ -290,7 +291,7 @@ private:
   std::string active_phase_;
   std::string failure_code_;
   std::string detail_;
-  rclcpp::Publisher<msg::ArmTaskStatus>::SharedPtr status_publisher_;
+  rclcpp::Publisher<d1_interfaces::msg::ArmTaskStatus>::SharedPtr status_publisher_;
   rclcpp::Service<srv::ApplyTaskEvent>::SharedPtr event_service_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
   rclcpp_action::Client<Arm>::SharedPtr arm_client_;

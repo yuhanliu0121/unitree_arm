@@ -1,14 +1,15 @@
 cmake_minimum_required(VERSION 3.8)
 project(d1_manipulation)
 
-include(FetchContent)
-FetchContent_Declare(
-  boost_sml
-  GIT_REPOSITORY https://github.com/boost-ext/sml.git
-  GIT_TAG b7df6180d20422b2724d26007aebb24066f2a6a9
-  GIT_SHALLOW TRUE
+option(
+  D1_BUILD_COMMISSIONING_TOOLS
+  "Install staged-pick, calibration, and seed-goal commissioning utilities"
+  OFF
 )
-FetchContent_MakeAvailable(boost_sml)
+
+add_library(sml INTERFACE)
+target_include_directories(
+  sml INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost_sml/include)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -20,6 +21,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(d1_interfaces REQUIRED)
 find_package(d1_ros2_control REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_core REQUIRED)
@@ -40,10 +42,7 @@ find_package(urdf REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/ArmTaskStatus.msg"
   "action/ObserveTarget.action"
-  "action/PickObject.action"
-  "action/DropObject.action"
   "srv/DetectTarget.srv"
   "srv/EstimateCube.srv"
   "srv/EstimateBowl.srv"
@@ -92,7 +91,11 @@ ament_target_dependencies(task_state_client rclcpp)
 add_executable(arm_task_state_manager src/arm_task_state_manager.cpp)
 target_compile_features(arm_task_state_manager PRIVATE cxx_std_17)
 target_include_directories(arm_task_state_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(arm_task_state_manager arm_task_state_machine)
+target_link_libraries(
+  arm_task_state_manager
+  arm_task_state_machine
+  d1_interfaces::d1_interfaces__rosidl_typesupport_cpp
+)
 ament_target_dependencies(
   arm_task_state_manager control_msgs rclcpp rclcpp_action sensor_msgs trajectory_msgs)
 
@@ -130,6 +133,7 @@ target_link_libraries(
   Eigen3::Eigen
   trajectory_smoothing
   task_state_client
+  d1_interfaces::d1_interfaces__rosidl_typesupport_cpp
   d1_ros2_control::d1_ros2_control__rosidl_typesupport_cpp
 )
 ament_target_dependencies(pick_object_server
@@ -158,6 +162,7 @@ target_include_directories(drop_object_server PRIVATE
 target_link_libraries(
   drop_object_server
   Eigen3::Eigen
+  d1_interfaces::d1_interfaces__rosidl_typesupport_cpp
   d1_ros2_control::d1_ros2_control__rosidl_typesupport_cpp
   task_state_client
 )
@@ -192,38 +197,22 @@ install(PROGRAMS scripts/detect_target_server.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME detect_target_server
 )
-install(PROGRAMS scripts/observe_seed_cube.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME observe_seed_cube
-)
-install(PROGRAMS scripts/pick_seed_cube.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME pick_seed_cube
-)
-install(PROGRAMS scripts/pick_seed_zucchini.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME pick_seed_zucchini
-)
-install(PROGRAMS scripts/pick_seed_bowl.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME pick_seed_bowl
-)
-install(PROGRAMS scripts/drop_seed_bin.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME drop_seed_bin
-)
-install(PROGRAMS scripts/capture_cube_safe_boundary.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME capture_cube_safe_boundary
-)
-install(PROGRAMS scripts/visualize_cube_safe_region.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME visualize_cube_safe_region
-)
-install(PROGRAMS scripts/return_zucchini_calibration_pregrasp.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME return_zucchini_calibration_pregrasp
-)
+if(D1_BUILD_COMMISSIONING_TOOLS)
+  foreach(tool
+      observe_seed_cube
+      pick_seed_cube
+      pick_seed_zucchini
+      pick_seed_bowl
+      drop_seed_bin
+      capture_cube_safe_boundary
+      visualize_cube_safe_region
+      return_zucchini_calibration_pregrasp)
+    install(PROGRAMS scripts/${tool}.py
+      DESTINATION lib/${PROJECT_NAME}
+      RENAME ${tool}
+    )
+  endforeach()
+endif()
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

@@ -7,6 +7,12 @@ deployment:
   # ROS 2 discovery/data domain. All cooperating ROS 2 processes must use it.
   ros_domain_id: 31
 
+perception:
+  # REQUIRED for real deployment. Absolute paths are recommended; relative
+  # paths are resolved from this YAML file. The Go2 integrator selects the
+  # weights appropriate for the deployed objects and environment.
+  model_path: ""
+
 arm:
   # Explicitly selects the per-unit joint-limit profile. Changing hardware
   # requires changing this value rather than silently reusing D1095 limits.
