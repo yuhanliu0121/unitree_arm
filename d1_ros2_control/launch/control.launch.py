@@ -139,7 +139,7 @@ def launch_setup(context):
     command_gateway_cmd = gateway_common + [
         "--direction", "command",
         "--command-topic", LaunchConfiguration("command_topic").perform(context),
-        "--joint-segment-topic", LaunchConfiguration("joint_segment_topic").perform(context),
+        "--native-segment-topic", LaunchConfiguration("native_segment_topic").perform(context),
         "--command-port", LaunchConfiguration("command_port").perform(context),
         "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
     ]
@@ -295,7 +295,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("command_topic", default_value="rt/arm_Command"),
             DeclareLaunchArgument(
-                "joint_segment_topic", default_value="d1_joint_segment"
+                "native_segment_topic", default_value="d1_native_joint_segment"
             ),
             DeclareLaunchArgument(
                 "native_joint_speed_deg_s",

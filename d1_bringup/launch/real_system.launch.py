@@ -174,7 +174,7 @@ def _launch_setup(context):
             "command_port": str(arm["loopback_command_port"]),
             "feedback_port": str(arm["loopback_feedback_port"]),
             "command_topic": arm["command_topic"],
-            "joint_segment_topic": arm["joint_segment_topic"],
+            "native_segment_topic": arm["native_segment_topic"],
             "native_joint_speed_deg_s": str(native_joint_speed_deg_s),
             "real_command_rate_hz": str(command_rate_hz),
             "real_command_duration_ms": str(command_duration_ms),

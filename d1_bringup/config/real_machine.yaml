@@ -18,7 +18,7 @@ arm:
   d1_native_domain_id: 0
   command_topic: rt/arm_Command
   # Complete seven-joint native long segments.
-  joint_segment_topic: d1_joint_segment
+  native_segment_topic: d1_native_joint_segment
   # Default speed for the standard FollowJointTrajectory compatibility path.
   # Task-specific execution requests carry their profile and speed explicitly.
   native_joint_speed_deg_s: 15.0
