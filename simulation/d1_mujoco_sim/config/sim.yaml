@@ -1,0 +1,175 @@
+simulation:
+  physics_timestep_s: 0.001
+  realtime: true
+  # MuJoCo contacts are intentionally compliant and otherwise permit slow
+  # frictional creep even while the Coulomb friction limit is not exceeded.
+  # These settings suppress that solver drift without welding grasped objects.
+  friction_cone: elliptic
+  friction_impedance_ratio: 10.0
+  noslip_iterations: 2
+  # Rendering is diagnostic only. Synchronizing the viewer at every 1 kHz
+  # physics step can make simulation time lag behind ROS wall time.
+  viewer_sync_rate_hz: 60.0
+  # Canonical stowed pose: arm radians [0, -1.54, 1.55, 0, 0, 0],
+  # with the gripper SDK angle left at neutral zero degrees.
+  initial_sdk_angles_deg: [0.0, -88.235500450, 88.808458245, 0.0, 0.0, 0.0, 0.0]
+
+dds:
+  # Keep simulation isolated from a physical D1, whose examples use domain 0.
+  domain_id: 42
+  command_topic: rt/arm_Command
+  feedback_topic: rt/arm_Feedback
+  joint_feedback_topic: current_servo_angle
+  feedback_rate_hz: 8.97
+
+scene_state:
+  # Simulation-only object truth for the local MoveIt grasp baseline.
+  enabled: true
+  host: 127.0.0.1
+  port: 15002
+  publish_rate_hz: 25.0
+
+ros_visualization:
+  frame_id: world
+  publish_rate_hz: 25.0
+  go2_mesh_topic: /d1_mujoco/go2_mesh
+  object_mesh_topic: /d1_mujoco/object_meshes
+  physical_collision_topic: /d1_mujoco/physical_collisions
+
+mobile_base:
+  enabled: true
+  body_name: go2_base
+  initial_xy_m: [0.0, 0.0]
+  ground_clearance_m: 0.0
+  # Bounds of the fixed official stand_down mesh in the Go2 base frame.
+  mesh_bounds_min_xyz_m: [-0.421484, -0.169127, -0.166287]
+  mesh_bounds_max_xyz_m: [0.331958, 0.169127, 0.088834]
+  # Manually aligned in tools/calibration/go2_d1_mount/go2_d1_mount.blend.
+  T_go2_base_d1_base:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.057961769402]
+    - [0.0, 0.0, 0.0, 1.0]
+
+camera:
+  enabled: true
+  model: Intel RealSense D435i
+  serial: "250122077729"
+  parent_link: Link6
+  link_frame: wrist_camera_link
+  # Stable role-based interface shared by simulation and the physical camera.
+  topic_root: /wrist_camera
+  publish_rate_hz: 10.0
+  min_depth_m: 0.2
+  max_depth_m: 10.0
+  # User-calibrated hand-eye transform. Optical convention is +X right,
+  # +Y down, +Z forward and p_link6 = T_link6_color * p_color.
+  T_link6_color_optical:
+    - [0.007802511223, 0.969491460227, 0.245000876253, -0.113433495391]
+    - [-0.999491412298, -0.000014772168, 0.031889128609, 0.033016808957]
+    - [0.030919857055, -0.245125087105, 0.968998273534, -0.051772117970]
+    - [0.0, 0.0, 0.0, 1.0]
+  # Factory calibration read from this physical camera. RealSense convention:
+  # p_color = T_color_depth * p_depth.
+  T_color_depth_optical:
+    - [0.9999279975891113, 0.011575860902667046, -0.0031572110019624233, 0.01492401398718357]
+    - [-0.011571220122277737, 0.9999319314956665, 0.0014840539079159498, -0.00006785027653677389]
+    - [0.003174175275489688, -0.001447414280846715, 0.9999939203262329, 0.0002797634806483984]
+    - [0.0, 0.0, 0.0, 1.0]
+  color:
+    name: d435i_color
+    frame: wrist_camera_color_optical_frame
+    width: 1280
+    height: 720
+    fps: 10
+    fx: 899.0229959122928
+    fy: 898.8742971332437
+    cx: 643.5243104090979
+    cy: 376.4273672241967
+    distortion_model: plumb_bob
+    distortion: [0.11524962820468163, -0.23164843141737868, 0.0, 0.0, 0.0]
+  depth:
+    name: d435i_depth
+    frame: wrist_camera_depth_optical_frame
+    width: 848
+    height: 480
+    fps: 10
+    fx: 430.4000244140625
+    fy: 430.4000244140625
+    cx: 425.4139709472656
+    cy: 239.32342529296875
+    distortion_model: plumb_bob
+    distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+    depth_scale_m_per_unit: 0.0010000000474974513
+
+controller:
+  command_rate_limit_hz: 10.0
+  mode_0_time_constant_s: 0.18
+  mode_1_time_constant_s: 0.35
+  arm_kp: 50.0
+  arm_kv: 5.0
+  arm_joint_damping: 2.0
+  arm_joint_armature: 0.02
+  # Deliberately stiff, damped grip for robust task-level grasp validation.
+  # The negative actuator target supplies preload against MuJoCo's compliant
+  # zero-aperture lower-limit constraint or against a grasped object.
+  gripper_kp: 800.0
+  gripper_kv: 80.0
+  gripper_closing_preload_m: 0.005
+  gripper_joint_damping: 0.2
+  gripper_joint_armature: 0.001
+
+gripper:
+  closed_angle_deg: -30.0
+  open_angle_deg: 60.0
+  travel_m: 0.03
+
+scene:
+  # Development starts from explicit, repeatable poses. Use
+  # d1-mujoco-sim --random-layout [--seed N] to exercise random placement.
+  placement_mode: fixed
+  random_seed: 0
+  # Deterministic development layout near the Go2, with each item in a
+  # different viewing sector. Objects are kept outside the Go2 silhouette so
+  # the wrist camera can see them from an oblique observation pose.
+  fixed_object_poses:
+    yellow_cube: {x_m: 0.28, y_m: -0.24, yaw_deg: 0.0}
+    bowl: {x_m: 0.20, y_m: -0.32, yaw_deg: 0.0}
+    zucchini: {x_m: 0.42, y_m: 0.08, yaw_deg: 0.0}
+  # Task-level damping copied from the ATEC Task E object configuration to
+  # suppress residual sliding that is not representative of the real gripper.
+  object_linear_damping: 2.0
+  object_angular_damping: 4.0
+  # Provisional physical side length of the black calibration square in the
+  # source floor photo. Change this after measuring it in the real scene.
+  ground_texture_square_size_m: 0.6
+  # Minimum clearance between the outer footprints of any two scene items.
+  object_gap_m: 0.20
+  # XY projection of the fixed-pose Go2 mesh; this is the inner ring boundary.
+  base_exclusion_box:
+    min_x_m: -0.421484
+    max_x_m: 0.331958
+    half_width_y_m: 0.169127
+  spawn_region:
+    # Rectangular ring around the Go2 XY bounding box.
+    outer_expansion_m: 0.30
+    outline_width_m: 0.003
+  trash_bin:
+    # Deterministic acceptance pose; random mode samples it with the objects.
+    fixed_center_x_m: 0.195
+    fixed_center_y_m: 0.319
+    # Recommended Go2 navigation envelope for gravity-aligned D1 release.
+    min_base_distance_m: 0.35
+    max_base_distance_m: 0.45
+    outer_radius_m: 0.15
+    height_m: 0.10
+    wall_thickness_m: 0.01
+    bottom_thickness_m: 0.01
+    wall_segments: 24
+  objects:
+    yellow_cube:
+      mass_kg: 0.08
+    bowl:
+      mass_kg: 0.08
+    zucchini:
+      mass_kg: 0.18

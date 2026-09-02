@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "session": "cube_safe_region_20260826_235409",
+  "boundary_order": [
+    "closing_boundary_a",
+    "closing_boundary_b",
+    "finger_boundary_a",
+    "finger_boundary_b"
+  ],
+  "samples": {
+    "closing_boundary_a": "1_closing_boundary_a/sample.json"
+  },
+  "status": "in_progress"
+}

@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "object_class": "yellow_cube",
+  "boundary_index": 5,
+  "boundary_name": "closing_side_b_2",
+  "captured_at_local": "2026-09-01T16:35:15.025289+08:00",
+  "camera_frame": "wrist_camera_color_optical_frame",
+  "planning_frame": "base_link",
+  "tcp_frame": "tcp_link",
+  "estimate_stamp": {
+    "sec": 1788251714,
+    "nanosec": 782049561
+  },
+  "class_name": "yellow_cube",
+  "confidence": 0.0,
+  "estimate_detail": "calibration-only HSV fallback; ground refitted and yellow top-face contour projected to cube top plane; color_area=56560px top_area=38767px valid_depth_ratio=0.742",
+  "reference_point_semantics": "cube_top_center",
+  "reference_point_planning_m": [
+    -0.004772330263441508,
+    0.3793946709407629,
+    -0.16751416806380237
+  ],
+  "reference_point_camera_m": [
+    0.03181972537880984,
+    0.05075784064022566,
+    0.21627617890436102
+  ],
+  "top_center_camera_m": [
+    0.03181972537880984,
+    0.05075784064022566,
+    0.21627617890436102
+  ],
+  "gravity_up_planning": [
+    -0.07989604372790454,
+    -0.06463215948651357,
+    0.9947056379435771
+  ],
+  "gravity_up_camera": [
+    0.09216597458616087,
+    0.20806387090705938,
+    -0.9737632457387959
+  ],
+  "closing_axis_camera": [
+    -0.9994914122984779,
+    -1.4772167885590548e-05,
+    0.03188912860799961
+  ],
+  "finger_axis_camera": [
+    0.0078025112225529325,
+    0.9694914602273064,
+    0.2450008762534281
+  ],
+  "approach_axis_camera": [
+    0.03091985705362199,
+    -0.24512508710474476,
+    0.9689982735338979
+  ],
+  "ground_offset_planning_m": 0.240767093981657,
+  "arm_joint_positions_rad": [
+    -1.6824974255541447,
+    1.2007865786353205,
+    -0.16755161484935838,
+    0.1832595714594046,
+    0.6178465818376035,
+    -1.8640116943931657
+  ],
+  "joint_state": {
+    "stamp": {
+      "sec": 1788251714,
+      "nanosec": 780708951
+    },
+    "name": [
+      "Joint2",
+      "Joint0",
+      "Joint3",
+      "Joint1",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "position": [
+      -0.16755161484935838,
+      -1.6824974255541447,
+      0.1832595714594046,
+      1.2007865786353205,
+      0.6178465818376035,
+      -1.8640116943931657,
+      0.029866666158040362
+    ],
+    "velocity": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      0.00030304456709618976
+    ],
+    "effort": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+    ],
+    "arm_joint_positions_rad": [
+      -1.6824974255541447,
+      1.2007865786353205,
+      -0.16755161484935838,
+      0.1832595714594046,
+      0.6178465818376035,
+      -1.8640116943931657
+    ]
+  },
+  "imu": {
+    "stamp": {
+      "sec": 1788251714,
+      "nanosec": 780291072
+    },
+    "frame_id": "wrist_camera_imu_optical_frame",
+    "orientation_xyzw": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "angular_velocity": [
+      -0.06285104900598526,
+      -0.03781779482960701,
+      0.11771372705698013
+    ],
+    "linear_acceleration": [
+      3.0792880058288574,
+      1.1277647018432617,
+      -9.002504348754883
+    ]
+  },
+  "camera_info": {
+    "stamp": {
+      "sec": 1788251714,
+      "nanosec": 782049561
+    },
+    "frame_id": "wrist_camera_color_optical_frame",
+    "width": 1280,
+    "height": 720,
+    "distortion_model": "plumb_bob",
+    "d": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "k": [
+      908.8550415039062,
+      0.0,
+      641.3519287109375,
+      0.0,
+      908.5066528320312,
+      378.3876037597656,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "r": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "p": [
+      908.8550415039062,
+      0.0,
+      641.3519287109375,
+      0.0,
+      0.0,
+      908.5066528320312,
+      378.3876037597656,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ]
+  },
+  "capture_diagnostics": {
+    "message_stamp_delta_s": {
+      "color": 0.0,
+      "aligned_depth": 0.033349122,
+      "raw_depth": 0.033349122,
+      "overlay": null,
+      "color_info": 0.0,
+      "aligned_info": 0.033349122,
+      "imu": 0.001758489,
+      "joints": 0.00134061
+    },
+    "arm_motion_range_last_window_deg": 0.10000038146972692,
+    "arm_pose_delta_from_first_deg": 1.7000045776367174,
+    "arm_pose_delta_warning": true
+  },
+  "cube_center_planning_m": [
+    -0.0027749291702438947,
+    0.3810104749279257,
+    -0.1923818090123918
+  ],
+  "top_center_planning_m": [
+    -0.004772330263441508,
+    0.3793946709407629,
+    -0.16751416806380237
+  ],
+  "top_corners_planning_m": [
+    [
+      -0.03231743889645115,
+      0.40481958477313656,
+      -0.16807461338231944
+    ],
+    [
+      -0.03283517708356484,
+      0.3548359990574284,
+      -0.171363940587991
+    ],
+    [
+      0.022772778369568137,
+      0.3539697571083892,
+      -0.16695372274528536
+    ],
+    [
+      0.02329051655668183,
+      0.40395334282409734,
+      -0.1636643955396138
+    ]
+  ],
+  "cube_edge_direction_planning": [
+    0.9967496166516506,
+    -0.0155270288863638,
+    0.07905133192267834
+  ]
+}

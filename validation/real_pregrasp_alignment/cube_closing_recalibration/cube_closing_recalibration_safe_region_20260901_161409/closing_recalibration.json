@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "calibration_type": "cube_repeated_closing_boundaries",
+  "frame_id": "wrist_camera_color_optical_frame",
+  "basis_camera": {
+    "closing_axis": [
+      -0.9964914766084,
+      0.030719609390554355,
+      -0.07785269838420857
+    ]
+  },
+  "raw_bounds_m": {
+    "closing": [
+      -0.0448555537223105,
+      -0.0359900579346173
+    ]
+  },
+  "safe_margins_m": {
+    "closing": 0.001
+  },
+  "safe_bounds_m": {
+    "closing": [
+      -0.0438555537223105,
+      -0.0369900579346173
+    ]
+  },
+  "recommended_runtime_parameters": {
+    "cube_finetune_closing_axis_camera": [
+      -0.9964914766084,
+      0.030719609390554355,
+      -0.07785269838420857
+    ],
+    "cube_finetune_closing_bounds_m": [
+      -0.0438555537223105,
+      -0.0369900579346173
+    ]
+  },
+  "diagnostics": {
+    "raw_closing_width_m": 0.008865495787693203,
+    "safe_closing_width_m": 0.006865495787693202,
+    "side_a_coordinates_m": [
+      -0.03817388771611296,
+      -0.030576739671977438,
+      -0.0359900579346173
+    ],
+    "side_b_coordinates_m": [
+      -0.04587990612537105,
+      -0.0448555537223105,
+      -0.04265919713927342
+    ],
+    "side_a_median_m": -0.0359900579346173,
+    "side_b_median_m": -0.0448555537223105,
+    "side_a_range_m": 0.00759714804413552,
+    "side_b_range_m": 0.00322070898609763
+  },
+  "source_session": "cube_closing_recalibration_safe_region_20260901_161409",
+  "status": "physically_validated"
+}

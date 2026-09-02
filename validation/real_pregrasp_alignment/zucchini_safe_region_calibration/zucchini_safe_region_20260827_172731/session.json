@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "session": "zucchini_safe_region_20260827_172731",
+  "object_class": "zucchini",
+  "boundary_order": [
+    "closing_negative",
+    "closing_positive"
+  ],
+  "samples": {
+    "closing_negative": "1_closing_negative/sample.json",
+    "closing_positive": "2_closing_positive/sample.json"
+  },
+  "physically_validated_boundaries": [
+    "closing_negative",
+    "closing_positive"
+  ],
+  "status": "physically_validated",
+  "safe_region": "safe_region.json"
+}

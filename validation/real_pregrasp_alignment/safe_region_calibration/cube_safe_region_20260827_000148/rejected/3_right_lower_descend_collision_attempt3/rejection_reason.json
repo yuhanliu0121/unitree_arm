@@ -1,0 +1,14 @@
+{
+  "boundary": "right_lower",
+  "status": "rejected",
+  "reason": "physical open-gripper DESCEND validation failed due to non-vertical horizontal sweep",
+  "descend_distance_from_top_m": -0.04,
+  "pregrasp_distance_from_top_m": 0.08,
+  "nominal_tcp_travel_m": 0.12,
+  "validated_by": "user_visual_inspection",
+  "captured_top_center_camera_m": [
+    0.028084,
+    0.044910,
+    0.272307
+  ]
+}

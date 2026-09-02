@@ -1,0 +1,6 @@
+{
+  "boundary": "right_lower",
+  "decision": "rejected_by_physical_descend_validation",
+  "reason": "Open-gripper DESCEND contacted the cube.",
+  "recoverable": true
+}

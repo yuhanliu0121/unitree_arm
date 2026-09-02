@@ -27,19 +27,19 @@ dist/
 
 # Regenerable Blender interchange meshes used only while building the manual
 # mounting-calibration scene.
-/calibration/go2_d1_mount/converted/
+/tools/calibration/go2_d1_mount/converted/
 
 # The simulator consumes the OBJ/MTL/PBR exports. Keep the much larger,
 # redundant authoring and interchange formats outside this code repository.
-/objects/**/*.blend
-!/objects/bowl/bowl_grasp_annotation.blend
-/objects/**/*.fbx
-/objects/**/*.glb
-/objects/**/*.stl
+/simulation/objects/**/*.blend
+!/simulation/objects/bowl/bowl_grasp_annotation.blend
+/simulation/objects/**/*.fbx
+/simulation/objects/**/*.glb
+/simulation/objects/**/*.stl
 
 # Regenerable simulation-to-perception domain-gap reports.
-/validation/sim_perception_domain/artifacts/
-/perception_runtime_v1/.runtime_cache/
+/tools/validation/sim_perception_domain/artifacts/
+/runtime/perception_runtime_v1/.runtime_cache/
 
 # Local development-only dataset, training runs and paper-object fine-tuning.
 /paper_object_perception/

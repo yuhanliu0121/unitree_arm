@@ -1,0 +1,6 @@
+{
+  "boundary": "closing_boundary_a",
+  "decision": "rejected_by_physical_descend_validation",
+  "reason": "User confirmed the open-gripper DESCEND must not be treated as a valid boundary sample.",
+  "recoverable": true
+}

@@ -1,95 +1,80 @@
 # Unitree D1 arm stack
 
-ROS 2 Humble and MuJoCo development workspace for the Unitree D1 arm. The
-current stack provides a calibrated robot description, a D1 protocol-compatible
-MuJoCo simulator, `ros2_control`, MoveIt configuration, RGB-D simulation for a
-wrist-mounted RealSense D435i, and object-specific pick/drop task flows.
+ROS 2 Humble and MuJoCo stack for wrist-RGB-D pick, carry, and drop tasks on a
+Unitree D1 arm. The only Go2-facing task API is:
 
-## Packages
+- `/arm/tasks/pick_object`
+- `/arm/tasks/drop_object`
+- `/arm/task_status`
 
-- `d1_interfaces`: the public Go2-facing pick/drop Actions and task-status message.
-- `d1_constrained_description_20260728`: calibrated URDF, meshes and display.
-- `d1_mujoco_sim`: physics scene, D1 DDS protocol and wrist RGB-D publishers.
-- `d1_ros2_control`: D1 hardware interface and trajectory controllers.
-- `unitree-d1-control`: unofficial Unitree D1 robotic-arm control layer with a
-  host gateway, timed seven-joint targets, feedback and guarded maintenance
-  tools; built and deployed separately from ROS 2.
-- `d1_moveit_config`: MoveIt planning and RViz configuration.
-- `d1_manipulation`: gravity-aligned eye-in-hand observation Action and
-  ordered MoveIt candidate search.
-- `d1_bringup`: explicit real-machine configuration and motionless preflight.
+The action and status types live in `d1_interfaces`.
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/` | Production ROS 2 packages: interfaces, bringup, description, control, MoveIt, perception integration, and task logic |
+| `simulation/` | MuJoCo simulator and simulation-only object assets |
+| `runtime/` | Versioned perception runtime and model assets |
+| `scripts/` | Supported environment, real-machine bringup, preflight, and recovery entry points |
+| `tools/` | Calibration, validation, workspace analysis, and asset-generation utilities |
+| `docs/` | Architecture, calibration, experiment, and handoff documentation |
+| `third_party/` | Official D1 SDK files and the `unitree-d1-control` submodule |
+
+Generated `build/`, `install/`, and `log/` trees remain at the workspace root
+and are ignored by Git.
 
 ## Development environment
 
-Open a new zsh terminal and load ROS 2, the `trash_collection` Conda
-environment and this workspace overlay with one command:
+From a new zsh terminal:
 
 ```zsh
-source ./setup_dev_env.zsh
+source ./scripts/setup_dev_env.zsh
 ```
 
-The command must be sourced so that the environment remains active in the
-current terminal. It deliberately leaves `ROS_DOMAIN_ID` unset; launchers
-select the simulation or real-machine DDS domain explicitly.
+The script loads ROS 2, the `trash_collection` Conda environment, and the
+workspace overlay. It deliberately leaves `ROS_DOMAIN_ID` unset; launchers
+select the simulation or real-machine domain explicitly.
 
-## Acceptance
+## Build
 
-After loading the development environment, run:
+Production build:
 
 ```zsh
-./accept_visual_cube_grasp.zsh
+colcon build --symlink-install
 ```
 
-Staged commissioning clients are excluded from production installs. Enable
-them in a development build with
-`--cmake-args -DD1_BUILD_COMMISSIONING_TOOLS=ON`.
-
-Optional visualization modes:
+Commissioning clients are excluded by default. Enable them only for staged
+development and acceptance:
 
 ```zsh
-./accept_visual_cube_grasp.zsh --rviz
+colcon build --symlink-install \
+  --cmake-args -DD1_BUILD_COMMISSIONING_TOOLS=ON
 ```
 
-Run the automatic seed-0 target-observation acceptance:
+## Validation
+
+Examples:
 
 ```zsh
-./accept_observe_target.zsh --headless
-./accept_observe_target.zsh --rviz
+./tools/validation/scripts/accept_observe_target.zsh --headless
+./tools/validation/scripts/accept_visual_cube_grasp.zsh --rviz
+./tools/validation/scripts/accept_cube_pick_drop.zsh --headless
 ```
 
-Keep the commissioning stack running and send `/arm/internal/observe_target` goals manually:
+Calibration-only entry points are under `tools/calibration/scripts/`.
+
+## Real-machine bringup
+
+The deployment owner must review
+`src/d1_bringup/config/real_machine.yaml`, replace its development perception
+weights, and fill the Go2-owned network/TF values. Then run the motionless
+preflight before starting the control stack:
 
 ```zsh
-./accept_observe_target.zsh --rviz --server-only
+./scripts/real_preflight.zsh --arm-serial D1095
+./scripts/real_bringup.zsh --arm-serial D1095 --rviz
 ```
 
-For direct MuJoCo pose inspection:
-
-```zsh
-d1-mujoco-sim --manual-control \
-  --initial-arm-pose '[0, -1.5, 1.5, 0, -0.6, 0]'
-```
-
-See `doc/codex_handoff.md` for the detailed architecture, calibration values,
-validation history and current limitations.
-
-## Physical-hardware motionless preflight
-
-With the D1 Ethernet cable and the wrist D435i connected, run:
-
-```zsh
-./real_preflight.zsh
-```
-
-Per-unit adjustments are opt-in. For physical arm `D1095`, use:
-
-```zsh
-./real_preflight.zsh --arm-serial D1095
-```
-
-This entry point starts no controller and sends no arm command. It checks the
-configured NIC, passive D1 feedback, joint-limit consistency, live color and
-aligned-depth CameraInfo, D435i accelerometer stability, and the required TF
-chain. Deployment-owned values are in
-`d1_bringup/config/real_machine.yaml`. A failed check leaves the system
-`NOT_READY`.
+See `src/d1_bringup/config/README.md` for configuration ownership and
+`docs/codex_handoff.md` for the current architecture and known limitations.

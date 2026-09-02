@@ -1,0 +1,7 @@
+{
+  "boundary": "left_upper",
+  "decision": "rejected_by_physical_boundary_inspection",
+  "reason": "DESCEND was collision-free, but the resulting placement was nearly right-side-zero-clearance rather than the intended left-side-zero-clearance with upper finger-half engagement.",
+  "recoverable": true,
+  "validated_by": "user_visual_inspection"
+}

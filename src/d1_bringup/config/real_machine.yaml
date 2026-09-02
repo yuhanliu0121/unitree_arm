@@ -1,0 +1,96 @@
+# This file describes the physical deployment. Values under `site` are owned
+# by the Go2/integration side; values under `arm` and most `wrist_camera`
+# fields are owned by the D1 manipulation stack. The integration side selects
+# `wrist_camera.frame_rate_hz` according to its total camera/network budget.
+deployment:
+  backend: real
+  # ROS 2 discovery/data domain. All cooperating ROS 2 processes must use it.
+  ros_domain_id: 31
+
+perception:
+  # Development default for the paper/cardboard validation objects. Relative
+  # paths are resolved from this YAML file. The Go2 deployment owner should
+  # replace it with the weights validated for the final objects/environment.
+  model_path: ../../../runtime/perception_runtime_v1/weights/paper_objects_dev_best.pt
+
+arm:
+  # Explicitly selects the per-unit joint-limit profile. Changing hardware
+  # requires changing this value rather than silently reusing D1095 limits.
+  serial_no: D1095
+  # Verified on Dell G3 on 2026-08-19.
+  network_interface: enp3s0
+  expected_ipv4_subnet: 192.168.123.0/24
+  # Unitree native DDS domain, independent of ROS_DOMAIN_ID.
+  d1_native_domain_id: 0
+  command_topic: rt/arm_Command
+  # Complete seven-joint native long segments.
+  native_segment_topic: d1_native_joint_segment
+  # Default speed for the standard FollowJointTrajectory compatibility path.
+  # Task-specific execution requests carry their profile and speed explicitly.
+  native_joint_speed_deg_s: 15.0
+  command_rate_hz: 20.0
+  # 0 derives the servo interpolation duration from command_rate_hz. A
+  # positive value is an explicit real-machine tuning override.
+  command_duration_ms: 0
+  # The thin onboard native-segment executor is deployed as its own systemd service; the
+  # untouched vendor service has been exercised as the rollback path.
+  onboard_control_deployed: true
+  feedback_topic: current_servo_angle
+  status_topic: rt/arm_Feedback
+  loopback_command_port: 15100
+  loopback_feedback_port: 15101
+  gripper_closed_angle_deg: -30.0
+  gripper_open_angle_deg: 60.0
+  gripper_travel_m: 0.03
+
+wrist_camera:
+  model: Intel RealSense D435i
+  # local: this stack starts realsense2_camera for a USB camera attached to the
+  # development computer. remote: another computer owns the USB device and
+  # publishes the canonical topics below on deployment.ros_domain_id.
+  driver_location: local
+  serial_no: "250122077729"
+  name: wrist_camera
+  color_resolution: "1280x720"
+  depth_resolution: "848x480"
+  # D435i supports these resolutions at 6, 15, or 30 Hz. Development and
+  # single-arm acceptance default to 15 Hz; a bandwidth-constrained Go2
+  # deployment may explicitly select 6 Hz.
+  frame_rate_hz: 15
+  color_camera_info_topic: /wrist_camera/color/camera_info
+  aligned_depth_camera_info_topic: /wrist_camera/aligned_depth_to_color/camera_info
+  imu_topic: /wrist_camera/imu
+  imu_frame: wrist_camera_imu_optical_frame
+  # Hand-eye calibration: Link6 -> wrist_camera_link.
+  # Derived from the measured Link6 -> RGB optical calibration and this
+  # camera's factory camera_link -> RGB optical transform.
+  link6_to_camera_link:
+    translation_xyz_m: [-0.113314288587, 0.018109307512, -0.051022947448]
+    quaternion_xyzw: [-0.015349552858, -0.613749035851, 0.010264332423, 0.789285218219]
+
+site:
+  # Integration-owned mounting transform. Identity is deliberate until the
+  # Go2 and its measured mount are available.
+  go2_base_to_arm_base:
+    translation_xyz_m: [0.0, 0.0, 0.0]
+    quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+  gravity:
+    source: realsense_accel
+    parent_frame: base_link
+    frame: gravity_frame
+    # D435i acceleration is usable as gravity only while stationary/slow.
+    expected_acceleration_mps2: 9.80665
+    norm_tolerance_mps2: 1.5
+    # D1095's uncalibrated D435i accel has about 0.95 m/s^2 raw X-axis
+    # standard deviation while stationary. Average a one-second window and
+    # bound its uncertainty; use the gyro RMS to reject actual motion.
+    max_component_standard_error_mps2: 0.10
+    max_angular_velocity_rms_rad_s: 0.15
+    required_samples: 200
+
+preflight:
+  timeout_s: 20.0
+  minimum_arm_feedback_samples: 5
+  feedback_max_age_s: 0.5
+  camera_info_max_age_s: 2.0
+  joint_limit_tolerance_rad: 0.001

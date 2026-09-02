@@ -1,0 +1,18 @@
+joint_names:
+- Joint0
+- Joint1
+- Joint2
+- Joint3
+- Joint4
+- Joint5
+positions_rad:
+- -1.684242728174528
+- 1.408480653096202
+- -0.28274335213888685
+- 0.23561944901923448
+- 0.49043752646830935
+- -1.8936822384138474
+maximum_start_delta_rad: 0.5235987755982988
+minimum_gripper_opening_m: 0.025
+speed_deg_s: 15.0
+action_name: /arm_controller/execute_joint_segment

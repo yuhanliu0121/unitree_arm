@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "session": "cube_safe_region_20260827_143504",
+  "boundary_order": [
+    "left_lower",
+    "left_upper",
+    "right_lower",
+    "right_upper"
+  ],
+  "samples": {
+    "left_lower": "1_left_lower/sample.json",
+    "left_upper": "2_left_upper/sample.json",
+    "right_lower": "3_right_lower/sample.json",
+    "right_upper": "4_right_upper/sample.json"
+  },
+  "validated_samples": {
+    "left_lower": {
+      "status": "accepted",
+      "validation": "open_gripper_descend_physical_inspection"
+    },
+    "left_upper": {
+      "status": "accepted",
+      "validation": "open_gripper_descend_physical_inspection"
+    },
+    "right_lower": {
+      "status": "accepted",
+      "validation": "open_gripper_descend_physical_inspection"
+    },
+    "right_upper": {
+      "status": "accepted",
+      "validation": "open_gripper_descend_physical_inspection"
+    }
+  },
+  "status": "complete",
+  "safe_region": "safe_region.json"
+}

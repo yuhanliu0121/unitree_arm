@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "frame_id": "wrist_camera_color_optical_frame",
+  "interpretation": "rectangular cross-section extruded along gravity; bounds are scalar dot products in the stated camera-frame basis",
+  "basis_camera": {
+    "closing_axis": [
+      -0.9964914766084,
+      0.030719609390554355,
+      -0.07785269838420857
+    ],
+    "finger_length_axis": [
+      0.008596773865607941,
+      0.9628521848541389,
+      0.26989213697459724
+    ],
+    "extrusion_axis_gravity_up": [
+      0.08325162176146711,
+      0.26827593205597655,
+      -0.9597380849760954
+    ]
+  },
+  "raw_bounds_m": {
+    "closing": [
+      -0.04352345527058814,
+      -0.03940754708007975
+    ],
+    "finger_length": [
+      0.07775923811314761,
+      0.11838677790731594
+    ]
+  },
+  "safe_margins_m": {
+    "closing": 0.0,
+    "finger_length": 0.0
+  },
+  "safe_bounds_m": {
+    "closing": [
+      -0.04352345527058814,
+      -0.03940754708007975
+    ],
+    "finger_length": [
+      0.07775923811314761,
+      0.11838677790731594
+    ]
+  },
+  "safe_centre_line": {
+    "anchor_camera_m": [
+      0.04216312996669978,
+      0.0931560060385793,
+      0.029697334867761566
+    ],
+    "direction_camera": [
+      0.08325162176146711,
+      0.26827593205597655,
+      -0.9597380849760954
+    ]
+  },
+  "diagnostics": {
+    "raw_closing_width_m": 0.004115908190508388,
+    "raw_finger_width_m": 0.04062753979416833,
+    "maximum_gravity_axis_deviation_deg": 0.9144044065334985,
+    "maximum_arm_joint_spread_deg": 0.9000015258789085,
+    "paired_boundary_repeatability_m": {
+      "left_closing_difference": 0.0048315627884894866,
+      "right_closing_difference": 0.00023094479925226535,
+      "lower_finger_difference": 0.004635550162238919,
+      "upper_finger_difference": 0.0059952588976596305
+    },
+    "all_point_coordinates": {
+      "left_lower": {
+        "closing_m": -0.04182332847432449,
+        "finger_length_m": 0.1207045529884354,
+        "gravity_m": -0.2022519535143854
+      },
+      "left_upper": {
+        "closing_m": -0.036991765685835,
+        "finger_length_m": 0.08075686756197743,
+        "gravity_m": -0.19448205231416443
+      },
+      "right_lower": {
+        "closing_m": -0.043407982870962,
+        "finger_length_m": 0.11606900282619648,
+        "gravity_m": -0.1951114683607936
+      },
+      "right_upper": {
+        "closing_m": -0.04363892767021427,
+        "finger_length_m": 0.0747616086643178,
+        "gravity_m": -0.1937034800337844
+      }
+    }
+  },
+  "source_session": "cube_safe_region_20260827_143504",
+  "status": "physically_validated"
+}

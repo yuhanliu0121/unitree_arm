@@ -1,0 +1,7 @@
+{
+  "boundary": "left_upper",
+  "decision": "rejected_before_descend",
+  "reason": "Maximum arm-pose difference from the first calibration sample was 1.4 degrees at Joint1, exceeding the 1.0-degree consistency threshold.",
+  "recoverable": true,
+  "validated_by": "automatic_capture_check"
+}

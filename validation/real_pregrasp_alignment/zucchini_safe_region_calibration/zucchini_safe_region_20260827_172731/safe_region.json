@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "region_type": "closing_interval_extruded_along_finger_and_gravity",
+  "frame_id": "wrist_camera_color_optical_frame",
+  "interpretation": "one-dimensional closing-axis interval; unconstrained along finger length and gravity",
+  "basis_camera": {
+    "closing_axis": [
+      -0.9968582850544625,
+      0.025625090897871242,
+      -0.07494607551267711
+    ],
+    "extrusion_axis_gravity_up": [
+      0.0788559187407329,
+      0.23224371268360905,
+      -0.9694558277706562
+    ]
+  },
+  "raw_bounds_m": {
+    "closing": [
+      -0.045322211086450064,
+      -0.02828342224597395
+    ]
+  },
+  "safe_margins_m": {
+    "closing": 0.0
+  },
+  "safe_bounds_m": {
+    "closing": [
+      -0.045322211086450064,
+      -0.02828342224597395
+    ]
+  },
+  "safe_centre_plane": {
+    "normal_camera": [
+      -0.9968582850544625,
+      0.025625090897871242,
+      -0.07494607551267711
+    ],
+    "coordinate_m": -0.036802816666212004
+  },
+  "diagnostics": {
+    "raw_closing_width_m": 0.017038788840476115,
+    "boundary_coordinates_m": {
+      "closing_negative": -0.02828342224597395,
+      "closing_positive": -0.045322211086450064
+    },
+    "gravity_axis_deviation_deg": 1.7508741003094228
+  },
+  "source_session": "zucchini_safe_region_20260827_172731",
+  "physical_validation": {
+    "accepted_boundaries": [
+      "closing_negative",
+      "closing_positive"
+    ],
+    "descent_gripper_open": true,
+    "object_contact_or_displacement": false,
+    "would_close_reliably": true,
+    "validated_by": "operator"
+  },
+  "status": "physically_validated"
+}

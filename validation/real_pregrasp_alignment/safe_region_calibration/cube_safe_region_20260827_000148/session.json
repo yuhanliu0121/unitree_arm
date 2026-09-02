@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "session": "cube_safe_region_20260827_000148",
+  "boundary_order": [
+    "left_lower",
+    "left_upper",
+    "right_lower",
+    "right_upper"
+  ],
+  "samples": {
+    "left_lower": "1_left_lower/sample.json",
+    "left_upper": "2_left_upper/sample.json"
+  },
+  "validated_samples": {
+    "left_lower": {
+      "status": "accepted",
+      "validation": "open_gripper_descend_physical_inspection"
+    },
+    "left_upper": {
+      "status": "accepted",
+      "validation": "open_gripper_descend_physical_inspection"
+    }
+  },
+  "status": "in_progress"
+}

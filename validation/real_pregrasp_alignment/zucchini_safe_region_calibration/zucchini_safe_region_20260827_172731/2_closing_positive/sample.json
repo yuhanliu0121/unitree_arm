@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "object_class": "zucchini",
+  "boundary_index": 2,
+  "boundary_name": "closing_positive",
+  "captured_at_local": "2026-08-27T17:30:27.593997+08:00",
+  "camera_frame": "wrist_camera_color_optical_frame",
+  "planning_frame": "base_link",
+  "tcp_frame": "tcp_link",
+  "estimate_stamp": {
+    "sec": 1787823025,
+    "nanosec": 574367188
+  },
+  "class_name": "zucchini",
+  "confidence": 0.9604156017303467,
+  "estimate_detail": "zucchini middle skeleton fitted and projected to known centre-height plane",
+  "reference_point_semantics": "zucchini_axis_midpoint_at_nominal_center_height",
+  "reference_point_planning_m": [
+    0.013720266634340839,
+    0.3346381029717756,
+    -0.11133564579094413
+  ],
+  "reference_point_camera_m": [
+    0.027616320131153504,
+    0.011779247055836009,
+    0.24143356024621937
+  ],
+  "top_center_camera_m": [
+    0.027616320131153504,
+    0.011779247055836009,
+    0.24143356024621937
+  ],
+  "gravity_up_planning": [
+    0.0018072363316826848,
+    -0.09235142364269117,
+    0.9957248357091479
+  ],
+  "gravity_up_camera": [
+    0.09389505246379434,
+    0.23423405163580296,
+    -0.9676353280947826
+  ],
+  "closing_axis_camera": [
+    -0.9994914122984777,
+    -1.4772167885368503e-05,
+    0.03188912860799929
+  ],
+  "finger_axis_camera": [
+    0.0078025112225528215,
+    0.9694914602273061,
+    0.24500087625342806
+  ],
+  "approach_axis_camera": [
+    0.030919857053621685,
+    -0.24512508710474473,
+    0.968998273533898
+  ],
+  "ground_offset_planning_m": 0.1582991770639507,
+  "arm_joint_positions_rad": [
+    -1.668534738274968,
+    0.7976154814772141,
+    0.2216568116743285,
+    0.008726646259971648,
+    0.5846852994181003,
+    -1.668534738274968
+  ],
+  "joint_state": {
+    "stamp": {
+      "sec": 1787823025,
+      "nanosec": 578144989
+    },
+    "name": [
+      "Joint2",
+      "Joint0",
+      "Joint3",
+      "Joint1",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "position": [
+      0.2216568116743285,
+      -1.668534738274968,
+      0.008726646259971648,
+      0.7976154814772141,
+      0.5846852994181003,
+      -1.668534738274968,
+      0.029966667175292967
+    ],
+    "velocity": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      0.0
+    ],
+    "effort": [
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      NaN
+    ],
+    "arm_joint_positions_rad": [
+      -1.668534738274968,
+      0.7976154814772141,
+      0.2216568116743285,
+      0.008726646259971648,
+      0.5846852994181003,
+      -1.668534738274968
+    ]
+  },
+  "imu": {
+    "stamp": {
+      "sec": 1787823026,
+      "nanosec": 61954816
+    },
+    "frame_id": "wrist_camera_imu_optical_frame",
+    "orientation_xyzw": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "angular_velocity": [
+      0.0015969761880114675,
+      0.10066884011030197,
+      -0.0031956976745277643
+    ],
+    "linear_acceleration": [
+      -0.34323275089263916,
+      2.4810824394226074,
+      -9.64974308013916
+    ]
+  },
+  "camera_info": {
+    "stamp": {
+      "sec": 1787823027,
+      "nanosec": 207072998
+    },
+    "frame_id": "wrist_camera_color_optical_frame",
+    "width": 1280,
+    "height": 720,
+    "distortion_model": "plumb_bob",
+    "d": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "k": [
+      908.8550415039062,
+      0.0,
+      641.3519287109375,
+      0.0,
+      908.5066528320312,
+      378.3876037597656,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "r": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "p": [
+      908.8550415039062,
+      0.0,
+      641.3519287109375,
+      0.0,
+      0.0,
+      908.5066528320312,
+      378.3876037597656,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ]
+  },
+  "capture_diagnostics": {
+    "message_stamp_delta_s": {
+      "color": 0.0,
+      "aligned_depth": 0.0,
+      "raw_depth": 0.0,
+      "overlay": null,
+      "color_info": 1.63270581,
+      "aligned_info": 1.63270581,
+      "imu": 0.487587628,
+      "joints": 0.003777801
+    },
+    "arm_motion_range_last_window_deg": 0.10000002384185797,
+    "arm_pose_delta_from_first_deg": 1.299999237060542,
+    "arm_pose_delta_warning": true
+  },
+  "physical_validation": {
+    "accepted": true,
+    "validated_at_local": "2026-08-27T17:33:00+08:00",
+    "descent_gripper_open": true,
+    "descent_reused_first_validated_joint_endpoint": true,
+    "fingers_reached_both_sides": true,
+    "object_contact_or_displacement": false,
+    "would_close_reliably": true,
+    "validated_by": "operator"
+  },
+  "zucchini_center_planning_m": [
+    0.013720266634340839,
+    0.3346381029717756,
+    -0.11133564579094413
+  ],
+  "zucchini_axis_direction_planning": [
+    -0.9970038680695192,
+    0.07683384433938041,
+    0.008935738271054929
+  ],
+  "zucchini_visible_length_m": 0.17327393118152376,
+  "zucchini_visible_width_m": 0.039367314750372695
+}

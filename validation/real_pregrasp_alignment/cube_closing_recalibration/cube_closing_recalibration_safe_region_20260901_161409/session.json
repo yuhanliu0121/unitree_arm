@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "session": "cube_closing_recalibration_safe_region_20260901_161409",
+  "object_class": "yellow_cube",
+  "boundary_order": [
+    "closing_side_a_1",
+    "closing_side_a_2",
+    "closing_side_a_3",
+    "closing_side_b_1",
+    "closing_side_b_2",
+    "closing_side_b_3"
+  ],
+  "samples": {
+    "closing_side_a_1": "1_closing_side_a_1/sample.json",
+    "closing_side_a_2": "2_closing_side_a_2/sample.json",
+    "closing_side_a_3": "3_closing_side_a_3/sample.json",
+    "closing_side_b_1": "4_closing_side_b_1/sample.json",
+    "closing_side_b_2": "5_closing_side_b_2/sample.json",
+    "closing_side_b_3": "6_closing_side_b_3/sample.json"
+  },
+  "status": "physically_validated",
+  "safe_region": "closing_recalibration.json"
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "session": "cube_safe_region_20260827_143339",
+  "boundary_order": [
+    "left_lower",
+    "left_upper",
+    "right_lower",
+    "right_upper"
+  ],
+  "samples": {
+    "left_lower": "1_left_lower/sample.json"
+  },
+  "status": "in_progress"
+}
