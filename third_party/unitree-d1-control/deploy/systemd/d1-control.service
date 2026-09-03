@@ -1,0 +1,15 @@
+[Unit]
+Description=Unitree D1 native timed-segment executor
+After=network.target
+Conflicts=marm_controller.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=D1_MIN_JOINT_INTERVAL_MS=10
+ExecStart=/home/ubuntu/marm_code/build/d1_control_node
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

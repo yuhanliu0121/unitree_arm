@@ -1,3 +1,0 @@
-[submodule "unitree-d1-control"]
-	path = third_party/unitree-d1-control
-	url = https://github.com/yuhanliu0121/unitree-d1-control.git

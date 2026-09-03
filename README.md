@@ -19,7 +19,7 @@ The action and status types live in `d1_interfaces`.
 | `scripts/` | Supported environment, real-machine bringup, preflight, and recovery entry points |
 | `tools/` | Calibration, validation, workspace analysis, and asset-generation utilities |
 | `docs/` | Architecture, calibration, experiment, and handoff documentation |
-| `third_party/` | Official D1 SDK files and the `unitree-d1-control` submodule |
+| `third_party/` | Official D1 SDK files and the in-tree `unitree-d1-control` component |
 
 Generated `build/`, `install/`, and `log/` trees remain at the workspace root
 and are ignored by Git.
