@@ -23,7 +23,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <shape_msgs/msg/solid_primitive.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_ros/buffer.h>
@@ -40,7 +39,6 @@ namespace d1_manipulation
 {
 namespace
 {
-constexpr char kGo2PlatformName[] = "go2_platform";
 const std::vector<std::string> kLegacySceneObjectNames{
   "yellow_cube", "bowl", "zucchini", "observe_target"};
 
@@ -71,26 +69,6 @@ geometry_msgs::msg::Pose poseMessage(const Eigen::Isometry3d& transform)
   message.orientation.z = quaternion.z();
   message.orientation.w = quaternion.w();
   return message;
-}
-
-moveit_msgs::msg::CollisionObject makeBox(
-  const std::string& id,
-  const std::string& frame,
-  const geometry_msgs::msg::Pose& pose,
-  double x,
-  double y,
-  double z)
-{
-  moveit_msgs::msg::CollisionObject object;
-  object.header.frame_id = frame;
-  object.id = id;
-  shape_msgs::msg::SolidPrimitive shape;
-  shape.type = shape_msgs::msg::SolidPrimitive::BOX;
-  shape.dimensions = {x, y, z};
-  object.primitives.push_back(shape);
-  object.primitive_poses.push_back(pose);
-  object.operation = moveit_msgs::msg::CollisionObject::ADD;
-  return object;
 }
 
 std_msgs::msg::ColorRGBA color(float r, float g, float b, float a)
@@ -140,7 +118,6 @@ public:
     stowed_tolerance_rad_ = parameterOrDeclare(node_, "stowed_tolerance_rad", 0.034906585);
     stowed_ = parameterOrDeclare(
       node_, "stowed_joint_positions", std::vector<double>{0.0, -1.54, 1.55, 0.0, 0.0, 0.0});
-    ground_surface_z_ = parameterOrDeclare(node_, "ground_surface_z_m", -0.225248769402);
 
     move_group_.setEndEffectorLink(link6_frame_);
     move_group_.setPoseReferenceFrame(planning_frame_);
@@ -332,9 +309,8 @@ private:
     return std::hypot(pixel_x - info.k[2], pixel_y - info.k[5]);
   }
 
-  void applyPlanningScene(const Eigen::Vector3d& target)
+  void clearLegacyTargetCollisionObjects()
   {
-    (void)target;
     // Simulation object truth is deliberately excluded from MoveIt.  Keep
     // MuJoCo's physical scene and RViz mesh markers independent from the
     // planning scene, and clear objects left by older server versions.
@@ -348,38 +324,6 @@ private:
     if (!stale_objects.empty()) {
       planning_scene_.removeCollisionObjects(stale_objects);
     }
-
-    geometry_msgs::msg::Pose identity;
-    identity.orientation.w = 1.0;
-    geometry_msgs::msg::Pose ground = identity;
-    ground.position.x = 0.3;
-    ground.position.z = ground_surface_z_ - 0.01;
-    std::vector<moveit_msgs::msg::CollisionObject> objects{
-      makeBox("ground", planning_frame_, ground, 2.0, 2.0, 0.02)};
-
-    std::vector<moveit_msgs::msg::ObjectColor> colors;
-    for (const auto& object : objects) {
-      moveit_msgs::msg::ObjectColor object_color;
-      object_color.id = object.id;
-      object_color.color = color(1.0F, 0.45F, 0.05F, 1.0F);
-      colors.push_back(object_color);
-    }
-    if (!planning_scene_.applyCollisionObjects(objects, colors)) {
-      throw std::runtime_error("failed to apply observation planning scene");
-    }
-
-    geometry_msgs::msg::Pose go2_pose = identity;
-    go2_pose.position.x = -0.044763;
-    go2_pose.position.z = -0.096688269402;
-    moveit_msgs::msg::AttachedCollisionObject go2;
-    go2.link_name = planning_frame_;
-    go2.object = makeBox(
-      kGo2PlatformName, planning_frame_, go2_pose, 0.753442, 0.338254, 0.255121);
-    go2.touch_links = {planning_frame_};
-    if (!planning_scene_.applyAttachedCollisionObject(go2)) {
-      throw std::runtime_error("failed to attach Go2 planning collision box");
-    }
-    std::this_thread::sleep_for(300ms);
   }
 
   bool isAtStowed()
@@ -483,7 +427,7 @@ private:
       const Eigen::Vector3d up = upInPlanningFrame();
       const Eigen::Isometry3d link6_from_camera = link6FromCamera();
       const auto camera_info = waitForCameraInfo();
-      applyPlanningScene(target);
+      clearLegacyTargetCollisionObjects();
       const auto candidates = generateObservationCandidates(
         target, up, beta_degrees_, alpha_degrees_, distances_m_);
 
@@ -629,7 +573,6 @@ private:
   double camera_settle_s_{};
   double max_target_pixel_error_{};
   double stowed_tolerance_rad_{};
-  double ground_surface_z_{};
 };
 }  // namespace d1_manipulation
 

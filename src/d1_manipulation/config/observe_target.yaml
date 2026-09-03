@@ -1,3 +1,14 @@
+d1_base_planning_scene:
+  ros__parameters:
+    planning_frame: base_link
+    ground_collision_id: ground
+    ground_surface_z_m: -0.225248769402
+    ground_centre_x_m: 0.3
+    ground_dimensions_m: [2.0, 2.0, 0.02]
+    go2_platform_collision_id: go2_platform
+    go2_platform_position_m: [-0.044763, 0.0, -0.096688269402]
+    go2_platform_dimensions_m: [0.753442, 0.338254, 0.255121]
+
 d1_observe_target:
   ros__parameters:
     action_name: /arm/internal/observe_target
@@ -29,10 +40,6 @@ d1_observe_target:
     real_joint_goal_timeout_padding_s: 3.0
     real_joint_goal_minimum_timeout_s: 5.0
     real_joint_goal_feedback_timeout_s: 1.5
-
-    # Temporary nominal ground used by MoveIt until the perception-fitted
-    # plane is promoted into the planning scene.
-    ground_surface_z_m: -0.225248769402
 
 d1_pick_object:
   ros__parameters:
@@ -147,6 +154,9 @@ d1_drop_object:
     gravity_frame: world
     arm_group: arm
     tcp_frame: tcp_link
+    go2_platform_collision_id: go2_platform
+    drop_keepout_margin_m: 0.050
+    base_scene_wait_timeout_s: 5.0
     height_offsets_m: [0.0, -0.010, 0.010, -0.020, 0.020, -0.030, 0.030, -0.040, 0.040, -0.050, 0.050, -0.060, 0.060, -0.080, 0.080]
     y_offsets_m: [0.0, 0.003, -0.003, 0.006, -0.006, 0.009, -0.009, 0.012, -0.012, 0.015, -0.015]
     yaw_offsets_degrees: [0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 75.0, -75.0, 90.0, -90.0]

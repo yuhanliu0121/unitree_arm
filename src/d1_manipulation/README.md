@@ -122,12 +122,21 @@ scene, and RViz retains the independent object-mesh visualization. A grasped
 object will be added from perception as an attached collision object rather
 than copied from simulation truth.
 
-The `carry` stage attaches the perception-estimated object to `tcp_link` for
-MoveIt collision checking, executes the configured CARRY joint pose, and then
-checks a fresh window of `Joint6` feedback. Its median position and the ratio
-of samples above the selected object's retention threshold determine whether
-the object still blocks the fingers from closing. MuJoCo object truth and
-wrist-camera appearance are not used by this verification.
+After `FINETUNE_GRASP` and live DESCEND confirmation, a managed pick performs a
+loaded-return precheck before the physical descent. It constructs the
+perception-estimated attached object in a hypothetical closed-gripper state,
+checks every LIFT waypoint, and plans plus validates the loaded
+`LIFT -> CARRY` route. A collision or unavailable route is therefore rejected
+while the gripper is still open; the arm recovers from PREGRASP to STOWED and
+returns `REPOSITION_REQUIRED`. A successful precheck is cached for execution.
+After physical closure, the object is attached to `tcp_link` before LIFT, then
+the cached LIFT and CARRY motions execute. Detailed failures identify
+`PRECHECK_LIFT` or `PRECHECK_CARRY` and include MoveIt contact pairs when
+available. At CARRY, a fresh window of `Joint6` feedback is checked. Its median
+position and the ratio of samples above the selected object's retention
+threshold determine whether the object still blocks the fingers from closing.
+MuJoCo object truth and wrist-camera appearance are not used by this
+verification.
 
 Gripper targets and retention thresholds are backend calibration, selected by
 the required launch profile. Simulation acceptance commands `-30 deg` for all
@@ -150,10 +159,20 @@ failure. Full tasks follow this contract:
 | Current state | Accepted task | Success state | Recoverable business failure |
 |---|---|---|---|
 | `READY_STOWED` | `PickObject` | `READY_CARRY` | collision-checked recovery to `READY_STOWED` |
+| `READY_STOWED` | `DropObject` (empty commissioning run) | `READY_STOWED` | remain/recover to `READY_STOWED` |
 | `READY_CARRY` | `DropObject` | `READY_STOWED` | recovery to `READY_CARRY` with payload retained |
 
+Every first transition into `FAULTED` is published on `/arm/task_status` and
+also emitted once as a prominent `RCLCPP_ERROR` containing `failure_code`,
+`detail`, active operation/phase, payload state, and canonical-pose state. This
+makes startup faults visible directly in the bringup terminal without requiring
+a separate topic echo.
+
 Startup remains `INITIALIZING` until fresh Joint0--Joint5 feedback verifies the
-canonical STOWED pose. If the arm starts within the configured 45-degree
+canonical STOWED pose and the common MoveIt base scene contains both the ground
+and attached `go2_platform` collision geometry. The base scene is initialized
+when the control stack starts, independently of Pick/Drop/observation requests.
+If the arm starts within the configured 45-degree
 per-joint near-STOWED envelope, the manager commands one bounded recovery target
 and verifies the resulting feedback; larger deviations enter `FAULTED` without
 motion. Stale joint feedback, cancellation, controller/TF/camera
@@ -161,10 +180,18 @@ failure, ambiguous payload state, or failed recovery enters terminal
 `FAULTED`. A fault stops/cancels the active command and does not enqueue a
 measured-position hold or another motion target. New pick/drop goals are then
 rejected. `PickObject` results reduce the caller decision to `SUCCESS`,
-`REPOSITION_REQUIRED`, or `ARM_FAULTED`; `DropObject` uses the same outcomes.
+`REPOSITION_REQUIRED`, or `ARM_FAULTED`. `DropObject` additionally returns
+`NEW_TARGET_REQUIRED` when the supplied drop reference is inside the platform
+keep-out. The arm returns to the stable state from which DROP began:
+`READY_STOWED/EMPTY` for an empty run or `READY_CARRY/HELD` for a held payload.
 Partial `stop_after` goals and the debug continuation services are commissioning
 tools and intentionally bypass the production task-state contract. They are
 rejected/absent unless launch explicitly sets `enable_commissioning_api:=true`.
+For production picks, the task-state transition is committed only after the
+Action accepted callback starts execution. A state conflict is returned as an
+aborted Action result with `failed_state=REQUEST` and a concrete `detail`, not
+as an opaque goal rejection; this also prevents a disconnected CLI client from
+leaving a state transition without a corresponding execution thread.
 The corresponding seed and calibration executables are installed only when
 building with `-DD1_BUILD_COMMISSIONING_TOOLS=ON`.
 
@@ -191,10 +218,11 @@ replace the physical emergency stop during real-machine tests.
 The external `d1_interfaces/action/DropObject` Action is served at
 `/arm/tasks/drop_object`. Its stamped target is
 the trash-bin bottom centre estimated by Go2. The production state contract
-accepts it only from `READY_CARRY`; the legacy empty-gripper path remains an
-internal commissioning behavior rather than a public precondition. When one
-held MoveIt object exists it is detached after release. More than one attached
-object is treated as an invalid planning-scene state. For reliable reachability and Go2 body clearance,
+accepts it from both `READY_CARRY` and `READY_STOWED`, allowing the same public
+API to run held-payload tasks and empty commissioning checks. The payload state
+must agree with MoveIt's `held/*` attached objects: `EMPTY` requires none and
+`HELD` requires exactly one; a mismatch faults rather than guessing. The held
+object is detached after release. For reliable reachability and Go2 body clearance,
 navigation should place the bin centre approximately 0.35--0.45 m
 horizontally from `base_link`; this is a recommendation rather than an Action
 precondition. The server searches the configured release candidates and only
@@ -211,9 +239,16 @@ At each height, the target is additionally searched along `base_link` Y using
 `0, +3, -3, ..., +15, -15 mm`; every height/Y pair uses yaw offsets
 `0, +15, -15, ..., +90, -90 deg` from the projected CARRY TCP x-axis. Every
 candidate is logged as an IK failure, planning failure, or success. The first
-release pose with a complete plan is executed. The server confirms that the gripper reached its fully open target,
+release pose with a safe round trip is executed. Before searching, the server
+derives the complete XY footprint of the attached `go2_platform` collision
+geometry and expands it by 50 mm. A requested bin centre inside this vertical
+keep-out is rejected without arm motion as `OUTCOME_NEW_TARGET_REQUIRED`; an
+offset candidate that crosses the boundary is skipped. Each remaining candidate
+must have both a collision-free outbound plan with the current gripper aperture
+and attached payload, and a collision-free `RELEASE -> STOWED` plan from a
+hypothetical fully-open, empty-gripper state. The server confirms that the gripper reached its fully open target,
 detaches the held object from MoveIt's gripper model, holds the physical gripper
-fully open for 0.5 seconds, and then plans directly to STOWED.
+fully open for 0.5 seconds, and then executes the prevalidated return to STOWED.
 
 Run the deterministic physical acceptance with:
 

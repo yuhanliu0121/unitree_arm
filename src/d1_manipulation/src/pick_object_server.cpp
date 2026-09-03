@@ -4,9 +4,11 @@
 #include <cmath>
 #include <future>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -19,9 +21,12 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
+#include <moveit_msgs/msg/attached_collision_object.hpp>
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <moveit_msgs/msg/object_color.hpp>
+#include <moveit_msgs/srv/get_state_validity.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -200,6 +205,8 @@ public:
 
     observe_client_ = rclcpp_action::create_client<Observe>(node_, observe_name_);
     detect_client_ = node_->create_client<srv::DetectTarget>(detect_name_);
+    state_validity_client_ = node_->create_client<moveit_msgs::srv::GetStateValidity>(
+      "/check_state_validity");
     arm_client_ = rclcpp_action::create_client<Arm>(
       node_, "/arm_controller/follow_joint_trajectory");
     segment_client_ = rclcpp_action::create_client<Segment>(
@@ -238,23 +245,6 @@ public:
         {
           return rclcpp_action::GoalResponse::REJECT;
         }
-        bool expected = false;
-        if (!pick_executing_.compare_exchange_strong(expected, true)) {
-          RCLCPP_WARN(node_->get_logger(), "Rejecting concurrent pick_object goal");
-          return rclcpp_action::GoalResponse::REJECT;
-        }
-        if (isManagedGoal(*goal)) {
-          const auto transition = task_state_client_.apply(
-            srv::ApplyTaskEvent::Request::START_PICK, "ENSURE_STOWED", {},
-            "Accepted full pick_object task");
-          if (!transition.accepted) {
-            pick_executing_.store(false);
-            RCLCPP_WARN(
-              node_->get_logger(), "Rejecting pick_object goal: %s", transition.detail.c_str());
-            return rclcpp_action::GoalResponse::REJECT;
-          }
-        }
-        cancel_.store(false);
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [this](const std::shared_ptr<PickHandle>) {
@@ -262,6 +252,19 @@ public:
         return rclcpp_action::CancelResponse::ACCEPT;
       },
       [this](const std::shared_ptr<PickHandle> handle) {
+        bool expected = false;
+        if (!pick_executing_.compare_exchange_strong(expected, true)) {
+          auto result = std::make_shared<Pick::Result>();
+          result->success = false;
+          result->outcome = Pick::Result::OUTCOME_ARM_FAULTED;
+          result->failure_category = Pick::Result::FAILURE_EXECUTION_ERROR;
+          result->failed_state = "REQUEST";
+          result->detail = "another pick_object task became active before this goal started";
+          result->returned_to_stowed = false;
+          handle->abort(result);
+          return;
+        }
+        cancel_.store(false);
         std::thread([this, handle]() { execute(handle); }).detach();
       });
     if (enable_commissioning_api_) {
@@ -660,6 +663,24 @@ private:
     return true;
   }
 
+  void abortBeforeTaskStart(
+    const std::shared_ptr<PickHandle>& handle,
+    const TaskStateEventResult& transition)
+  {
+    auto result = std::make_shared<Pick::Result>();
+    result->success = false;
+    result->outcome = Pick::Result::OUTCOME_ARM_FAULTED;
+    result->failure_category = Pick::Result::FAILURE_EXECUTION_ERROR;
+    result->failed_state = "REQUEST";
+    result->detail = "pick_object could not start: " + transition.detail;
+    result->returned_to_stowed =
+      transition.state == d1_interfaces::msg::ArmTaskStatus::READY_STOWED;
+    result->final_task_state = transition.state;
+    result->payload_state = transition.payload_state;
+    RCLCPP_ERROR(node_->get_logger(), "PICK NOT STARTED: %s", result->detail.c_str());
+    handle->abort(result);
+  }
+
   void fail(const std::shared_ptr<PickHandle>& handle, uint8_t category,
     const std::string& state, const std::string& detail, bool canceled = false)
   {
@@ -708,6 +729,12 @@ private:
       result->detail = detail + "; no further motion command was issued";
     }
     result->returned_to_stowed = returned;
+    RCLCPP_ERROR(
+      node_->get_logger(),
+      "PICK FAILED: category=%u failed_state=%s detail=%s returned_to_stowed=%s "
+      "action_status=%s",
+      static_cast<unsigned int>(category), state.c_str(), result->detail.c_str(),
+      returned ? "true" : "false", was_canceled ? "CANCELED" : "ABORTED");
     if (was_canceled) handle->canceled(result); else handle->abort(result);
   }
 
@@ -827,6 +854,14 @@ private:
     held,
     not_held,
     unavailable,
+  };
+
+  struct PickEscapePlan
+  {
+    moveit_msgs::msg::RobotTrajectory lift_trajectory;
+    moveit::planning_interface::MoveGroupInterface::Plan carry_plan;
+    moveit_msgs::msg::AttachedCollisionObject attached_object;
+    geometry_msgs::msg::PointStamped expected_held_center;
   };
 
   bool commandGripper(double position)
@@ -1098,15 +1133,239 @@ private:
     return true;
   }
 
-  bool attachEstimatedObject(
-    PickStrategy& strategy, const PreparedPick& pick,
-    geometry_msgs::msg::PointStamped& expected)
+  bool attachEstimatedObject(const moveit_msgs::msg::AttachedCollisionObject& attached)
   {
-    const auto attached = strategy.makeAttachedObject(pick, expected);
-    if (!planning_scene_.applyAttachedCollisionObject(attached)) {
+    if (!planning_scene_.applyAttachedCollisionObject(attached)) return false;
+    std::this_thread::sleep_for(500ms);
+    return true;
+  }
+
+  bool applyTrajectoryPoint(
+    moveit::core::RobotState& state,
+    const trajectory_msgs::msg::JointTrajectory& trajectory,
+    const trajectory_msgs::msg::JointTrajectoryPoint& point,
+    std::string& detail) const
+  {
+    if (trajectory.joint_names.empty() ||
+      point.positions.size() != trajectory.joint_names.size())
+    {
+      detail = "trajectory point has inconsistent joint names and positions";
       return false;
     }
-    std::this_thread::sleep_for(500ms);
+    const auto& model_variables = state.getRobotModel()->getVariableNames();
+    for (std::size_t index = 0; index < trajectory.joint_names.size(); ++index) {
+      const auto& name = trajectory.joint_names[index];
+      if (std::find(model_variables.begin(), model_variables.end(), name) ==
+        model_variables.end())
+      {
+        detail = "trajectory contains an unknown joint: " + name;
+        return false;
+      }
+      state.setVariablePosition(name, point.positions[index]);
+    }
+    state.update();
+    return true;
+  }
+
+  enum class StateValidityResult
+  {
+    valid,
+    invalid,
+    unavailable,
+  };
+
+  StateValidityResult checkHypotheticalState(
+    const moveit::core::RobotState& state,
+    const moveit_msgs::msg::AttachedCollisionObject& attached,
+    const std::string& label,
+    std::string& detail,
+    double allowed_ground_contact_depth = 0.0)
+  {
+    if (!state_validity_client_->wait_for_service(2s)) {
+      detail = "MoveIt /check_state_validity is unavailable while checking " + label;
+      return StateValidityResult::unavailable;
+    }
+    auto request = std::make_shared<moveit_msgs::srv::GetStateValidity::Request>();
+    moveit::core::robotStateToRobotStateMsg(state, request->robot_state);
+    request->robot_state.attached_collision_objects.push_back(attached);
+    request->group_name = move_group_.getName();
+    auto future = state_validity_client_->async_send_request(request);
+    if (future.wait_for(2s) != std::future_status::ready) {
+      detail = "MoveIt /check_state_validity timed out while checking " + label;
+      return StateValidityResult::unavailable;
+    }
+    const auto response = future.get();
+    if (response->valid) return StateValidityResult::valid;
+
+    const auto is_allowed_ground_contact = [&](const auto& contact) {
+        const bool matching_pair =
+          (contact.contact_body_1 == attached.object.id && contact.contact_body_2 == "ground") ||
+          (contact.contact_body_2 == attached.object.id && contact.contact_body_1 == "ground");
+        return matching_pair && contact.depth <= allowed_ground_contact_depth;
+      };
+    if (!response->contacts.empty() && allowed_ground_contact_depth > 0.0 &&
+      std::all_of(
+        response->contacts.begin(), response->contacts.end(), is_allowed_ground_contact))
+    {
+      RCLCPP_DEBUG(
+        node_->get_logger(),
+        "%s allows initial held-object/ground contact within %.1f mm",
+        label.c_str(), 1000.0 * allowed_ground_contact_depth);
+      return StateValidityResult::valid;
+    }
+
+    std::vector<std::string> contacts;
+    for (const auto& contact : response->contacts) {
+      const std::string pair = contact.contact_body_1 + "<->" + contact.contact_body_2;
+      if (std::find(contacts.begin(), contacts.end(), pair) == contacts.end()) {
+        contacts.push_back(pair);
+      }
+    }
+    std::ostringstream message;
+    message << label << " is in collision";
+    if (contacts.empty()) {
+      message << "; MoveIt did not report contact names";
+    } else {
+      message << "; contacts=[";
+      constexpr std::size_t kMaximumReportedContacts = 8;
+      const std::size_t count = std::min(contacts.size(), kMaximumReportedContacts);
+      for (std::size_t index = 0; index < count; ++index) {
+        if (index > 0) message << ", ";
+        message << contacts[index];
+      }
+      if (contacts.size() > count) message << ", ...";
+      message << "]";
+    }
+    detail = message.str();
+    return StateValidityResult::invalid;
+  }
+
+  bool validateTrajectoryWithAttachedObject(
+    const moveit::core::RobotState& seed,
+    const moveit_msgs::msg::RobotTrajectory& trajectory,
+    const moveit_msgs::msg::AttachedCollisionObject& attached,
+    double gripper_closed_position,
+    double allowed_ground_contact_depth,
+    const std::string& label,
+    StrategyFailure& failure,
+    moveit::core::RobotState& terminal_state)
+  {
+    const auto& joint_trajectory = trajectory.joint_trajectory;
+    if (joint_trajectory.points.empty()) {
+      failure = {Pick::Result::FAILURE_EXECUTION_ERROR, label,
+        label + " trajectory is empty"};
+      return false;
+    }
+    terminal_state = seed;
+    for (std::size_t index = 0; index < joint_trajectory.points.size(); ++index) {
+      std::string point_detail;
+      if (!applyTrajectoryPoint(
+          terminal_state, joint_trajectory, joint_trajectory.points[index], point_detail))
+      {
+        failure = {Pick::Result::FAILURE_EXECUTION_ERROR, label,
+          label + " trajectory is malformed: " + point_detail};
+        return false;
+      }
+      const auto& model_variables = terminal_state.getRobotModel()->getVariableNames();
+      if (std::find(model_variables.begin(), model_variables.end(), "Joint6") !=
+        model_variables.end())
+      {
+        terminal_state.setVariablePosition("Joint6", gripper_closed_position);
+        terminal_state.update();
+      }
+      std::string validity_detail;
+      const auto validity = checkHypotheticalState(
+        terminal_state, attached,
+        label + " sample " + std::to_string(index + 1) + "/" +
+        std::to_string(joint_trajectory.points.size()), validity_detail,
+        allowed_ground_contact_depth);
+      if (validity == StateValidityResult::valid) continue;
+      failure = StrategyFailure{
+        validity == StateValidityResult::invalid ?
+        Pick::Result::FAILURE_REPOSITION_REQUIRED : Pick::Result::FAILURE_EXECUTION_ERROR,
+        label, validity_detail};
+      return false;
+    }
+    return true;
+  }
+
+  bool preparePickEscapePlan(
+    PickStrategy& strategy,
+    const PreparedPick& pick,
+    PickEscapePlan& output,
+    StrategyFailure& failure)
+  {
+    output.lift_trajectory = reverseLiftTrajectory(
+      pick.descent_trajectory, pick.lift_direction, pick.lift_distance_m);
+    if (output.lift_trajectory.joint_trajectory.points.size() < 2) {
+      failure = {Pick::Result::FAILURE_EXECUTION_ERROR, "PRECHECK_LIFT",
+        "could not construct the hypothetical loaded LIFT trajectory"};
+      return false;
+    }
+    output.attached_object = strategy.makeAttachedObject(
+      pick, output.expected_held_center);
+
+    auto seed = move_group_.getCurrentState(2.0);
+    if (!seed) {
+      failure = {Pick::Result::FAILURE_EXECUTION_ERROR, "PRECHECK_LIFT",
+        "current MoveIt state is unavailable for loaded-return precheck"};
+      return false;
+    }
+    moveit::core::RobotState lift_terminal(*seed);
+    if (!validateTrajectoryWithAttachedObject(
+        *seed, output.lift_trajectory, output.attached_object, pick.gripper_closed_m,
+        cartesian_step_, "PRECHECK_LIFT", failure, lift_terminal))
+    {
+      return false;
+    }
+
+    const auto* joint_group = lift_terminal.getJointModelGroup(move_group_.getName());
+    if (!joint_group || carry_.size() != joint_group->getVariableCount()) {
+      failure = {Pick::Result::FAILURE_EXECUTION_ERROR, "PRECHECK_CARRY",
+        "CARRY target does not match the MoveIt arm joint group"};
+      return false;
+    }
+    moveit::core::RobotState carry_state(lift_terminal);
+    carry_state.setJointGroupPositions(joint_group, carry_);
+    carry_state.update();
+    std::string carry_state_detail;
+    const auto carry_validity = checkHypotheticalState(
+      carry_state, output.attached_object, "hypothetical loaded CARRY state",
+      carry_state_detail);
+    if (carry_validity != StateValidityResult::valid) {
+      failure = StrategyFailure{
+        carry_validity == StateValidityResult::invalid ?
+        Pick::Result::FAILURE_REPOSITION_REQUIRED : Pick::Result::FAILURE_EXECUTION_ERROR,
+        "PRECHECK_CARRY", carry_state_detail};
+      return false;
+    }
+
+    moveit_msgs::msg::RobotState lift_terminal_message;
+    moveit::core::robotStateToRobotStateMsg(lift_terminal, lift_terminal_message);
+    lift_terminal_message.attached_collision_objects.push_back(output.attached_object);
+    move_group_.setStartState(lift_terminal_message);
+    if (!move_group_.setJointValueTarget(carry_)) {
+      move_group_.setStartStateToCurrentState();
+      failure = {Pick::Result::FAILURE_THEORETICALLY_INFEASIBLE, "PRECHECK_CARRY",
+        "canonical CARRY is not a valid MoveIt joint target"};
+      return false;
+    }
+    const bool planned =
+      move_group_.plan(output.carry_plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    move_group_.setStartStateToCurrentState();
+    if (!planned) {
+      failure = {Pick::Result::FAILURE_REPOSITION_REQUIRED, "PRECHECK_CARRY",
+        "no collision-free loaded LIFT-to-CARRY route was found"};
+      return false;
+    }
+
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "Loaded-return precheck succeeded: checked LIFT samples=%zu; MoveIt planned "
+      "CARRY samples=%zu with object=%s attached",
+      output.lift_trajectory.joint_trajectory.points.size(),
+      output.carry_plan.trajectory_.joint_trajectory.points.size(),
+      output.attached_object.object.id.c_str());
     return true;
   }
 
@@ -1156,15 +1415,6 @@ private:
     }
     detail = "held collision object cleanup did not converge";
     return false;
-  }
-
-  bool moveToCarry()
-  {
-    move_group_.setStartStateToCurrentState();
-    if (!move_group_.setJointValueTarget(carry_)) return false;
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    return move_group_.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
-      executePlan(plan);
   }
 
   double gripperPositionToDegrees(double position_m) const
@@ -1327,6 +1577,15 @@ private:
     clearDebugPregrasp();
     try {
       const auto goal = handle->get_goal();
+      if (isManagedGoal(*goal)) {
+        const auto transition = task_state_client_.apply(
+          srv::ApplyTaskEvent::Request::START_PICK, "ENSURE_STOWED", {},
+          "Starting full pick_object task");
+        if (!transition.accepted) {
+          abortBeforeTaskStart(handle, transition);
+          return;
+        }
+      }
       feedback(handle, "ENSURE_STOWED", 0.02F, "Validating or recovering the canonical STOWED pose");
       std::string stowed_detail;
       if (!ensureStowed(stowed_detail)) {
@@ -1439,6 +1698,17 @@ private:
       RCLCPP_INFO(
         node_->get_logger(), "Confirmed grasp from live pregrasp: distance=%+.0f mm",
         1000.0 * prepared.grasp_distance_m);
+      std::optional<PickEscapePlan> escape_plan;
+      if (isManagedGoal(*goal)) {
+        feedback(handle, "PRECHECK_ESCAPE", 0.76F,
+          "Validating loaded LIFT and LIFT-to-CARRY route before grasp commitment");
+        escape_plan.emplace();
+        if (!preparePickEscapePlan(strategy, prepared, *escape_plan, strategy_failure)) {
+          fail(handle, strategy_failure.category, strategy_failure.state,
+            strategy_failure.detail);
+          return;
+        }
+      }
       feedback(handle, "DESCEND", 0.78F, "Executing strategy approach trajectory");
       if (!executeTrajectory(
           prepared.descent_trajectory, ExecutionOptions::commonArrival()))
@@ -1458,8 +1728,17 @@ private:
       if (!waitCancelable(prepared.grasp_settle_s)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "GRASP", "canceled", true); return;
       }
+      if (escape_plan) {
+        feedback(handle, "ATTACH_OBJECT", 0.92F,
+          "Attaching perception-estimated " + prepared.class_name + " before loaded LIFT");
+        if (!attachEstimatedObject(escape_plan->attached_object)) {
+          fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "ATTACH_OBJECT",
+            "failed to attach the prevalidated perception-estimated object to TCP");
+          return;
+        }
+      }
       feedback(handle, "LIFT", 0.95F, "Reversing the strategy approach trajectory");
-      auto lift_trajectory = reverseLiftTrajectory(
+      auto lift_trajectory = escape_plan ? escape_plan->lift_trajectory : reverseLiftTrajectory(
         prepared.descent_trajectory, prepared.lift_direction, prepared.lift_distance_m);
       if (lift_trajectory.joint_trajectory.points.size() < 2 || !executeTrajectory(lift_trajectory)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "LIFT", "Cartesian lift failed"); return;
@@ -1471,18 +1750,16 @@ private:
         RCLCPP_INFO(node_->get_logger(), "PICK STAGE SUCCEEDED: GRASP_AND_LIFT");
         return;
       }
-      feedback(handle, "ATTACH_OBJECT", 0.96F,
-        "Attaching perception-estimated " + prepared.class_name + " to TCP");
-      geometry_msgs::msg::PointStamped expected_held_center;
-      if (!attachEstimatedObject(strategy, prepared, expected_held_center)) {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "ATTACH_OBJECT",
-          "failed to attach perception-estimated object to TCP");
+      if (!escape_plan) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "PRECHECK_CARRY",
+          "managed pick reached CARRY without a prevalidated loaded-return plan");
         return;
       }
       feedback(handle, "CARRY", 0.98F,
-        "Moving grasped " + prepared.class_name + " to CARRY pose");
-      if (!moveToCarry()) {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "CARRY", "CARRY trajectory failed");
+        "Executing prevalidated loaded LIFT-to-CARRY route for " + prepared.class_name);
+      if (!executePlan(escape_plan->carry_plan)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "CARRY",
+          "execution of the prevalidated loaded LIFT-to-CARRY route failed");
         return;
       }
       feedback(handle, "VERIFY_GRASP", 0.99F,
@@ -1528,6 +1805,7 @@ private:
   rclcpp_action::Client<Arm>::SharedPtr arm_client_;
   rclcpp_action::Client<Segment>::SharedPtr segment_client_;
   rclcpp::Client<srv::DetectTarget>::SharedPtr detect_client_;
+  rclcpp::Client<moveit_msgs::srv::GetStateValidity>::SharedPtr state_validity_client_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_client_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
   rclcpp_action::Server<Pick>::SharedPtr server_;

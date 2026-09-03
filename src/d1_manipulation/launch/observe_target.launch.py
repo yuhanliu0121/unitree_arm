@@ -117,6 +117,12 @@ def _launch_setup(context):
         ),
         Node(
                 package="d1_manipulation",
+                executable="base_planning_scene_initializer",
+                output="screen",
+                parameters=[str(observe_config)],
+        ),
+        Node(
+                package="d1_manipulation",
                 executable="arm_task_state_manager",
                 output="screen",
                 parameters=[

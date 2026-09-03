@@ -13,7 +13,8 @@ struct Initializing {};
 struct ReadyStowed {};
 struct ReadyCarry {};
 struct Picking {};
-struct Dropping {};
+struct DroppingEmpty {};
+struct DroppingHeld {};
 struct RecoveringToStowed {};
 struct RecoveringToCarry {};
 struct Faulted {};
@@ -51,7 +52,11 @@ struct Definition
         value.snapshot = {ArmTaskState::PICKING, PayloadState::EMPTY,
           CanonicalPose::OTHER};
       };
-    const auto dropping = [](Context& value) {
+    const auto dropping_empty = [](Context& value) {
+        value.snapshot = {ArmTaskState::DROPPING, PayloadState::EMPTY,
+          CanonicalPose::OTHER};
+      };
+    const auto dropping_held = [](Context& value) {
         value.snapshot = {ArmTaskState::DROPPING, PayloadState::HELD,
           CanonicalPose::OTHER};
       };
@@ -78,9 +83,13 @@ struct Definition
          state<RecoveringToStowed>,
        state<RecoveringToStowed> + event<RecoverySucceeded> / ready_stowed =
          state<ReadyStowed>,
-       state<ReadyCarry> + event<StartDrop> / dropping = state<Dropping>,
-       state<Dropping> + event<DropSucceeded> / ready_stowed = state<ReadyStowed>,
-       state<Dropping> + event<DropRepositionRequired> / recovering_carry =
+       state<ReadyStowed> + event<StartDrop> / dropping_empty = state<DroppingEmpty>,
+       state<DroppingEmpty> + event<DropSucceeded> / ready_stowed = state<ReadyStowed>,
+       state<DroppingEmpty> + event<DropRepositionRequired> / recovering_stowed =
+         state<RecoveringToStowed>,
+       state<ReadyCarry> + event<StartDrop> / dropping_held = state<DroppingHeld>,
+       state<DroppingHeld> + event<DropSucceeded> / ready_stowed = state<ReadyStowed>,
+       state<DroppingHeld> + event<DropRepositionRequired> / recovering_carry =
          state<RecoveringToCarry>,
        state<RecoveringToCarry> + event<RecoverySucceeded> / ready_carry =
          state<ReadyCarry>,
@@ -88,7 +97,8 @@ struct Definition
        state<ReadyStowed> + event<Fault> / faulted = state<Faulted>,
        state<ReadyCarry> + event<Fault> / faulted = state<Faulted>,
        state<Picking> + event<Fault> / faulted = state<Faulted>,
-       state<Dropping> + event<Fault> / faulted = state<Faulted>,
+       state<DroppingEmpty> + event<Fault> / faulted = state<Faulted>,
+       state<DroppingHeld> + event<Fault> / faulted = state<Faulted>,
        state<RecoveringToStowed> + event<Fault> / faulted = state<Faulted>,
        state<RecoveringToCarry> + event<Fault> / faulted = state<Faulted>,
        state<Faulted> + event<Fault> / faulted = state<Faulted>
