@@ -74,6 +74,12 @@ def launch_setup(context):
     backend = LaunchConfiguration("backend").perform(context)
     if backend not in {"simulation", "real"}:
         raise RuntimeError(f"unsupported backend: {backend}")
+    bypass_text = LaunchConfiguration("joint6_bypass").perform(context).strip().lower()
+    if bypass_text not in {"true", "false"}:
+        raise RuntimeError("joint6_bypass must be true or false")
+    joint6_bypass = bypass_text == "true"
+    if joint6_bypass and backend != "real":
+        raise RuntimeError("joint6_bypass is a real-machine commissioning mode only")
     control_share = Path(get_package_share_directory("d1_ros2_control"))
     control_prefix = Path(get_package_prefix("d1_ros2_control"))
     description_share = Path(
@@ -108,9 +114,21 @@ def launch_setup(context):
     if requested_duration_ms < 0 or requested_duration_ms > 32767:
         raise RuntimeError("real_command_duration_ms must be in [0, 32767]")
     command_duration_ms = requested_duration_ms or int(round(1000.0 / command_rate_hz))
+    physical_command_port = int(LaunchConfiguration("command_port").perform(context))
+    physical_feedback_port = int(LaunchConfiguration("feedback_port").perform(context))
+    proxy_command_port = physical_command_port + 100
+    proxy_feedback_port = physical_feedback_port + 100
+    selected_ports = {
+        physical_command_port,
+        physical_feedback_port,
+        proxy_command_port,
+        proxy_feedback_port,
+    }
+    if any(port <= 0 or port > 65535 for port in selected_ports) or len(selected_ports) != 4:
+        raise RuntimeError("command/feedback ports cannot provide four distinct bypass ports")
     control_block = make_control_block(
-        LaunchConfiguration("command_port").perform(context),
-        LaunchConfiguration("feedback_port").perform(context),
+        str(physical_command_port),
+        str(physical_feedback_port),
         joint_limits,
         command_rate_hz,
         command_duration_ms,
@@ -128,6 +146,9 @@ def launch_setup(context):
     controllers = control_share / "config" / "controllers.yaml"
     rviz_config = description_share / "config" / "display.rviz"
     gateway = control_prefix / "lib" / "d1_ros2_control" / "d1_control_gateway"
+    bypass_proxy = (
+        control_prefix / "lib" / "d1_ros2_control" / "d1_joint6_bypass_proxy.py"
+    )
     gateway_common = [
         str(gateway),
         "--domain",
@@ -140,20 +161,22 @@ def launch_setup(context):
         "--direction", "command",
         "--command-topic", LaunchConfiguration("command_topic").perform(context),
         "--native-segment-topic", LaunchConfiguration("native_segment_topic").perform(context),
-        "--command-port", LaunchConfiguration("command_port").perform(context),
-        "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
+        "--command-port", str(physical_command_port),
+        "--feedback-port", str(physical_feedback_port),
     ]
     feedback_gateway_cmd = gateway_common + [
         "--direction", "feedback",
         "--feedback-topic", LaunchConfiguration("feedback_topic").perform(context),
-        "--command-port", LaunchConfiguration("command_port").perform(context),
-        "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
+        "--command-port", str(physical_command_port),
+        "--feedback-port", str(
+            proxy_feedback_port if joint6_bypass else physical_feedback_port
+        ),
     ]
     status_gateway_cmd = gateway_common + [
         "--direction", "status",
         "--status-topic", LaunchConfiguration("status_topic").perform(context),
-        "--command-port", LaunchConfiguration("command_port").perform(context),
-        "--feedback-port", LaunchConfiguration("feedback_port").perform(context),
+        "--command-port", str(physical_command_port),
+        "--feedback-port", str(physical_feedback_port),
     ]
 
     gateway_actions = [
@@ -174,6 +197,19 @@ def launch_setup(context):
             output="screen",
         ),
     ]
+    if joint6_bypass:
+        gateway_actions.append(ExecuteProcess(
+            cmd=[
+                str(bypass_proxy),
+                "--command-listen-port", str(proxy_command_port),
+                "--command-forward-port", str(physical_command_port),
+                "--feedback-listen-port", str(proxy_feedback_port),
+                "--feedback-forward-port", str(physical_feedback_port),
+                "--open-angle-deg",
+                LaunchConfiguration("gripper_open_angle_deg").perform(context),
+            ],
+            output="screen",
+        ))
     # The enhanced onboard executor publishes measured joints directly and
     # owns serial preparation. The vendor rt/arm_Feedback status publisher is
     # intentionally absent in this real backend.
@@ -208,7 +244,9 @@ def launch_setup(context):
             name="d1_joint_segment_controller",
             parameters=[{
                 "gateway_host": "127.0.0.1",
-                "command_port": int(LaunchConfiguration("command_port").perform(context)),
+                "command_port": (
+                    proxy_command_port if joint6_bypass else physical_command_port
+                ),
                 "native_joint_speed_deg_s": float(
                     LaunchConfiguration("native_joint_speed_deg_s").perform(context)
                 ),
@@ -319,6 +357,13 @@ def generate_launch_description():
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
             DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
             DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
+            DeclareLaunchArgument(
+                "joint6_bypass",
+                default_value="false",
+                description=(
+                    "Commissioning only: freeze physical Joint6 and simulate gripper feedback"
+                ),
+            ),
             DeclareLaunchArgument(
                 "rviz",
                 default_value="true",

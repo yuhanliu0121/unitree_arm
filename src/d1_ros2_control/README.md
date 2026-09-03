@@ -84,6 +84,32 @@ native-segment controller.
 interface. It bypasses the Action controller, so stop and restart the real
 control stack after using it before resuming task execution.
 
+## Temporary Joint6 bypass
+
+For empty-workspace commissioning with a mechanically unavailable gripper,
+the real bringup may be started with `--joint6-bypass`. A loopback proxy first
+latches the median of five stable physical Joint6 feedback samples. Every
+seven-joint command sent to the onboard executor then contains that frozen
+Joint6 angle, while Joint0--5 pass through unchanged.
+
+The proxy also supplies simulated gripper motion and retention feedback so the
+existing PICK/DROP state machine can be exercised without changing task code.
+Consequently, a successful task result in this mode proves only the perception,
+planning, arm-motion and state-machine paths; it does not prove physical grasp,
+retention or release. The mode is disabled by default and must not be used with
+an object between the fingers.
+
+```bash
+./scripts/real_bringup.zsh --rviz --joint6-bypass
+```
+
+On the same temporary branch, `arm_stowed_control.zsh` and
+`arm_zero_control.zsh` preserve Joint6 in both operating cases. With an active
+bypass stack they use the ROS controller; without a stack they sample a stable
+Joint6 angle and place it unchanged in the direct seven-joint command. They
+refuse motion if the feedback cannot be latched. `all_joints_unload.zsh`
+continues to unload all seven joints and does not send a position target.
+
 ## Build
 
 From the repository root:

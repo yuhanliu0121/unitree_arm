@@ -185,6 +185,7 @@ def _launch_setup(context):
             "gripper_closed_angle_deg": str(arm["gripper_closed_angle_deg"]),
             "gripper_open_angle_deg": str(arm["gripper_open_angle_deg"]),
             "gripper_travel_m": str(arm["gripper_travel_m"]),
+            "joint6_bypass": LaunchConfiguration("joint6_bypass"),
             "perception_model_path": str(perception_model),
         }.items(),
     )
@@ -240,5 +241,6 @@ def generate_launch_description():
         DeclareLaunchArgument("native_joint_speed_deg_s", default_value=""),
         DeclareLaunchArgument("real_command_rate_hz", default_value=""),
         DeclareLaunchArgument("real_command_duration_ms", default_value=""),
+        DeclareLaunchArgument("joint6_bypass", default_value="false"),
         OpaqueFunction(function=_launch_setup),
     ])

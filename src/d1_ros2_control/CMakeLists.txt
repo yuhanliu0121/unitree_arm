@@ -173,9 +173,19 @@ install(
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(
-  PROGRAMS scripts/d1_gripper_goal.py
+  PROGRAMS
+    scripts/d1_gripper_goal.py
+    scripts/d1_joint6_bypass_proxy.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(
+    test_joint6_bypass_proxy
+    test/test_joint6_bypass_proxy.py
+  )
+endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(

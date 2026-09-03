@@ -11,6 +11,7 @@ COMMAND_DURATION_MS=""
 JOINT_SPEED_DEG_S=""
 GRAVITY_CALIBRATION=""
 CAMERA_DRIVER_LOCATION=""
+JOINT6_BYPASS=false
 LAUNCH_PID=""
 
 launch_process_group_alive() {
@@ -55,7 +56,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 usage() {
-  print "Usage: ./scripts/real_bringup.zsh [--rviz] [--config PATH] [--arm-serial SERIAL] [--camera-driver-location local|remote] [--joint-speed-deg-s DEG_S] [--command-rate-hz HZ] [--command-duration-ms MS]"
+  print "Usage: ./scripts/real_bringup.zsh [--rviz] [--joint6-bypass] [--config PATH] [--arm-serial SERIAL] [--camera-driver-location local|remote] [--joint-speed-deg-s DEG_S] [--command-rate-hz HZ] [--command-duration-ms MS]"
   print ""
   print "Runs the motionless real-machine preflight first. Controllers, MoveIt,"
   print "camera perception, and task Actions start only after the preflight passes."
@@ -65,6 +66,10 @@ while (( $# > 0 )); do
   case "$1" in
     --rviz)
       LAUNCH_RVIZ=true
+      shift
+      ;;
+    --joint6-bypass)
+      JOINT6_BYPASS=true
       shift
       ;;
     --config)
@@ -213,7 +218,12 @@ LAUNCH_ARGS=(
   "gravity_calibration:=${GRAVITY_CALIBRATION}"
   "launch_rviz:=${LAUNCH_RVIZ}"
   "camera_driver_location:=${EFFECTIVE_CAMERA_DRIVER_LOCATION}"
+  "joint6_bypass:=${JOINT6_BYPASS}"
 )
+if [[ "${JOINT6_BYPASS}" == true ]]; then
+  print -u2 "*** JOINT6 BYPASS REQUESTED: gripper motion and retention will be simulated ***"
+  print -u2 "*** EMPTY-WORKSPACE COMMISSIONING ONLY; this is not a physical grasp test ***"
+fi
 [[ -z "${COMMAND_RATE_HZ}" ]] || LAUNCH_ARGS+=("real_command_rate_hz:=${COMMAND_RATE_HZ}")
 [[ -z "${COMMAND_DURATION_MS}" ]] || LAUNCH_ARGS+=("real_command_duration_ms:=${COMMAND_DURATION_MS}")
 [[ -z "${JOINT_SPEED_DEG_S}" ]] || LAUNCH_ARGS+=("native_joint_speed_deg_s:=${JOINT_SPEED_DEG_S}")

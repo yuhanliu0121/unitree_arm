@@ -113,6 +113,7 @@ def _launch_setup(context):
                     "gripper_closed_angle_deg": LaunchConfiguration("gripper_closed_angle_deg"),
                     "gripper_open_angle_deg": LaunchConfiguration("gripper_open_angle_deg"),
                     "gripper_travel_m": LaunchConfiguration("gripper_travel_m"),
+                    "joint6_bypass": LaunchConfiguration("joint6_bypass"),
                 }.items(),
         ),
         Node(
@@ -236,6 +237,7 @@ def generate_launch_description():
             DeclareLaunchArgument("gripper_closed_angle_deg", default_value="-30.0"),
             DeclareLaunchArgument("gripper_open_angle_deg", default_value="60.0"),
             DeclareLaunchArgument("gripper_travel_m", default_value="0.03"),
+            DeclareLaunchArgument("joint6_bypass", default_value="false"),
             OpaqueFunction(function=_launch_setup),
         ]
     )
