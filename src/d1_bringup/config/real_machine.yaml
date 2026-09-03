@@ -44,6 +44,7 @@ arm:
     ssh_password: "123"
     service_name: d1-control.service
     executable_path: /home/ubuntu/marm_code/build/d1_control_node
+    version_manifest_path: /home/ubuntu/marm_code/build/d1-control-release.env
     expected_version: 0.1.0
     connect_timeout_s: 3
   feedback_topic: current_servo_angle

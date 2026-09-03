@@ -15,8 +15,11 @@ import yaml
 from d1_bringup.local_protocol import PACKET_VERSION
 
 
-IDENTITY_PATTERN = re.compile(
-    r"^d1_control_node version=(?P<version>[^\s]+) protocol=(?P<protocol>\d+)$"
+VERSION_PATTERN = re.compile(
+    r"^D1_CONTROL_VERSION=(?P<version>[^\s]+)$", re.MULTILINE
+)
+PROTOCOL_PATTERN = re.compile(
+    r"^D1_CONTROL_PROTOCOL=(?P<protocol>\d+)$", re.MULTILINE
 )
 
 
@@ -27,6 +30,7 @@ class OnboardCheckConfig:
     ssh_password: str
     service_name: str
     executable_path: str
+    version_manifest_path: str
     expected_version: str
     connect_timeout_s: int
 
@@ -36,7 +40,12 @@ def load_check_config(config_path: Path) -> OnboardCheckConfig:
     arm = config.get("arm", {})
     onboard = arm.get("onboard_control", {})
     required = {
-        "host", "ssh_user", "service_name", "executable_path", "expected_version"
+        "host",
+        "ssh_user",
+        "service_name",
+        "executable_path",
+        "version_manifest_path",
+        "expected_version",
     }
     missing = sorted(
         name for name in required if not str(onboard.get(name, "")).strip()
@@ -56,6 +65,7 @@ def load_check_config(config_path: Path) -> OnboardCheckConfig:
         ssh_password=str(onboard.get("ssh_password", "")),
         service_name=str(onboard["service_name"]).strip(),
         executable_path=str(onboard["executable_path"]).strip(),
+        version_manifest_path=str(onboard["version_manifest_path"]).strip(),
         expected_version=str(onboard["expected_version"]).strip(),
         connect_timeout_s=timeout,
     )
@@ -64,10 +74,16 @@ def load_check_config(config_path: Path) -> OnboardCheckConfig:
 def _remote_command(config: OnboardCheckConfig) -> str:
     service = shlex.quote(config.service_name)
     executable = shlex.quote(config.executable_path)
+    manifest = shlex.quote(config.version_manifest_path)
     return (
         f"state=$(systemctl is-active {service} 2>&1 || true); "
         'printf "SERVICE_STATE=%s\\n" "$state"; '
-        f'[ "$state" = active ] || exit 20; exec {executable} --version'
+        f'[ "$state" = active ] || exit 20; '
+        f'[ -x {executable} ] || '
+        f'{{ printf "EXECUTOR_MISSING=%s\\n" {executable}; exit 21; }}; '
+        f'[ -r {manifest} ] || '
+        f'{{ printf "MANIFEST_MISSING=%s\\n" {manifest}; exit 22; }}; '
+        f"cat {manifest}"
     )
 
 
@@ -126,22 +142,15 @@ def check_onboard_sdk(config: OnboardCheckConfig) -> str:
         raise RuntimeError(
             f"onboard SDK check command failed (exit {result.returncode}): {output}"
         )
-    identity = next(
-        (
-            line.strip()
-            for line in result.stdout.splitlines()
-            if line.startswith("d1_control_node ")
-        ),
-        "",
-    )
-    match = IDENTITY_PATTERN.fullmatch(identity)
-    if not match:
+    version_match = VERSION_PATTERN.search(result.stdout)
+    protocol_match = PROTOCOL_PATTERN.search(result.stdout)
+    if not version_match or not protocol_match:
         raise RuntimeError(
-            "onboard executor did not report a valid identity; it may be an old or "
-            f"incompatible binary: {identity or output}"
+            "onboard release manifest is missing or invalid; the board may contain "
+            f"an old or incomplete deployment: {output}"
         )
-    actual_version = match.group("version")
-    actual_protocol = int(match.group("protocol"))
+    actual_version = version_match.group("version")
+    actual_protocol = int(protocol_match.group("protocol"))
     if actual_version != config.expected_version or actual_protocol != PACKET_VERSION:
         raise RuntimeError(
             "onboard SDK version mismatch: "

@@ -18,8 +18,9 @@ not production APIs.
 
 `real_bringup.zsh` first performs a one-shot SSH check of the configured D1
 board. It requires the configured systemd service to be active and the
-installed `d1_control_node --version` result to match both the expected
-software version and the host protocol version. Only then does the existing
+installed executable plus its deployment release manifest to exist. The
+manifest must match both the expected software version and the host protocol
+version. The checker never launches the board executable. Only then does the existing
 motionless sensor/feedback preflight run. Password-based board access uses the
 Ubuntu `sshpass` package; key-based access can be selected by leaving
 `arm.onboard_control.ssh_password` empty.

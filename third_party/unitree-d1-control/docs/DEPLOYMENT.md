@@ -23,8 +23,11 @@ The installed executable supports a motionless identity query:
 /home/ubuntu/marm_code/build/d1_control_node --version
 ```
 
-The host bringup requires its semantic version and local protocol version to
-match the checked-in deployment configuration before activating controllers.
+Deployment must copy `deploy/d1-control-release.env` beside the executable as
+`/home/ubuntu/marm_code/build/d1-control-release.env`. The host startup reads
+this manifest rather than launching an unknown board binary, then requires its
+semantic version and local protocol version to match the checked-in deployment
+configuration before activating controllers.
 
 ## Validation order
 

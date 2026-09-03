@@ -5,6 +5,11 @@ import pytest
 import yaml
 
 from d1_bringup import onboard_sdk_check
+from d1_bringup.local_protocol import PACKET_VERSION
+
+
+PACKAGE_PATH = Path(__file__).resolve().parents[1]
+WORKSPACE_PATH = PACKAGE_PATH.parents[1]
 
 
 def _configuration(**overrides):
@@ -14,6 +19,7 @@ def _configuration(**overrides):
         "ssh_password": "123",
         "service_name": "d1-control.service",
         "executable_path": "/home/ubuntu/marm_code/build/d1_control_node",
+        "version_manifest_path": "/home/ubuntu/marm_code/build/d1-control-release.env",
         "expected_version": "0.1.0",
         "connect_timeout_s": 3,
     }
@@ -29,6 +35,24 @@ def test_load_check_config_requires_deployment_identity(tmp_path):
         onboard_sdk_check.load_check_config(path)
 
 
+def test_checked_in_release_identity_matches_host_and_real_config():
+    release_path = (
+        WORKSPACE_PATH
+        / "third_party/unitree-d1-control/deploy/d1-control-release.env"
+    )
+    release = dict(
+        line.split("=", 1)
+        for line in release_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    real_config = onboard_sdk_check.load_check_config(
+        PACKAGE_PATH / "config/real_machine.yaml"
+    )
+
+    assert release["D1_CONTROL_VERSION"] == real_config.expected_version
+    assert int(release["D1_CONTROL_PROTOCOL"]) == PACKET_VERSION
+
+
 def test_active_matching_executor_passes(monkeypatch):
     monkeypatch.setattr(
         onboard_sdk_check.shutil, "which", lambda name: f"/usr/bin/{name}"
@@ -40,7 +64,8 @@ def test_active_matching_executor_passes(monkeypatch):
             returncode=0,
             stdout=(
                 "SERVICE_STATE=active\n"
-                "d1_control_node version=0.1.0 protocol=2\n"
+                "D1_CONTROL_VERSION=0.1.0\n"
+                "D1_CONTROL_PROTOCOL=2\n"
             ),
             stderr="",
         ),
@@ -73,8 +98,8 @@ def test_inactive_service_fails_with_specific_reason(monkeypatch):
 @pytest.mark.parametrize(
     "identity",
     [
-        "d1_control_node version=0.0.9 protocol=2",
-        "d1_control_node version=0.1.0 protocol=1",
+        "D1_CONTROL_VERSION=0.0.9\nD1_CONTROL_PROTOCOL=2",
+        "D1_CONTROL_VERSION=0.1.0\nD1_CONTROL_PROTOCOL=1",
     ],
 )
 def test_version_or_protocol_mismatch_fails(monkeypatch, identity):
