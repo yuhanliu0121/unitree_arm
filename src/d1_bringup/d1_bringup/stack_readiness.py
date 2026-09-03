@@ -16,6 +16,7 @@ from std_msgs.msg import Bool
 
 
 GREEN = "\033[1;92m"
+YELLOW = "\033[1;93m"
 RED = "\033[1;91m"
 RESET = "\033[0m"
 
@@ -25,6 +26,7 @@ class StackReadiness(Node):
         super().__init__("d1_stack_readiness")
         self.declare_parameter("timeout_s", 60.0)
         self.declare_parameter("freshness_s", 2.0)
+        self.declare_parameter("joint6_bypass", False)
         self.declare_parameter("joint_states_topic", "/joint_states")
         self.declare_parameter(
             "color_camera_info_topic", "/wrist_camera/color/camera_info"
@@ -153,6 +155,15 @@ class StackReadiness(Node):
                 "************************************************************"
             )
             print(f"{GREEN}{banner}{RESET}", flush=True)
+            if bool(self.get_parameter("joint6_bypass").value):
+                bypass_banner = (
+                    "\n************************************************************\n"
+                    "* JOINT6 BYPASS ACTIVE                                     *\n"
+                    "* Physical Joint6 is frozen; gripper actions are simulated *\n"
+                    "* EMPTY-WORKSPACE COMMISSIONING ONLY                       *\n"
+                    "************************************************************"
+                )
+                print(f"{YELLOW}{bypass_banner}{RESET}", flush=True)
             self.ready = True
             return
 

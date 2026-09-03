@@ -633,8 +633,13 @@ private:
       detail = "collision-free recovery plan to STOWED was unavailable";
       return false;
     }
-    if (!executePlan(plan) || !isStowed()) {
-      detail = "recovery trajectory did not reach canonical STOWED";
+    if (!executePlan(plan)) {
+      detail = "recovery planning succeeded, but execution failed: " +
+        executionFailureDetail();
+      return false;
+    }
+    if (!isStowed()) {
+      detail = "recovery execution reported success, but feedback is outside canonical STOWED tolerance";
       return false;
     }
     detail = "arm recovered to canonical STOWED through a collision-checked plan";
@@ -813,13 +818,15 @@ public:
   }
 
   bool moveCameraTopDown(
-    const Eigen::Vector3d& target, const Eigen::Vector3d& up) override
+    const Eigen::Vector3d& target, const Eigen::Vector3d& up,
+    StrategyFailure& failure) override
   {
     Eigen::Vector3d camera_z = -up;
     Eigen::Vector3d reference = Eigen::Vector3d::UnitX() - Eigen::Vector3d::UnitX().dot(camera_z) * camera_z;
     if (reference.norm() < 1e-6) reference = Eigen::Vector3d::UnitY() - Eigen::Vector3d::UnitY().dot(camera_z) * camera_z;
     reference.normalize();
     const Eigen::Isometry3d link6_from_camera = lookup(link6_frame_, camera_frame_);
+    std::size_t ik_candidates = 0U;
     for (const double distance : top_distances_) {
       for (const double roll_deg : top_rolls_) {
         const Eigen::Vector3d image_up = Eigen::AngleAxisd(roll_deg * M_PI / 180.0, camera_z) * reference;
@@ -834,16 +841,36 @@ public:
         move_group_.setEndEffectorLink(link6_frame_);
         move_group_.setStartStateToCurrentState();
         if (!move_group_.setJointValueTarget(poseMessage(planning_from_link6), link6_frame_)) continue;
+        ++ik_candidates;
         moveit::planning_interface::MoveGroupInterface::Plan plan;
         if (move_group_.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) continue;
         RCLCPP_INFO(node_->get_logger(), "Top observation candidate: distance=%.2f roll=%.1f deg", distance, roll_deg);
-        if (!executePlan(plan)) return false;
+        if (!executePlan(plan)) {
+          move_group_.setEndEffectorLink(tcp_frame_);
+          failure = {
+            Pick::Result::FAILURE_EXECUTION_ERROR,
+            "MOVE_TOP_OBSERVE",
+            "top observation planning succeeded, but execution failed: " +
+            executionFailureDetail()};
+          return false;
+        }
         move_group_.setEndEffectorLink(tcp_frame_);
         std::this_thread::sleep_for(std::chrono::duration<double>(camera_settle_));
         return true;
       }
     }
     move_group_.setEndEffectorLink(tcp_frame_);
+    std::ostringstream detail;
+    if (ik_candidates == 0U) {
+      detail << "no IK-valid top observation pose among "
+             << top_distances_.size() * top_rolls_.size() << " candidates";
+    } else {
+      detail << "IK succeeded for " << ik_candidates
+             << " top observation candidate(s), but MoveIt found no collision-free plan";
+    }
+    failure = {
+      Pick::Result::FAILURE_THEORETICALLY_INFEASIBLE,
+      "MOVE_TOP_OBSERVE", detail.str()};
     return false;
   }
 
@@ -919,18 +946,26 @@ private:
     const moveit::planning_interface::MoveGroupInterface::Plan& plan,
     const ExecutionOptions& options)
   {
+    last_execution_failure_detail_.clear();
     if (backend_ == "simulation") {
-      return move_group_.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+      const auto result = move_group_.execute(plan);
+      if (result == moveit::core::MoveItErrorCode::SUCCESS) return true;
+      last_execution_failure_detail_ =
+        "MoveIt trajectory execution failed with error code " +
+        std::to_string(result.val);
+      return false;
     }
     const auto& trajectory = plan.trajectory_.joint_trajectory;
     if (trajectory.joint_names.size() != 6 || trajectory.points.empty() ||
       trajectory.points.back().positions.size() != trajectory.joint_names.size())
     {
       RCLCPP_ERROR(node_->get_logger(), "Cannot execute malformed real-arm endpoint");
+      last_execution_failure_detail_ = "real-arm endpoint trajectory is malformed";
       return false;
     }
     if (!segment_client_->wait_for_action_server(5s)) {
       RCLCPP_ERROR(node_->get_logger(), "Explicit D1 joint-segment action is unavailable");
+      last_execution_failure_detail_ = "D1 joint-segment action server is unavailable";
       return false;
     }
     Segment::Goal goal;
@@ -948,11 +983,19 @@ private:
       options.motion_profile == Segment::Goal::COMMON_ARRIVAL ?
       "common_arrival" : "uniform_joint_speed", options.speed_deg_s);
     auto sent = segment_client_->async_send_goal(goal);
-    if (sent.wait_for(5s) != std::future_status::ready || !sent.get()) {
-      RCLCPP_ERROR(node_->get_logger(), "Explicit D1 joint segment was rejected");
+    if (sent.wait_for(5s) != std::future_status::ready) {
+      RCLCPP_ERROR(node_->get_logger(), "Explicit D1 joint segment goal response timed out");
+      last_execution_failure_detail_ =
+        "timed out waiting for the local D1 joint-segment action to accept the target";
       return false;
     }
     const auto segment_goal = sent.get();
+    if (!segment_goal) {
+      RCLCPP_ERROR(node_->get_logger(), "Explicit D1 joint segment was rejected");
+      last_execution_failure_detail_ =
+        "local D1 joint-segment action rejected the target before dispatch";
+      return false;
+    }
     {
       std::lock_guard<std::mutex> lock(active_goals_mutex_);
       active_segment_goal_ = segment_goal;
@@ -963,6 +1006,7 @@ private:
         segment_client_->async_cancel_goal(segment_goal);
         std::lock_guard<std::mutex> lock(active_goals_mutex_);
         active_segment_goal_.reset();
+        last_execution_failure_detail_ = "D1 joint-segment execution was canceled";
         return false;
       }
     }
@@ -974,12 +1018,24 @@ private:
     if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED ||
       !wrapped.result || !wrapped.result->success)
     {
+      const std::string controller_detail =
+        wrapped.result && !wrapped.result->detail.empty() ?
+        wrapped.result->detail : "controller returned no diagnostic detail";
       RCLCPP_ERROR(
         node_->get_logger(), "Explicit D1 joint segment failed: %s",
-        wrapped.result ? wrapped.result->detail.c_str() : "no result");
+        controller_detail.c_str());
+      last_execution_failure_detail_ =
+        "local target dispatch completed, but execution did not succeed: " +
+        controller_detail + "; root cause undetermined";
       return false;
     }
     return true;
+  }
+
+  const std::string& executionFailureDetail() const
+  {
+    static const std::string unavailable = "no execution diagnostic was recorded";
+    return last_execution_failure_detail_.empty() ? unavailable : last_execution_failure_detail_;
   }
 
   bool executeTrajectory(moveit_msgs::msg::RobotTrajectory message)
@@ -990,8 +1046,13 @@ private:
   bool executeTrajectory(
     moveit_msgs::msg::RobotTrajectory message, const ExecutionOptions& options)
   {
+    last_execution_failure_detail_.clear();
     auto state = move_group_.getCurrentState(2.0);
-    if (!state) return false;
+    if (!state) {
+      last_execution_failure_detail_ =
+        "current MoveIt joint state is unavailable before trajectory execution";
+      return false;
+    }
     if (!message.joint_trajectory.points.empty()) {
       auto& first = message.joint_trajectory.points.front();
       first.positions.resize(message.joint_trajectory.joint_names.size());
@@ -1004,7 +1065,12 @@ private:
     robot_trajectory::RobotTrajectory trajectory(move_group_.getRobotModel(), "arm");
     trajectory.setRobotTrajectoryMsg(*state, message);
     if (!retimeAndSmoothTrajectory(
-        trajectory, 0.15, 0.15, node_->get_logger(), "pick_cartesian")) return false;
+        trajectory, 0.15, 0.15, node_->get_logger(), "pick_cartesian"))
+    {
+      last_execution_failure_detail_ =
+        "trajectory retiming or smoothing failed before dispatch";
+      return false;
+    }
     trajectory.getRobotTrajectoryMsg(message);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     plan.trajectory_ = std::move(message);
@@ -1652,10 +1718,15 @@ private:
         handle->succeed(result); return;
       }
       feedback(handle, "MOVE_PREGRASP", 0.65F, "Executing selected pregrasp plan");
-      if (!commandGripper(prepared.gripper_open_m) ||
-        !executePlan(prepared.pregrasp_plan))
-      {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "pregrasp execution failed"); return;
+      if (!commandGripper(prepared.gripper_open_m)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP",
+          "gripper failed to open before pregrasp motion");
+        return;
+      }
+      if (!executePlan(prepared.pregrasp_plan)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP",
+          "pregrasp planning succeeded, but execution failed: " + executionFailureDetail());
+        return;
       }
       if (cancel_.load() || handle->is_canceling()) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "MOVE_PREGRASP", "canceled", true); return;
@@ -1713,7 +1784,9 @@ private:
       if (!executeTrajectory(
           prepared.descent_trajectory, ExecutionOptions::commonArrival()))
       {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND", "Cartesian descent failed"); return;
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND",
+          "Cartesian descent execution failed: " + executionFailureDetail());
+        return;
       }
       if (cancel_.load() || handle->is_canceling()) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "DESCEND", "canceled", true); return;
@@ -1740,8 +1813,15 @@ private:
       feedback(handle, "LIFT", 0.95F, "Reversing the strategy approach trajectory");
       auto lift_trajectory = escape_plan ? escape_plan->lift_trajectory : reverseLiftTrajectory(
         prepared.descent_trajectory, prepared.lift_direction, prepared.lift_distance_m);
-      if (lift_trajectory.joint_trajectory.points.size() < 2 || !executeTrajectory(lift_trajectory)) {
-        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "LIFT", "Cartesian lift failed"); return;
+      if (lift_trajectory.joint_trajectory.points.size() < 2) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "LIFT",
+          "Cartesian lift trajectory could not be constructed");
+        return;
+      }
+      if (!executeTrajectory(lift_trajectory)) {
+        fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "LIFT",
+          "Cartesian lift execution failed: " + executionFailureDetail());
+        return;
       }
       if (goal->stop_after == Pick::Goal::GRASP_AND_LIFT) {
         result->success = true; result->failure_category = Pick::Result::FAILURE_NONE;
@@ -1759,7 +1839,8 @@ private:
         "Executing prevalidated loaded LIFT-to-CARRY route for " + prepared.class_name);
       if (!executePlan(escape_plan->carry_plan)) {
         fail(handle, Pick::Result::FAILURE_EXECUTION_ERROR, "CARRY",
-          "execution of the prevalidated loaded LIFT-to-CARRY route failed");
+          "prevalidated loaded LIFT-to-CARRY route execution failed: " +
+          executionFailureDetail());
         return;
       }
       feedback(handle, "VERIFY_GRASP", 0.99F,
@@ -1846,6 +1927,7 @@ private:
   int gripper_verify_min_samples_{};
   std::mutex gripper_samples_mutex_;
   std::vector<std::pair<std::chrono::steady_clock::time_point, double>> gripper_samples_;
+  std::string last_execution_failure_detail_;
 };
 }  // namespace d1_manipulation
 

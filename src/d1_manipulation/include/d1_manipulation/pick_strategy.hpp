@@ -66,7 +66,9 @@ public:
   virtual const std::string& cameraFrame() const = 0;
   virtual Eigen::Vector3d gravityUp() = 0;
   virtual Eigen::Isometry3d lookup(const std::string& target, const std::string& source) = 0;
-  virtual bool moveCameraTopDown(const Eigen::Vector3d& target, const Eigen::Vector3d& up) = 0;
+  virtual bool moveCameraTopDown(
+    const Eigen::Vector3d& target, const Eigen::Vector3d& up,
+    StrategyFailure& failure) = 0;
   virtual bool applyEstimatedGround(const Eigen::Vector3d& normal, double offset) = 0;
   virtual bool removeTargetCollision(const std::vector<std::string>& ids) = 0;
   virtual bool restoreTargetCollision(

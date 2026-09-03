@@ -751,14 +751,23 @@ private:
           !motion_started && now >= next_start_deadline)
         {
           if (no_motion_retries >= no_motion_max_retries_) {
+            const double elapsed_s = std::chrono::duration<double>(now - started).count();
+            std::ostringstream detail;
+            detail << std::fixed << std::setprecision(2)
+                   << "native target dispatched " << no_motion_retries + 1
+                   << " times; fresh joint feedback continued, but Joint0..5 showed only "
+                   << directed_progress_rad * kRadiansToDegrees
+                   << " deg target-directed progress over " << elapsed_s
+                   << " s (required " << arm_motion_start_progress_deg_
+                   << " deg); root cause undetermined";
             RCLCPP_ERROR(
               get_logger(),
               "Arm did not start after %d send attempts over %.3f s; final_deg=%s",
               no_motion_retries + 1,
-              std::chrono::duration<double>(now - started).count(),
+              elapsed_s,
               degreesString(armPositions(current)).c_str());
             return {
-              SegmentStatus::failed, "D1 arm target produced no observed motion",
+              SegmentStatus::failed, detail.str(),
               maximum_error_rad};
           }
           ++no_motion_retries;

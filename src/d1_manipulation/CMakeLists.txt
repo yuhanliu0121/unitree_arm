@@ -233,6 +233,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_arm_task_state_machine arm_task_state_machine)
   ament_add_pytest_test(test_perception_adapter test/test_perception_adapter.py)
   ament_add_pytest_test(test_gripper_profiles test/test_gripper_profiles.py)
+  ament_add_pytest_test(test_failure_diagnostics test/test_failure_diagnostics.py)
   ament_add_pytest_test(test_safe_region_calibration test/test_safe_region_calibration.py)
 endif()
 

@@ -195,6 +195,7 @@ def _launch_setup(context):
         executable="stack_readiness",
         name="d1_stack_readiness",
         parameters=[{
+            "joint6_bypass": LaunchConfiguration("joint6_bypass"),
             "color_camera_info_topic": camera["color_camera_info_topic"],
             "aligned_depth_camera_info_topic": camera[
                 "aligned_depth_camera_info_topic"

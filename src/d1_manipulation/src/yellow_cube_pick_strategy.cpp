@@ -211,9 +211,7 @@ public:
         "ESTIMATE_POSE", "failed to apply perception-fitted ground to MoveIt"};
       return false;
     }
-    if (!runtime_.moveCameraTopDown(coarse_center, gravity_up)) {
-      failure = {d1_interfaces::action::PickObject::Result::FAILURE_THEORETICALLY_INFEASIBLE,
-        "MOVE_TOP_OBSERVE", "top observation pose is not plannable"};
+    if (!runtime_.moveCameraTopDown(coarse_center, gravity_up, failure)) {
       return false;
     }
     const auto fine = estimate(
