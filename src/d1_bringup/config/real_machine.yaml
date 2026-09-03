@@ -35,6 +35,17 @@ arm:
   # The thin onboard native-segment executor is deployed as its own systemd service; the
   # untouched vendor service has been exercised as the rollback path.
   onboard_control_deployed: true
+  # A one-shot SSH check verifies this exact service and executable before any
+  # ROS controller is activated. The subsequent preflight still requires fresh
+  # joint feedback, so both deployment identity and the live data path are checked.
+  onboard_control:
+    host: 192.168.123.100
+    ssh_user: ubuntu
+    ssh_password: "123"
+    service_name: d1-control.service
+    executable_path: /home/ubuntu/marm_code/build/d1_control_node
+    expected_version: 0.1.0
+    connect_timeout_s: 3
   feedback_topic: current_servo_angle
   status_topic: rt/arm_Feedback
   loopback_command_port: 15100

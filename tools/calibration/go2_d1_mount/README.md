@@ -20,8 +20,7 @@ official Go2 `base` frame to the D1 `base_link` frame.
 ## Build the scene
 
 ```zsh
-source /home/tony/miniconda3/etc/profile.d/conda.sh
-conda activate trash_collection
+source ./scripts/setup_dev_env.zsh
 python tools/calibration/go2_d1_mount/convert_meshes.py
 blender --background --factory-startup \
   --python tools/calibration/go2_d1_mount/build_mount_scene.py

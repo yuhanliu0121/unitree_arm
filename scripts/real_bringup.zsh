@@ -195,7 +195,10 @@ PREFLIGHT_ARGS=(
 )
 [[ -z "${CAMERA_DRIVER_LOCATION}" ]] || PREFLIGHT_ARGS+=("camera_driver_location:=${CAMERA_DRIVER_LOCATION}")
 
-print "[1/2] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
+print "[1/3] Verifying the D1 onboard SDK service and protocol version..."
+ros2 run d1_bringup check_onboard_sdk --config "${CONFIG_PATH}"
+
+print "[2/3] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
 "${SCRIPT_DIR}/real_preflight.zsh" "${PREFLIGHT_ARGS[@]}"
 
 EFFECTIVE_CAMERA_DRIVER_LOCATION=${CAMERA_DRIVER_LOCATION}
@@ -209,7 +212,7 @@ else
   print "Remote RealSense selected; keeping the external camera publisher running."
 fi
 
-print "[2/2] Preflight passed; starting physical control, MoveIt, perception, and task Actions..."
+print "[3/3] Preflight passed; starting physical control, MoveIt, perception, and task Actions..."
 print "Press Ctrl+C to stop the stack and all of its child processes."
 print "No pick/drop motion starts automatically."
 LAUNCH_ARGS=(

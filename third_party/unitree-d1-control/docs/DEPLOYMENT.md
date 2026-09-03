@@ -17,6 +17,14 @@ PID has exited before starting the new executable.
 Install `deploy/systemd/d1-control.service` as
 `/etc/systemd/system/d1-control.service`. The enhanced and vendor
 services conflict explicitly, so only one process can own `/dev/ttyS4`.
+The installed executable supports a motionless identity query:
+
+```bash
+/home/ubuntu/marm_code/build/d1_control_node --version
+```
+
+The host bringup requires its semantic version and local protocol version to
+match the checked-in deployment configuration before activating controllers.
 
 ## Validation order
 

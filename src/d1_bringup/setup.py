@@ -23,6 +23,7 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "check_onboard_sdk = d1_bringup.onboard_sdk_check:main",
             "real_preflight = d1_bringup.real_preflight:main",
             "recover_stowed = d1_bringup.recover_stowed:main",
             "stack_readiness = d1_bringup.stack_readiness:main",

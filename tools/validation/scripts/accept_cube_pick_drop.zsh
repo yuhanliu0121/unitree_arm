@@ -3,7 +3,11 @@
 set -eo pipefail
 
 workspace=${0:A:h:h:h:h}
-conda_bin=/home/tony/miniconda3/bin/conda
+source ${workspace}/scripts/lib/environment.zsh
+d1_resolve_conda_executable || exit 1
+conda_bin=${REPLY}
+d1_resolve_ros_setup || exit 1
+ros_setup=${REPLY}
 headless=false
 rviz=false
 object=cube
@@ -36,7 +40,7 @@ else
   pick_client=pick_seed_cube
 fi
 
-source /opt/ros/humble/setup.zsh
+source ${ros_setup}
 source ${workspace}/install/setup.zsh
 set -u
 export PYTHONPATH="${workspace}/simulation/d1_mujoco_sim/src${PYTHONPATH:+:${PYTHONPATH}}"

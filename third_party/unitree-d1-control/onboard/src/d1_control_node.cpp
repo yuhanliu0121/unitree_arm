@@ -11,6 +11,7 @@
 #include "FashionStar/UServo/FashionStar_UartServoProtocol.h"
 
 #include "d1_control/joint_interval.hpp"
+#include "d1_control/local_protocol.hpp"
 
 #include <algorithm>
 #include <array>
@@ -436,8 +437,19 @@ private:
 
 }  // namespace
 
-int main()
+int main(int argc, char ** argv)
 {
+  if (argc == 2 && std::string(argv[1]) == "--version")
+  {
+    std::cout << "d1_control_node version=" << D1_CONTROL_BUILD_VERSION
+              << " protocol=" << d1_control::kLocalProtocolVersion << std::endl;
+    return 0;
+  }
+  if (argc != 1)
+  {
+    std::cerr << "Usage: d1_control_node [--version]" << std::endl;
+    return 2;
+  }
   ::signal(SIGINT, request_stop);
   ::signal(SIGTERM, request_stop);
   try

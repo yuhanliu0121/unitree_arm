@@ -3,10 +3,7 @@ set -eo pipefail
 
 SCRIPT_DIR=${0:A:h}
 WORKSPACE=${SCRIPT_DIR:h}
-source /opt/ros/humble/setup.zsh
-if [[ -f "${WORKSPACE}/install/setup.zsh" ]]; then
-  source "${WORKSPACE}/install/setup.zsh"
-fi
+source "${SCRIPT_DIR}/setup_dev_env.zsh"
 set -u
 
 # Must match src/d1_bringup/config/real_machine.yaml. Keeping this explicit avoids

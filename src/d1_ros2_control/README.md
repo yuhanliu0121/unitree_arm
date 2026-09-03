@@ -129,18 +129,16 @@ source install/setup.zsh
 Terminal 1:
 
 ```bash
-source /home/tony/miniconda3/etc/profile.d/conda.sh
-conda activate trash_collection
-cd /home/tony/Project/unitree_arm/dev
+cd <workspace-root>
+source ./scripts/setup_dev_env.zsh
 d1-mujoco-sim
 ```
 
 Terminal 2:
 
 ```bash
-cd /home/tony/Project/unitree_arm/dev
-source /opt/ros/humble/setup.zsh
-source install/setup.zsh
+cd <workspace-root>
+source ./scripts/setup_dev_env.zsh
 ros2 launch d1_ros2_control control.launch.py backend:=simulation
 ```
 

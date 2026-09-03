@@ -23,10 +23,9 @@ emulates the D1 arm's native Cyclone DDS service.
 From the repository root:
 
 ```bash
-source /home/tony/miniconda3/etc/profile.d/conda.sh
-conda activate trash_collection
+source ./scripts/setup_dev_env.zsh
 export PYTHONNOUSERSITE=1
-pip install -e ./d1_mujoco_sim
+pip install -e ./simulation/d1_mujoco_sim
 d1-mujoco-sim
 ```
 

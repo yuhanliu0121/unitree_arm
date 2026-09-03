@@ -164,6 +164,9 @@ if(D1_CONTROL_BUILD_ONBOARD)
     ${D1_OFFICIAL_MSG_DIR}/SetServoDumping_.cpp
   )
   d1_control_configure_unitree_target(d1_control_node)
+  target_compile_definitions(
+    d1_control_node PRIVATE D1_CONTROL_BUILD_VERSION="${PROJECT_VERSION}"
+  )
   target_include_directories(d1_control_node PRIVATE ${FASHIONSTAR_INCLUDE_DIR})
   target_link_libraries(
     d1_control_node PRIVATE ${FASHIONSTAR_LIBRARY} ${CSERIALPORT_LIBRARY}
