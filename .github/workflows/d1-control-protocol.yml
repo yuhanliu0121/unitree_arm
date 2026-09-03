@@ -1,0 +1,28 @@
+name: d1-control-protocol
+
+on:
+  push:
+    paths:
+      - "third_party/unitree-d1-control/**"
+      - ".github/workflows/d1-control-protocol.yml"
+  pull_request:
+    paths:
+      - "third_party/unitree-d1-control/**"
+      - ".github/workflows/d1-control-protocol.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure dependency-free tests
+        run: >-
+          cmake -S third_party/unitree-d1-control
+          -B build/d1-control-protocol
+          -DD1_CONTROL_BUILD_HOST=OFF
+          -DD1_CONTROL_BUILD_ONBOARD=OFF
+          -DD1_CONTROL_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build/d1-control-protocol -j2
+      - name: Test
+        run: ctest --test-dir build/d1-control-protocol --output-on-failure
