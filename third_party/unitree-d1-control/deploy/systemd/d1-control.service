@@ -1,7 +1,7 @@
 [Unit]
 Description=Unitree D1 native timed-segment executor
 After=network.target
-Conflicts=marm_controller.service
+Conflicts=marm_controller.service d1-streaming-controller.service
 
 [Service]
 Type=simple

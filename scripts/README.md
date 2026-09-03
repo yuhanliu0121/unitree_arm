@@ -22,8 +22,9 @@ installed executable plus its deployment release manifest to exist. The
 manifest must match both the expected software version and the host protocol
 version. The checker never launches the board executable. Only then does the existing
 motionless sensor/feedback preflight run. Password-based board access uses the
-Ubuntu `sshpass` package; key-based access can be selected by leaving
-`arm.onboard_control.ssh_password` empty.
+Ubuntu `sshpass` package as a fallback after key authentication. It is not
+needed when a valid SSH key is already installed. Key-only access can be
+required by leaving `arm.onboard_control.ssh_password` empty.
 
 ## Portable environment configuration
 

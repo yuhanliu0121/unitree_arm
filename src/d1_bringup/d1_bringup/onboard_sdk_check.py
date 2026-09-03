@@ -87,7 +87,7 @@ def _remote_command(config: OnboardCheckConfig) -> str:
     )
 
 
-def _ssh_command(config: OnboardCheckConfig):
+def _ssh_command(config: OnboardCheckConfig, use_password=False):
     ssh = shutil.which("ssh")
     if not ssh:
         raise RuntimeError("ssh is not installed")
@@ -98,11 +98,12 @@ def _ssh_command(config: OnboardCheckConfig):
         "-o", "StrictHostKeyChecking=accept-new",
     ]
     environment = os.environ.copy()
-    if config.ssh_password:
+    if use_password:
         sshpass = shutil.which("sshpass")
         if not sshpass:
             raise RuntimeError(
-                "sshpass is required because arm.onboard_control.ssh_password is configured"
+                "SSH key authentication failed and sshpass is not installed for the "
+                "configured arm.onboard_control.ssh_password fallback"
             )
         command = [sshpass, "-e", *command, "-o", "BatchMode=no"]
         environment["SSHPASS"] = config.ssh_password
@@ -115,9 +116,9 @@ def _ssh_command(config: OnboardCheckConfig):
     return command, environment
 
 
-def check_onboard_sdk(config: OnboardCheckConfig) -> str:
-    command, environment = _ssh_command(config)
-    result = subprocess.run(
+def _run_remote_check(config: OnboardCheckConfig, use_password=False):
+    command, environment = _ssh_command(config, use_password=use_password)
+    return subprocess.run(
         command,
         env=environment,
         capture_output=True,
@@ -125,6 +126,12 @@ def check_onboard_sdk(config: OnboardCheckConfig) -> str:
         timeout=config.connect_timeout_s + 3,
         check=False,
     )
+
+
+def check_onboard_sdk(config: OnboardCheckConfig) -> str:
+    result = _run_remote_check(config)
+    if result.returncode == 255 and config.ssh_password:
+        result = _run_remote_check(config, use_password=True)
     output = "\n".join(
         part.strip() for part in (result.stdout, result.stderr) if part.strip()
     )

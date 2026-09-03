@@ -126,6 +126,40 @@ def test_configured_password_requires_sshpass(monkeypatch):
         "which",
         lambda name: "/usr/bin/ssh" if name == "ssh" else None,
     )
+    monkeypatch.setattr(
+        onboard_sdk_check.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=255,
+            stdout="",
+            stderr="Permission denied (publickey,password)",
+        ),
+    )
 
-    with pytest.raises(RuntimeError, match="sshpass is required"):
+    with pytest.raises(RuntimeError, match="sshpass is not installed"):
         onboard_sdk_check.check_onboard_sdk(_configuration())
+
+
+def test_configured_password_is_not_needed_when_key_authentication_works(monkeypatch):
+    monkeypatch.setattr(
+        onboard_sdk_check.shutil,
+        "which",
+        lambda name: "/usr/bin/ssh" if name == "ssh" else None,
+    )
+    monkeypatch.setattr(
+        onboard_sdk_check.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "SERVICE_STATE=active\n"
+                "D1_CONTROL_VERSION=0.1.0\n"
+                "D1_CONTROL_PROTOCOL=2\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    result = onboard_sdk_check.check_onboard_sdk(_configuration())
+
+    assert "service=d1-control.service active" in result
