@@ -136,6 +136,9 @@ def test_drop_search_expands_from_nominal_height_and_y():
     common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
     parameters = common["d1_drop_object"]["ros__parameters"]
     assert parameters["start_state_bounds_tolerance_rad"] == pytest.approx(0.1)
+    assert parameters["go2_platform_collision_id"] == "go2_platform"
+    assert parameters["drop_keepout_margin_m"] == pytest.approx(0.05)
+    assert parameters["base_scene_wait_timeout_s"] == pytest.approx(5.0)
     assert parameters["height_offsets_m"] == pytest.approx(
         [
             0.0, -0.010, 0.010, -0.020, 0.020, -0.030, 0.030,
@@ -149,3 +152,86 @@ def test_drop_search_expands_from_nominal_height_and_y():
             -0.009, 0.012, -0.012, 0.015, -0.015,
         ]
     )
+
+
+def test_drop_requires_round_trip_and_exposes_new_target_result():
+    source = (SOURCE / "drop_object_server.cpp").read_text()
+    action = (
+        Path(__file__).resolve().parents[2]
+        / "d1_interfaces"
+        / "action"
+        / "DropObject.action"
+    ).read_text()
+
+    assert "FAILURE_TARGET_IN_KEEP_OUT=5" in action
+    assert "OUTCOME_NEW_TARGET_REQUIRED=3" in action
+    assert "getAttachedObjects({go2_platform_collision_id_})" in source
+    assert "planOpenEmptyReturn(plan, held_ids" in source
+    assert "ROUND_TRIP_SUCCEEDED" in source
+    assert "executePlan(return_plan)" in source
+    assert "drop_start_payload_.store(transition.payload_state)" in source
+    assert "task payload and MoveIt held-object state disagree" in source
+    assert "RECOVERING_TO_STOWED" in source
+    assert "RECOVERING_TO_CARRY" in source
+
+
+def test_base_planning_scene_is_initialized_at_stack_start():
+    common = yaml.safe_load((CONFIG / "observe_target.yaml").read_text())
+    parameters = common["d1_base_planning_scene"]["ros__parameters"]
+    launch = (SOURCE.parent / "launch" / "observe_target.launch.py").read_text()
+    observer = (SOURCE / "observe_target_server.cpp").read_text()
+
+    assert parameters["ground_collision_id"] == "ground"
+    assert parameters["go2_platform_collision_id"] == "go2_platform"
+    assert parameters["go2_platform_dimensions_m"] == pytest.approx(
+        [0.753442, 0.338254, 0.255121]
+    )
+    assert 'executable="base_planning_scene_initializer"' in launch
+    assert "failed to attach Go2 planning collision box" not in observer
+
+
+def test_pick_prevalidates_loaded_lift_and_carry_before_descending():
+    source = (SOURCE / "pick_object_server.cpp").read_text()
+
+    precheck = source.index('feedback(handle, "PRECHECK_ESCAPE"')
+    descend = source.index('feedback(handle, "DESCEND"', precheck)
+    grasp = source.index('feedback(handle, "GRASP"', descend)
+    attach = source.index('feedback(handle, "ATTACH_OBJECT"', grasp)
+    lift = source.index('feedback(handle, "LIFT"', attach)
+    carry = source.index('feedback(handle, "CARRY"', lift)
+
+    assert precheck < descend < grasp < attach < lift < carry
+    assert "validateTrajectoryWithAttachedObject" in source
+    assert "hypothetical loaded CARRY state" in source
+    assert "no collision-free loaded LIFT-to-CARRY route was found" in source
+    assert "executePlan(escape_plan->carry_plan)" in source
+    assert "PICK FAILED: category=%u failed_state=%s detail=%s" in source
+
+
+def test_pick_state_transition_occurs_only_after_action_execution_starts():
+    source = (SOURCE / "pick_object_server.cpp").read_text()
+
+    goal_callback = source[
+        source.index("server_ = rclcpp_action::create_server<Pick>("):
+        source.index("debug_service_callback_group_", source.index(
+            "server_ = rclcpp_action::create_server<Pick>("
+        ))
+    ]
+    execute = source[source.index("void execute("):]
+
+    assert "START_PICK" not in goal_callback
+    assert execute.index("START_PICK") < execute.index(
+        'feedback(handle, "ENSURE_STOWED"'
+    )
+    assert "abortBeforeTaskStart(handle, transition)" in execute
+    assert "pick_object could not start:" in source
+
+
+def test_task_state_manager_logs_each_fault_once_with_diagnostics():
+    source = (SOURCE / "arm_task_state_manager.cpp").read_text()
+
+    assert "snapshot.state == ArmTaskState::FAULTED && !fault_logged_" in source
+    assert "***** ARM ENTERED FAULTED *****" in source
+    assert "failure_code=%s detail=%s" in source
+    assert "active_operation=%s active_phase=%s" in source
+    assert "bool fault_logged_{false};" in source

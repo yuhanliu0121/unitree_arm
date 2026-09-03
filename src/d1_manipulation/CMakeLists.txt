@@ -117,6 +117,11 @@ ament_target_dependencies(observe_target_server
   visualization_msgs
 )
 
+add_executable(base_planning_scene_initializer src/base_planning_scene_initializer.cpp)
+target_compile_features(base_planning_scene_initializer PRIVATE cxx_std_17)
+ament_target_dependencies(base_planning_scene_initializer
+  geometry_msgs moveit_msgs moveit_ros_planning_interface rclcpp shape_msgs std_msgs)
+
 add_executable(pick_object_server
   src/pick_object_server.cpp
   src/yellow_cube_pick_strategy.cpp
@@ -188,7 +193,8 @@ install(TARGETS arm_task_state_machine task_state_client
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
 )
-install(TARGETS arm_task_state_manager observe_target_server pick_object_server drop_object_server
+install(TARGETS arm_task_state_manager base_planning_scene_initializer
+  observe_target_server pick_object_server drop_object_server
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)

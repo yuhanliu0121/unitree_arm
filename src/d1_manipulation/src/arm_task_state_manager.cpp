@@ -10,6 +10,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
@@ -59,6 +60,13 @@ public:
     joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
       "/joint_states", rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::JointState::SharedPtr message) {onJointState(*message);});
+    base_scene_subscription_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "/arm/planning_scene_ready", rclcpp::QoS(1).reliable().transient_local(),
+      [this](std_msgs::msg::Bool::SharedPtr message) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        base_scene_ready_ = message->data;
+        completeInitializationIfReadyLocked();
+      });
     health_timer_ = node_->create_wall_timer(100ms, [this]() {checkHealth();});
     initialization_started_ = std::chrono::steady_clock::now();
     publishStatus("Waiting for verified STOWED joint feedback");
@@ -98,12 +106,24 @@ private:
       stowed = stowed && delta <= stowed_tolerance_;
     }
     latest_maximum_delta_ = maximum_delta;
-    if (!stowed) return;
+    stowed_verified_ = stowed;
+    completeInitializationIfReadyLocked();
+  }
+
+  void completeInitializationIfReadyLocked()
+  {
+    if (machine_.snapshot().state != ArmTaskState::INITIALIZING ||
+      !stowed_verified_ || !base_scene_ready_)
+    {
+      return;
+    }
     if (machine_.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED)) {
       failure_code_.clear();
       active_operation_.clear();
       active_phase_.clear();
-      detail_ = "Verified canonical STOWED feedback; startup assumes an empty gripper";
+      detail_ =
+        "Verified canonical STOWED feedback and base planning scene; "
+        "startup assumes an empty gripper";
       publishStatusLocked();
     }
   }
@@ -115,7 +135,7 @@ private:
     const auto state = machine_.snapshot().state;
     if (state == ArmTaskState::FAULTED) return;
     if (state == ArmTaskState::INITIALIZING) {
-      if (feedback_received_ && !startup_recovery_requested_) {
+      if (feedback_received_ && !stowed_verified_ && !startup_recovery_requested_) {
         if (latest_maximum_delta_ > startup_recovery_max_delta_) {
           machine_.process(ArmTaskEvent::INITIALIZATION_FAILED);
           failure_code_ = "STARTUP_POSE_OUT_OF_RECOVERY_RANGE";
@@ -131,9 +151,13 @@ private:
       {
         machine_.process(ArmTaskEvent::INITIALIZATION_FAILED);
         failure_code_ = "INITIALIZATION_TIMEOUT";
-        detail_ = feedback_received_ ?
-          "Joint feedback arrived but canonical STOWED was not verified" :
-          "Joint feedback was unavailable during initialization";
+        if (!feedback_received_) {
+          detail_ = "Joint feedback was unavailable during initialization";
+        } else if (!stowed_verified_) {
+          detail_ = "Joint feedback arrived but canonical STOWED was not verified";
+        } else {
+          detail_ = "Canonical STOWED was verified but the base planning scene was not ready";
+        }
         publishStatusLocked();
       }
       return;
@@ -261,6 +285,19 @@ private:
   void publishStatusLocked()
   {
     const auto snapshot = machine_.snapshot();
+    if (snapshot.state == ArmTaskState::FAULTED && !fault_logged_) {
+      RCLCPP_ERROR(
+        node_->get_logger(),
+        "***** ARM ENTERED FAULTED ***** failure_code=%s detail=%s "
+        "active_operation=%s active_phase=%s payload_state=%u canonical_pose=%u",
+        failure_code_.empty() ? "UNSPECIFIED" : failure_code_.c_str(),
+        detail_.empty() ? "No diagnostic detail was provided" : detail_.c_str(),
+        active_operation_.empty() ? "none" : active_operation_.c_str(),
+        active_phase_.empty() ? "none" : active_phase_.c_str(),
+        static_cast<unsigned int>(snapshot.payload),
+        static_cast<unsigned int>(snapshot.pose));
+      fault_logged_ = true;
+    }
     d1_interfaces::msg::ArmTaskStatus message;
     message.stamp = node_->now();
     message.state = static_cast<std::uint8_t>(snapshot.state);
@@ -283,7 +320,10 @@ private:
   double startup_recovery_max_delta_{};
   double startup_recovery_duration_s_{};
   bool feedback_received_{false};
+  bool stowed_verified_{false};
+  bool base_scene_ready_{false};
   bool startup_recovery_requested_{false};
+  bool fault_logged_{false};
   double latest_maximum_delta_{0.0};
   std::chrono::steady_clock::time_point initialization_started_;
   std::chrono::steady_clock::time_point last_feedback_;
@@ -294,6 +334,7 @@ private:
   rclcpp::Publisher<d1_interfaces::msg::ArmTaskStatus>::SharedPtr status_publisher_;
   rclcpp::Service<srv::ApplyTaskEvent>::SharedPtr event_service_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr base_scene_subscription_;
   rclcpp_action::Client<Arm>::SharedPtr arm_client_;
   rclcpp::TimerBase::SharedPtr health_timer_;
 };

@@ -5,8 +5,14 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import CameraInfo, JointState
+from std_msgs.msg import Bool
 
 
 GREEN = "\033[1;92m"
@@ -54,6 +60,7 @@ class StackReadiness(Node):
         self.joint_names = set()
         self.last_color_info = None
         self.last_depth_info = None
+        self.base_planning_scene_ready = False
         self.timeout_reported = False
         self.ready = False
 
@@ -62,6 +69,16 @@ class StackReadiness(Node):
             str(self.get_parameter("joint_states_topic").value),
             self._on_joint_state,
             qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Bool,
+            "/arm/planning_scene_ready",
+            self._on_planning_scene_ready,
+            QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
         )
         self.create_subscription(
             CameraInfo,
@@ -87,6 +104,9 @@ class StackReadiness(Node):
     def _on_depth_info(self, _message):
         self.last_depth_info = time.monotonic()
 
+    def _on_planning_scene_ready(self, message):
+        self.base_planning_scene_ready = bool(message.data)
+
     def _missing(self):
         now = time.monotonic()
         freshness = float(self.get_parameter("freshness_s").value)
@@ -103,6 +123,8 @@ class StackReadiness(Node):
             missing.append("wrist RGB CameraInfo")
         if self.last_depth_info is None or now - self.last_depth_info > freshness:
             missing.append("wrist aligned-depth CameraInfo")
+        if not self.base_planning_scene_ready:
+            missing.append("base MoveIt planning scene (ground and Go2 platform)")
 
         available_services = {
             name for name, _types in self.get_service_names_and_types()

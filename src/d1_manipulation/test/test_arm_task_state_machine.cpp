@@ -38,15 +38,47 @@ TEST(ArmTaskStateMachine, RecoverableFailuresReachCanonicalReadyStates)
   EXPECT_EQ(machine.snapshot().state, ArmTaskState::READY_CARRY);
 }
 
+TEST(ArmTaskStateMachine, EmptyDropReturnsToReadyStowed)
+{
+  ArmTaskStateMachine machine;
+  ASSERT_TRUE(machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));
+  ASSERT_TRUE(machine.process(ArmTaskEvent::START_DROP));
+  EXPECT_EQ(machine.snapshot().state, ArmTaskState::DROPPING);
+  EXPECT_EQ(machine.snapshot().payload, PayloadState::EMPTY);
+  ASSERT_TRUE(machine.process(ArmTaskEvent::DROP_SUCCEEDED));
+  EXPECT_EQ(machine.snapshot().state, ArmTaskState::READY_STOWED);
+  EXPECT_EQ(machine.snapshot().payload, PayloadState::EMPTY);
+}
+
+TEST(ArmTaskStateMachine, EmptyDropRecoverableFailureReturnsToReadyStowed)
+{
+  ArmTaskStateMachine machine;
+  ASSERT_TRUE(machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));
+  ASSERT_TRUE(machine.process(ArmTaskEvent::START_DROP));
+  ASSERT_TRUE(machine.process(ArmTaskEvent::DROP_REPOSITION_REQUIRED));
+  EXPECT_EQ(machine.snapshot().state, ArmTaskState::RECOVERING_TO_STOWED);
+  EXPECT_EQ(machine.snapshot().payload, PayloadState::EMPTY);
+  ASSERT_TRUE(machine.process(ArmTaskEvent::RECOVERY_SUCCEEDED));
+  EXPECT_EQ(machine.snapshot().state, ArmTaskState::READY_STOWED);
+  EXPECT_EQ(machine.snapshot().payload, PayloadState::EMPTY);
+}
+
 TEST(ArmTaskStateMachine, RejectsInvalidAndConcurrentOperations)
 {
   ArmTaskStateMachine machine;
   ASSERT_TRUE(machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));
-  EXPECT_FALSE(machine.process(ArmTaskEvent::START_DROP));
   ASSERT_TRUE(machine.process(ArmTaskEvent::START_PICK));
   EXPECT_FALSE(machine.process(ArmTaskEvent::START_PICK));
   EXPECT_FALSE(machine.process(ArmTaskEvent::START_DROP));
   EXPECT_EQ(machine.snapshot().state, ArmTaskState::PICKING);
+
+  ArmTaskStateMachine empty_drop_machine;
+  ASSERT_TRUE(empty_drop_machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));
+  ASSERT_TRUE(empty_drop_machine.process(ArmTaskEvent::START_DROP));
+  EXPECT_FALSE(empty_drop_machine.process(ArmTaskEvent::START_PICK));
+  EXPECT_FALSE(empty_drop_machine.process(ArmTaskEvent::START_DROP));
+  EXPECT_EQ(empty_drop_machine.snapshot().state, ArmTaskState::DROPPING);
+  EXPECT_EQ(empty_drop_machine.snapshot().payload, PayloadState::EMPTY);
 }
 
 TEST(ArmTaskStateMachine, PhaseUpdatesAreAcceptedOnlyWhileWorkIsActive)
@@ -77,6 +109,10 @@ TEST(ArmTaskStateMachine, EveryOperationalStateCanFault)
     };
   expect_fault([](auto&) {});
   expect_fault([](auto& machine) {ASSERT_TRUE(machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));});
+  expect_fault([](auto& machine) {
+      ASSERT_TRUE(machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));
+      ASSERT_TRUE(machine.process(ArmTaskEvent::START_DROP));
+    });
   expect_fault([](auto& machine) {
       ASSERT_TRUE(machine.process(ArmTaskEvent::INITIALIZATION_SUCCEEDED));
       ASSERT_TRUE(machine.process(ArmTaskEvent::START_PICK));

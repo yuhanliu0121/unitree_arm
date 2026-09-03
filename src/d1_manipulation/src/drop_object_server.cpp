@@ -3,8 +3,11 @@
 #include <chrono>
 #include <cmath>
 #include <future>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -58,6 +61,46 @@ geometry_msgs::msg::Pose poseMessage(const Eigen::Isometry3d& value)
   pose.orientation.z = q.z(); pose.orientation.w = q.w();
   return pose;
 }
+
+Eigen::Isometry3d poseEigen(const geometry_msgs::msg::Pose& value)
+{
+  Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+  pose.translation() = Eigen::Vector3d(value.position.x, value.position.y, value.position.z);
+  const Eigen::Quaterniond quaternion(
+    value.orientation.w, value.orientation.x, value.orientation.y, value.orientation.z);
+  if (quaternion.norm() < 1e-9) {
+    throw std::runtime_error("collision-object pose contains an invalid quaternion");
+  }
+  pose.linear() = quaternion.normalized().toRotationMatrix();
+  return pose;
+}
+
+struct XYBounds
+{
+  double minimum_x{std::numeric_limits<double>::infinity()};
+  double maximum_x{-std::numeric_limits<double>::infinity()};
+  double minimum_y{std::numeric_limits<double>::infinity()};
+  double maximum_y{-std::numeric_limits<double>::infinity()};
+
+  void include(const Eigen::Vector3d& point)
+  {
+    minimum_x = std::min(minimum_x, point.x());
+    maximum_x = std::max(maximum_x, point.x());
+    minimum_y = std::min(minimum_y, point.y());
+    maximum_y = std::max(maximum_y, point.y());
+  }
+
+  bool valid() const
+  {
+    return std::isfinite(minimum_x) && std::isfinite(maximum_x) &&
+           std::isfinite(minimum_y) && std::isfinite(maximum_y);
+  }
+
+  bool contains(double x, double y) const
+  {
+    return x >= minimum_x && x <= maximum_x && y >= minimum_y && y <= maximum_y;
+  }
+};
 }  // namespace
 
 class DropObjectServer
@@ -81,6 +124,10 @@ public:
     planning_frame_ = parameterOrDeclare(node_, "planning_frame", std::string("base_link"));
     gravity_frame_ = parameterOrDeclare(node_, "gravity_frame", std::string("world"));
     tcp_frame_ = parameterOrDeclare(node_, "tcp_frame", std::string("tcp_link"));
+    go2_platform_collision_id_ = parameterOrDeclare(
+      node_, "go2_platform_collision_id", std::string("go2_platform"));
+    drop_keepout_margin_ = parameterOrDeclare(node_, "drop_keepout_margin_m", 0.05);
+    base_scene_wait_timeout_ = parameterOrDeclare(node_, "base_scene_wait_timeout_s", 5.0);
     stowed_ = parameterOrDeclare(node_, "stowed_joint_positions", std::vector<double>{0, -1.54, 1.55, 0, 0, 0});
     carry_ = parameterOrDeclare(
       node_, "carry_joint_positions", std::vector<double>{0, -1.54, 1.546, 0, -0.6, 1.57});
@@ -105,6 +152,11 @@ public:
       node_, "start_state_bounds_tolerance_rad", 0.1);
     if (start_state_bounds_tolerance_ < 0.0) {
       throw std::invalid_argument("start_state_bounds_tolerance_rad must be non-negative");
+    }
+    if (go2_platform_collision_id_.empty() || drop_keepout_margin_ < 0.0 ||
+      base_scene_wait_timeout_ <= 0.0)
+    {
+      throw std::invalid_argument("invalid Go2 drop keep-out parameters");
     }
 
     move_group_.setEndEffectorLink(tcp_frame_);
@@ -139,6 +191,7 @@ public:
             node_->get_logger(), "Rejecting drop_object goal: %s", transition.detail.c_str());
           return rclcpp_action::GoalResponse::REJECT;
         }
+        drop_start_payload_.store(transition.payload_state);
         cancel_.store(false); return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [this](const std::shared_ptr<Handle>) {
@@ -153,6 +206,113 @@ public:
   }
 
 private:
+  std::optional<XYBounds> go2KeepoutBounds(std::string& detail)
+  {
+    std::map<std::string, moveit_msgs::msg::AttachedCollisionObject> attached;
+    const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::duration<double>(base_scene_wait_timeout_);
+    do {
+      attached = planning_scene_.getAttachedObjects({go2_platform_collision_id_});
+      if (!attached.empty()) break;
+      std::this_thread::sleep_for(50ms);
+    } while (std::chrono::steady_clock::now() < deadline);
+    const auto found = attached.find(go2_platform_collision_id_);
+    if (found == attached.end()) {
+      detail = "Go2 platform collision object is unavailable: " + go2_platform_collision_id_;
+      return std::nullopt;
+    }
+
+    const auto& object = found->second.object;
+    Eigen::Isometry3d planning_from_object_frame = Eigen::Isometry3d::Identity();
+    if (!object.header.frame_id.empty() && object.header.frame_id != planning_frame_) {
+      planning_from_object_frame = tf2::transformToEigen(
+        tf_buffer_.lookupTransform(
+          planning_frame_, object.header.frame_id, tf2::TimePointZero, 3s));
+    }
+
+    XYBounds bounds;
+    if (object.primitives.size() != object.primitive_poses.size()) {
+      detail = "Go2 platform collision primitive/pose counts do not match";
+      return std::nullopt;
+    }
+    for (std::size_t index = 0; index < object.primitives.size(); ++index) {
+      const auto& primitive = object.primitives[index];
+      if (primitive.type != shape_msgs::msg::SolidPrimitive::BOX ||
+        primitive.dimensions.size() < 3)
+      {
+        detail = "Go2 platform keep-out currently requires BOX collision primitives";
+        return std::nullopt;
+      }
+      const Eigen::Isometry3d planning_from_primitive =
+        planning_from_object_frame * poseEigen(object.primitive_poses[index]);
+      const Eigen::Vector3d half(
+        0.5 * primitive.dimensions[shape_msgs::msg::SolidPrimitive::BOX_X],
+        0.5 * primitive.dimensions[shape_msgs::msg::SolidPrimitive::BOX_Y],
+        0.5 * primitive.dimensions[shape_msgs::msg::SolidPrimitive::BOX_Z]);
+      for (const double x : {-half.x(), half.x()}) {
+        for (const double y : {-half.y(), half.y()}) {
+          for (const double z : {-half.z(), half.z()}) {
+            bounds.include(planning_from_primitive * Eigen::Vector3d(x, y, z));
+          }
+        }
+      }
+    }
+    if (!bounds.valid()) {
+      detail = "Go2 platform collision object has no usable geometry";
+      return std::nullopt;
+    }
+    bounds.minimum_x -= drop_keepout_margin_;
+    bounds.maximum_x += drop_keepout_margin_;
+    bounds.minimum_y -= drop_keepout_margin_;
+    bounds.maximum_y += drop_keepout_margin_;
+    return bounds;
+  }
+
+  bool stateValid(
+    const moveit_msgs::msg::RobotState& state, std::string& detail,
+    const std::string& context)
+  {
+    if (!state_validity_client_->wait_for_service(2s)) {
+      detail = "MoveIt /check_state_validity service is unavailable";
+      return false;
+    }
+    auto request = std::make_shared<moveit_msgs::srv::GetStateValidity::Request>();
+    request->robot_state = state;
+    request->group_name = move_group_.getName();
+    auto future = state_validity_client_->async_send_request(request);
+    if (future.wait_for(2s) != std::future_status::ready) {
+      detail = "MoveIt /check_state_validity timed out for " + context;
+      return false;
+    }
+    const auto response = future.get();
+    if (response->valid) {
+      detail = context + " is collision-free";
+      return true;
+    }
+
+    std::vector<std::string> contacts;
+    for (const auto& contact : response->contacts) {
+      const std::string pair = contact.contact_body_1 + "<->" + contact.contact_body_2;
+      if (std::find(contacts.begin(), contacts.end(), pair) == contacts.end()) {
+        contacts.push_back(pair);
+      }
+    }
+    std::ostringstream message;
+    message << context << " is invalid";
+    if (!contacts.empty()) {
+      message << "; collision contacts=[";
+      const std::size_t count = std::min<std::size_t>(contacts.size(), 8);
+      for (std::size_t index = 0; index < count; ++index) {
+        if (index > 0) message << ", ";
+        message << contacts[index];
+      }
+      if (contacts.size() > count) message << ", ...";
+      message << "]";
+    }
+    detail = message.str();
+    return false;
+  }
+
   bool currentStartStateValid(std::string& detail)
   {
     const auto state = move_group_.getCurrentState(2.0);
@@ -233,6 +393,87 @@ private:
     }
     detail = message.str();
     return false;
+  }
+
+  bool planOpenEmptyReturn(
+    const moveit::planning_interface::MoveGroupInterface::Plan& release_plan,
+    const std::vector<std::string>& held_ids,
+    moveit::planning_interface::MoveGroupInterface::Plan& return_plan,
+    std::string& detail)
+  {
+    const auto& trajectory = release_plan.trajectory_.joint_trajectory;
+    if (trajectory.joint_names.empty() || trajectory.points.empty() ||
+      trajectory.points.back().positions.size() != trajectory.joint_names.size())
+    {
+      detail = "release plan has no usable terminal joint state";
+      return false;
+    }
+
+    auto post_release = move_group_.getCurrentState(2.0);
+    if (!post_release) {
+      detail = "current MoveIt state is unavailable while constructing the return start state";
+      return false;
+    }
+    const auto& model_variables = post_release->getRobotModel()->getVariableNames();
+    for (std::size_t index = 0; index < trajectory.joint_names.size(); ++index) {
+      if (std::find(
+          model_variables.begin(), model_variables.end(), trajectory.joint_names[index]) ==
+        model_variables.end())
+      {
+        detail = "release plan contains an unknown joint: " + trajectory.joint_names[index];
+        return false;
+      }
+      post_release->setVariablePosition(
+        trajectory.joint_names[index], trajectory.points.back().positions[index]);
+    }
+    if (std::find(model_variables.begin(), model_variables.end(), "Joint6") ==
+      model_variables.end())
+    {
+      detail = "MoveIt robot model does not contain Joint6";
+      return false;
+    }
+    post_release->setVariablePosition("Joint6", gripper_open_);
+    post_release->update();
+
+    moveit_msgs::msg::RobotState post_release_message;
+    moveit::core::robotStateToRobotStateMsg(*post_release, post_release_message);
+    post_release_message.is_diff = true;
+    for (const auto& id : held_ids) {
+      moveit_msgs::msg::AttachedCollisionObject removal;
+      removal.object.id = id;
+      removal.object.operation = moveit_msgs::msg::CollisionObject::REMOVE;
+      post_release_message.attached_collision_objects.push_back(std::move(removal));
+    }
+
+    if (!stateValid(post_release_message, detail, "open-empty release state")) {
+      return false;
+    }
+
+    auto bounded_stowed = stowed_;
+    const auto robot_model = move_group_.getRobotModel();
+    const auto* joint_group = robot_model->getJointModelGroup(move_group_.getName());
+    const auto& variable_names = joint_group->getVariableNames();
+    for (std::size_t index = 0; index < bounded_stowed.size(); ++index) {
+      const auto& bounds = robot_model->getVariableBounds(variable_names.at(index));
+      bounded_stowed[index] = std::clamp(
+        bounded_stowed[index], bounds.min_position_, bounds.max_position_);
+    }
+
+    move_group_.setStartState(post_release_message);
+    if (!move_group_.setJointValueTarget(bounded_stowed)) {
+      move_group_.setStartStateToCurrentState();
+      detail = "canonical STOWED has no valid joint target";
+      return false;
+    }
+    const bool planned =
+      move_group_.plan(return_plan) == moveit::core::MoveItErrorCode::SUCCESS;
+    move_group_.setStartStateToCurrentState();
+    if (!planned) {
+      detail = "open-empty RELEASE to STOWED planning failed";
+      return false;
+    }
+    detail = "open-empty RELEASE to STOWED plan succeeded";
+    return true;
   }
 
   bool nearPose(const std::vector<double>& target, double tolerance)
@@ -319,19 +560,6 @@ private:
     return true;
   }
 
-  bool moveToStowed()
-  {
-    auto bounded_stowed = stowed_;
-    const auto robot_model = move_group_.getRobotModel();
-    const auto* joint_group = robot_model->getJointModelGroup(move_group_.getName());
-    const auto& variable_names = joint_group->getVariableNames();
-    for (std::size_t i = 0; i < bounded_stowed.size(); ++i) {
-      const auto& bounds = robot_model->getVariableBounds(variable_names.at(i));
-      bounded_stowed[i] = std::clamp(bounded_stowed[i], bounds.min_position_, bounds.max_position_);
-    }
-    return moveTo(bounded_stowed);
-  }
-
   void feedback(const std::shared_ptr<Handle>& handle, const std::string& state,
     float progress, const std::string& detail)
   {
@@ -369,28 +597,45 @@ private:
     result->outcome = Drop::Result::OUTCOME_ARM_FAULTED;
     result->final_task_state = d1_interfaces::msg::ArmTaskStatus::FAULTED;
     result->payload_state = d1_interfaces::msg::ArmTaskStatus::PAYLOAD_UNKNOWN;
-    if (!was_canceled && category == Drop::Result::FAILURE_REPOSITION_REQUIRED) {
+    const bool recoverable_without_release =
+      category == Drop::Result::FAILURE_REPOSITION_REQUIRED ||
+      category == Drop::Result::FAILURE_TARGET_IN_KEEP_OUT;
+    if (!was_canceled && recoverable_without_release) {
       const auto recovering = task_state_client_.apply(
         srv::ApplyTaskEvent::Request::DROP_REPOSITION_REQUIRED, state,
-        "DROP_REPOSITION_REQUIRED", detail);
-      const bool at_carry = recovering.accepted &&
-        (nearPose(carry_, stowed_tolerance_) || moveTo(carry_));
-      if (recovering.accepted && at_carry) {
+        category == Drop::Result::FAILURE_TARGET_IN_KEEP_OUT ?
+        "DROP_NEW_TARGET_REQUIRED" : "DROP_REPOSITION_REQUIRED", detail);
+      const bool recover_to_stowed = recovering.accepted &&
+        recovering.state == d1_interfaces::msg::ArmTaskStatus::RECOVERING_TO_STOWED;
+      const bool recover_to_carry = recovering.accepted &&
+        recovering.state == d1_interfaces::msg::ArmTaskStatus::RECOVERING_TO_CARRY;
+      const bool at_recovery_pose = recover_to_stowed ?
+        (nearPose(stowed_, stowed_tolerance_) || moveTo(stowed_)) :
+        (recover_to_carry && (nearPose(carry_, stowed_tolerance_) || moveTo(carry_)));
+      if (recovering.accepted && at_recovery_pose) {
+        const std::string recovery_name = recover_to_stowed ? "STOWED" : "CARRY";
         const auto recovered = task_state_client_.apply(
           srv::ApplyTaskEvent::Request::RECOVERY_SUCCEEDED, "", {},
-          "Arm recovered to canonical CARRY with payload retained");
+          "Arm remained/recovered to canonical " + recovery_name);
         if (recovered.accepted) {
-          result->outcome = Drop::Result::OUTCOME_REPOSITION_REQUIRED;
+          result->outcome = category == Drop::Result::FAILURE_TARGET_IN_KEEP_OUT ?
+            Drop::Result::OUTCOME_NEW_TARGET_REQUIRED :
+            Drop::Result::OUTCOME_REPOSITION_REQUIRED;
           result->final_task_state = recovered.state;
           result->payload_state = recovered.payload_state;
-          result->detail = detail + "; arm recovered to CARRY";
+          result->returned_to_stowed = recover_to_stowed;
+          result->detail = detail + "; arm remained/recovered to " + recovery_name +
+            (recover_to_carry ? " with payload retained" : " with empty gripper");
         }
       }
-      if (result->outcome != Drop::Result::OUTCOME_REPOSITION_REQUIRED) {
+      const bool recovered =
+        result->outcome == Drop::Result::OUTCOME_REPOSITION_REQUIRED ||
+        result->outcome == Drop::Result::OUTCOME_NEW_TARGET_REQUIRED;
+      if (!recovered) {
         task_state_client_.apply(
           srv::ApplyTaskEvent::Request::FAULT, state, "DROP_RECOVERY_FAILED",
-          detail + "; recovery to CARRY failed");
-        result->detail = detail + "; recovery to CARRY failed";
+          detail + "; recovery to canonical pose failed");
+        result->detail = detail + "; recovery to canonical pose failed";
       }
     } else {
       task_state_client_.apply(
@@ -398,12 +643,15 @@ private:
         was_canceled ? "DROP_CANCELED" : "DROP_EXECUTION_ERROR", detail);
       result->detail = detail + "; no further motion command was issued";
     }
-    result->returned_to_stowed = returned;
+    if (result->final_task_state == d1_interfaces::msg::ArmTaskStatus::FAULTED) {
+      result->returned_to_stowed = returned;
+    }
     RCLCPP_ERROR(
       node_->get_logger(),
       "DROP FAILED: category=%u failed_state=%s detail=%s returned_to_stowed=%s action_status=%s",
       static_cast<unsigned int>(category), state.c_str(), result->detail.c_str(),
-      returned ? "true" : "false", was_canceled ? "CANCELED" : "ABORTED");
+      result->returned_to_stowed ? "true" : "false",
+      was_canceled ? "CANCELED" : "ABORTED");
     if (was_canceled) handle->canceled(result); else handle->abort(result);
   }
 
@@ -501,9 +749,21 @@ private:
     try {
       feedback(handle, "CHECK_PRECONDITIONS", 0.05F, "Resolving bin target, gravity and held object state");
       const auto held_ids = heldObjectIds();
-      if (held_ids.size() > 1) {
+      const auto start_payload = drop_start_payload_.load();
+      const bool expected_empty =
+        start_payload == d1_interfaces::msg::ArmTaskStatus::PAYLOAD_EMPTY;
+      const bool expected_held =
+        start_payload == d1_interfaces::msg::ArmTaskStatus::PAYLOAD_HELD;
+      if ((!expected_empty && !expected_held) ||
+        (expected_empty && !held_ids.empty()) ||
+        (expected_held && held_ids.size() != 1))
+      {
+        std::ostringstream detail;
+        detail << "task payload and MoveIt held-object state disagree: payload="
+               << static_cast<unsigned int>(start_payload)
+               << " held_object_count=" << held_ids.size();
         fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
-          "CHECK_PRECONDITIONS", "multiple held objects are attached in MoveIt"); return;
+          "CHECK_PRECONDITIONS", detail.str()); return;
       }
       std::string start_state_detail;
       if (!currentStartStateValid(start_state_detail)) {
@@ -512,6 +772,26 @@ private:
       }
       RCLCPP_INFO(node_->get_logger(), "Drop start-state precheck passed");
       const Eigen::Vector3d bottom = pointInPlanningFrame(handle->get_goal()->target);
+      std::string keepout_detail;
+      const auto keepout = go2KeepoutBounds(keepout_detail);
+      if (!keepout) {
+        fail(handle, Drop::Result::FAILURE_INCOMPLETE_INFORMATION,
+          "CHECK_PRECONDITIONS", keepout_detail); return;
+      }
+      RCLCPP_INFO(
+        node_->get_logger(),
+        "Go2 drop keep-out XY bounds (including %.0f mm margin): "
+        "x=[%.3f, %.3f] y=[%.3f, %.3f] m",
+        1000.0 * drop_keepout_margin_, keepout->minimum_x, keepout->maximum_x,
+        keepout->minimum_y, keepout->maximum_y);
+      if (keepout->contains(bottom.x(), bottom.y())) {
+        std::ostringstream detail;
+        detail << "drop target XY=(" << bottom.x() << ", " << bottom.y()
+               << ") m lies inside the Go2 platform keep-out region; "
+                  "submit a new drop target";
+        fail(handle, Drop::Result::FAILURE_TARGET_IN_KEEP_OUT,
+          "CHECK_PRECONDITIONS", detail.str()); return;
+      }
       const Eigen::Vector3d up = gravityUp();
       const Eigen::Vector3d horizontal = bottom - bottom.dot(up) * up;
       const Eigen::Isometry3d current_tcp = tf2::transformToEigen(
@@ -523,12 +803,15 @@ private:
       reference.normalize();
 
       moveit::planning_interface::MoveGroupInterface::Plan release_plan;
+      moveit::planning_interface::MoveGroupInterface::Plan return_plan;
       geometry_msgs::msg::Pose selected_pose;
       double selected_height = 0.0, selected_y = 0.0, selected_yaw = 0.0;
       bool found = false;
       std::size_t candidate_index = 0;
       std::size_t ik_failures = 0;
       std::size_t planning_failures = 0;
+      std::size_t keepout_failures = 0;
+      std::size_t return_failures = 0;
       feedback(handle, "PLAN_RELEASE", 0.20F, "Searching gravity-aligned release candidates");
       for (const double height : height_offsets_) {
         for (const double y_offset : y_offsets_) {
@@ -540,6 +823,15 @@ private:
             const Eigen::Vector3d y = z.cross(x).normalized();
             const Eigen::Vector3d candidate_bottom =
               bottom + y_offset * Eigen::Vector3d::UnitY();
+            if (keepout->contains(candidate_bottom.x(), candidate_bottom.y())) {
+              ++keepout_failures;
+              RCLCPP_INFO(
+                node_->get_logger(),
+                "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg "
+                "-> KEEP_OUT_REJECTED",
+                candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg);
+              continue;
+            }
             Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
             pose.linear().col(0) = x; pose.linear().col(1) = y; pose.linear().col(2) = z;
             pose.translation() =
@@ -563,12 +855,25 @@ private:
                 candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg);
               continue;
             }
+            moveit::planning_interface::MoveGroupInterface::Plan candidate_return_plan;
+            std::string return_detail;
+            if (!planOpenEmptyReturn(plan, held_ids, candidate_return_plan, return_detail)) {
+              ++return_failures;
+              RCLCPP_INFO(
+                node_->get_logger(),
+                "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg "
+                "-> RETURN_FAILED (%s)",
+                candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg,
+                return_detail.c_str());
+              continue;
+            }
             RCLCPP_INFO(
               node_->get_logger(),
-              "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg "
-              "-> PLAN_SUCCEEDED",
+                "Release candidate %zu: height=%+.0f mm y=%+.0f mm yaw=%+.1f deg "
+              "-> ROUND_TRIP_SUCCEEDED",
               candidate_index, 1000.0 * height, 1000.0 * y_offset, yaw_deg);
             release_plan = std::move(plan);
+            return_plan = std::move(candidate_return_plan);
             selected_pose = poseMessage(pose);
             selected_height = height;
             selected_y = y_offset;
@@ -585,7 +890,9 @@ private:
           "no gravity-aligned release plan after " + std::to_string(candidate_index) +
           " candidates (IK failures=" + std::to_string(ik_failures) +
           ", planning failures=" + std::to_string(planning_failures) +
-          "); reposition Go2";
+          ", keep-out rejections=" + std::to_string(keepout_failures) +
+          ", return failures=" + std::to_string(return_failures) +
+          "); reposition Go2 or submit a new drop target";
         fail(handle, Drop::Result::FAILURE_REPOSITION_REQUIRED,
           "PLAN_RELEASE", detail); return;
       }
@@ -626,8 +933,8 @@ private:
         }
         std::this_thread::sleep_for(20ms);
       }
-      feedback(handle, "STOWED", 0.85F, "Planning directly from release pose to STOWED");
-      if (!moveToStowed()) {
+      feedback(handle, "STOWED", 0.85F, "Executing the prevalidated open-empty return to STOWED");
+      if (!executePlan(return_plan)) {
         fail(handle, Drop::Result::FAILURE_EXECUTION_ERROR,
           "STOWED", "failed to return to STOWED"); return;
       }
@@ -668,15 +975,20 @@ private:
   rclcpp_action::Server<Drop>::SharedPtr server_;
   std::atomic<bool> cancel_{false};
   std::atomic<bool> drop_executing_{false};
+  std::atomic<std::uint8_t> drop_start_payload_{
+    d1_interfaces::msg::ArmTaskStatus::PAYLOAD_UNKNOWN};
   std::mutex active_goal_mutex_;
   rclcpp_action::ClientGoalHandle<Gripper>::SharedPtr active_gripper_goal_;
   rclcpp_action::ClientGoalHandle<Segment>::SharedPtr active_segment_goal_;
   std::string backend_, action_name_, planning_frame_, gravity_frame_, tcp_frame_;
+  std::string go2_platform_collision_id_;
   std::string segment_action_name_;
   std::vector<double> stowed_, carry_, height_offsets_, y_offsets_, yaw_offsets_;
   double stowed_tolerance_{};
   double gripper_open_{}, gripper_open_hold_{}, real_motion_speed_deg_s_{};
   double start_state_bounds_tolerance_{};
+  double drop_keepout_margin_{};
+  double base_scene_wait_timeout_{};
 };
 }  // namespace d1_manipulation
 
