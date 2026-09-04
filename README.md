@@ -8,6 +8,8 @@ Unitree D1 arm. The only Go2-facing task API is:
 - `/arm/task_status`
 
 The action and status types live in `d1_interfaces`.
+The external contract is documented in
+[`docs/arm_manipulation_api_cn.md`](docs/arm_manipulation_api_cn.md).
 
 ## Repository layout
 
