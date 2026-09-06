@@ -73,9 +73,7 @@ if [[ "${ARCH}" == amd64 ]]; then
     --network host
     --ipc host
     --init
-    --user "$(id -u):$(id -g)"
-    --group-add 0
-    --env HOME=/tmp/d1-container-home
+    --env HOME=/root
     --env ROS_HOME=/tmp/d1-ros-home
     --env YOLO_CONFIG_DIR=/tmp/d1-yolo
     --volume "${WORKSPACE}:/workspace"
@@ -90,7 +88,7 @@ if [[ "${ARCH}" == amd64 ]]; then
   fi
 
   "${D1_DOCKER[@]}" "${DEV_ARGS[@]}" "${IMAGE}" sleep infinity >/dev/null
-  if ! "${D1_DOCKER[@]}" exec --user "$(id -u):$(id -g)" "${DEV_CONTAINER}" \
+  if ! "${D1_DOCKER[@]}" exec "${DEV_CONTAINER}" \
       /usr/local/bin/d1-docker-entrypoint bash -lc "${BUILD_COMMAND}"; then
     "${D1_DOCKER[@]}" container rm --force "${DEV_CONTAINER}" >/dev/null 2>&1 || true
     d1_die "workspace build failed; removed incomplete development container ${DEV_CONTAINER}"
@@ -100,8 +98,7 @@ else
     --privileged \
     --network host \
     --ipc host \
-    --user "$(id -u):$(id -g)" \
-    --env HOME=/tmp/d1-container-home \
+    --env HOME=/root \
     --volume "${WORKSPACE}:/workspace" \
     "${IMAGE}" bash -lc "${BUILD_COMMAND}"
 fi

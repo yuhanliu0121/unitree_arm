@@ -57,6 +57,10 @@ The script detects the native architecture and builds either
 creates the persistent `unitree-d1-manipulation-dev-amd64` development
 container and builds the workspace, including commissioning tools, inside it.
 On arm64 it keeps the production-oriented ephemeral build-container workflow.
+Containers and workspace builds run as root on both architectures to keep
+device access and administrative operations straightforward. Consequently,
+generated `build/`, `install/`, and `log/` files on the bind-mounted host
+workspace are owned by root.
 Docker is installed from Ubuntu's `docker.io` package only when it is absent.
 Both architectures use Ubuntu 22.04, ROS 2 Humble and the CPU perception stack.
 The amd64 target additionally includes the MuJoCo development dependencies;

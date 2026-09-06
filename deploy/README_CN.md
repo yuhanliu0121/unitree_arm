@@ -190,7 +190,7 @@ ip -br address
 ./deploy/install_d1_runtime_env.sh
 ```
 
-脚本会自动安装缺失的 Docker，构建 Ubuntu 22.04 + ROS 2 Humble 的 amd64 镜像，创建长期运行的 `unitree-d1-manipulation-dev-amd64` 开发容器，并在其中构建工作区和 commissioning tools。当前仓库挂载到 `/workspace`，业务源码及 `build/`、`install/`、`log/` 均保留在宿主机仓库中。
+脚本会自动安装缺失的 Docker，构建 Ubuntu 22.04 + ROS 2 Humble 的 amd64 镜像，创建长期运行的 `unitree-d1-manipulation-dev-amd64` 开发容器，并在其中构建工作区和 commissioning tools。当前仓库挂载到 `/workspace`，业务源码及 `build/`、`install/`、`log/` 均保留在宿主机仓库中。amd64 与 arm64 容器均默认使用 root 身份，容器内无需使用 `sudo`；因此宿主机上的 `build/`、`install/`、`log/` 也会归 root 所有。
 
 成功标志：
 
