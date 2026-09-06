@@ -72,6 +72,7 @@ ENTRYPOINT ["/usr/local/bin/d1-docker-entrypoint"]
 CMD ["bash"]
 
 FROM common AS amd64
+ARG TARGETARCH
 RUN test "${TARGETARCH}" = amd64
 RUN conda run -n trash_collection python -m pip install --no-cache-dir \
       cyclonedds==11.0.1 \
@@ -80,4 +81,5 @@ RUN conda run -n trash_collection python -m pip install --no-cache-dir \
       trimesh==5.0.0
 
 FROM common AS arm64
+ARG TARGETARCH
 RUN test "${TARGETARCH}" = arm64
