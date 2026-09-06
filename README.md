@@ -23,6 +23,7 @@ The external contract is documented in
 | `docs/` | Architecture, calibration, experiment, and handoff documentation |
 | `third_party/` | Official D1 SDK files and the in-tree `unitree-d1-control` component |
 | `deploy/` | Native amd64/arm64 Docker environment and D1 onboard deployment scripts |
+| `hardware/` | Printable hardware and assembly documentation, including the [D1-550 wrist-camera bracket](hardware/wrist_camera_mount/README.md) |
 
 Generated `build/`, `install/`, and `log/` trees remain at the workspace root
 and are ignored by Git.
