@@ -326,7 +326,7 @@ def evaluate_cases(output_dir: Path) -> list[dict[str, Any]]:
     runtime_config_path = RUNTIME_ROOT / "configs" / "runtime.yaml"
     runtime_config = load_config(runtime_config_path, "arm")
     segmenter = YoloSegmenter(
-        RUNTIME_ROOT / "weights" / "best.pt",
+        RUNTIME_ROOT / "weights" / "mcislab_trash_collect.pt",
         runtime_config,
         output_dir / "yolo_cache",
     )
@@ -407,7 +407,9 @@ def write_reports(
     report = {
         "scope": "MuJoCo RGB asset-domain diagnostic; no arm IK/execution validation",
         "runtime_config": str(runtime_config_path.relative_to(ROOT)),
-        "weights": str((RUNTIME_ROOT / "weights" / "best.pt").relative_to(ROOT)),
+        "weights": str(
+            (RUNTIME_ROOT / "weights" / "mcislab_trash_collect.pt").relative_to(ROOT)
+        ),
         "views": VIEW_SPECS,
         "cases": results,
     }

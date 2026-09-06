@@ -1,0 +1,20 @@
+name: trash_collection
+# amd64 environment: use the official PyTorch CPU wheel. ARM64 uses the
+# separate conda-forge environment in conda-environment-arm64.yml.
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cpu
+      - catkin-pkg>=0.5,<2
+      - empy==3.3.4
+      - lark>=1.1,<2
+      - numpy>=2.0,<3
+      - opencv-python>=4.10
+      - PyYAML>=6,<7
+      - pytest>=7,<8
+      - torch==2.13.0+cpu
+      - torchvision==0.28.0+cpu
+      - ultralytics==8.4.117

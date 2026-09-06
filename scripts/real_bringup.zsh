@@ -4,6 +4,9 @@ set -eo pipefail
 SCRIPT_DIR=${0:A:h}
 WORKSPACE=${SCRIPT_DIR:h}
 CONFIG_PATH="${WORKSPACE}/src/d1_bringup/config/real_machine.yaml"
+LOCAL_CONFIG_PATH="${WORKSPACE}/src/d1_bringup/config/real_machine.local.yaml"
+EFFECTIVE_CONFIG_PATH="${WORKSPACE}/src/d1_bringup/config/real_machine.effective.yaml"
+CONFIG_TOOL="${WORKSPACE}/deploy/lib/deployment_config_tool.py"
 ARM_SERIAL=""
 LAUNCH_RVIZ=false
 COMMAND_RATE_HZ=""
@@ -13,6 +16,7 @@ GRAVITY_CALIBRATION=""
 CAMERA_DRIVER_LOCATION=""
 JOINT6_BYPASS=false
 LAUNCH_PID=""
+EXPLICIT_CONFIG=false
 
 launch_process_group_alive() {
   [[ -n "${LAUNCH_PID}" ]] || return 1
@@ -78,6 +82,7 @@ while (( $# > 0 )); do
         exit 2
       fi
       CONFIG_PATH=${2:A}
+      EXPLICIT_CONFIG=true
       shift 2
       ;;
     --arm-serial)
@@ -132,6 +137,15 @@ while (( $# > 0 )); do
   esac
 done
 
+if [[ "${EXPLICIT_CONFIG}" == false && -f "${LOCAL_CONFIG_PATH}" ]]; then
+  python3 "${CONFIG_TOOL}" --materialize "${EFFECTIVE_CONFIG_PATH}"
+  CONFIG_PATH="${EFFECTIVE_CONFIG_PATH}"
+  print "Using validated local deployment configuration: ${LOCAL_CONFIG_PATH}"
+elif [[ "${EXPLICIT_CONFIG}" == false ]]; then
+  print "No local deployment overlay found; using checked-in development defaults."
+  print "Run ./deploy/configure_d1_manipulation.sh before a new-machine deployment."
+fi
+
 if [[ ! -f "${CONFIG_PATH}" ]]; then
   print -u2 "Real-machine config not found: ${CONFIG_PATH}"
   exit 2
@@ -159,10 +173,6 @@ if [[ "${CONFIG_BACKEND}" != "real" ]]; then
 fi
 if [[ -z "${ARM_SERIAL}" ]]; then
   ARM_SERIAL=${CONFIG_ARM_SERIAL}
-fi
-if [[ -z "${ARM_SERIAL}" ]]; then
-  print -u2 "Physical arm serial must be set in YAML or with --arm-serial"
-  exit 2
 fi
 if [[ -n "${CAMERA_DRIVER_LOCATION}" ]] && [[ "${CAMERA_DRIVER_LOCATION}" != "local" && "${CAMERA_DRIVER_LOCATION}" != "remote" ]]; then
   print -u2 "--camera-driver-location must be local or remote"
@@ -198,7 +208,11 @@ PREFLIGHT_ARGS=(
 print "[1/3] Verifying the D1 onboard SDK service and protocol version..."
 ros2 run d1_bringup check_onboard_sdk --config "${CONFIG_PATH}"
 
-print "[2/3] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
+if [[ -n "${ARM_SERIAL}" ]]; then
+  print "[2/3] Running motionless preflight for physical D1 ${ARM_SERIAL}..."
+else
+  print "[2/3] Running motionless preflight with the base D1 URDF..."
+fi
 "${SCRIPT_DIR}/real_preflight.zsh" "${PREFLIGHT_ARGS[@]}"
 
 EFFECTIVE_CAMERA_DRIVER_LOCATION=${CAMERA_DRIVER_LOCATION}

@@ -7,18 +7,18 @@ The repository-root entry point is:
 ./scripts/real_bringup.zsh --rviz
 ```
 
-It reads `config/real_machine.yaml`, runs the motionless preflight, and only
-then starts the physical D1 gateway, `ros2_control`, MoveIt, the wrist
+When `config/real_machine.local.yaml` exists, the entry point validates and
+merges it with `config/real_machine.yaml`; otherwise it retains the checked-in
+development defaults. It then runs the motionless preflight and only starts
+the physical D1 gateway, `ros2_control`, MoveIt, the wrist
 RealSense, perception, and the public pick/drop Action servers. The preflight
 gravity estimate is frozen for the task run so wrist acceleration during arm
 motion cannot rotate the gravity reference.
 
 `perception.model_path` is always explicit in the deployment YAML. The checked-in
-development configuration selects the paper-object validation weights so local
-acceptance works immediately. The Go2 integration owner must replace it with
-the weights validated for the final objects and environment. Relative paths are
-resolved from the deployment YAML; absolute paths are recommended on the
-deployed system.
+configuration selects the frozen final-object weights. Paper-object development
+can select `paper_objects_dev_best.pt` in the same directory. Relative paths are
+resolved from the deployment YAML; absolute paths are also supported.
 
 When the wrist RealSense USB cable is attached to another computer, start its
 ROS driver there on the configured ROS domain, then run:
@@ -31,7 +31,7 @@ ROS driver there on the configured ROS domain, then run:
 Remote mode never opens a local USB camera. It still requires fresh color and
 aligned-depth CameraInfo, IMU samples, and the configured camera TF chain before
 the physical controllers are activated. The remote publisher must therefore
-use `ROS_DOMAIN_ID` from `real_machine.yaml` and publish the canonical
+use `ROS_DOMAIN_ID` from the effective deployment configuration and publish the canonical
 `/wrist_camera/*` topics and frames. Set `wrist_camera.driver_location` in a
 site deployment YAML to make either mode persistent; the command-line option is
 intended for acceptance tests and overrides YAML.

@@ -8,15 +8,16 @@ deployment:
   ros_domain_id: 31
 
 perception:
-  # Development default for the paper/cardboard validation objects. Relative
-  # paths are resolved from this YAML file. The Go2 deployment owner should
-  # replace it with the weights validated for the final objects/environment.
-  model_path: ../../../runtime/perception_runtime_v1/weights/paper_objects_dev_best.pt
+  # Frozen model for the final wood cube, plush zucchini, and plastic bowl.
+  # For paper-object development, select paper_objects_dev_best.pt in the same
+  # directory. Relative paths are resolved from this YAML file.
+  model_path: ../../../runtime/perception_runtime_v1/weights/mcislab_trash_collect.pt
 
 arm:
-  # Explicitly selects the per-unit joint-limit profile. Changing hardware
-  # requires changing this value rather than silently reusing D1095 limits.
-  serial_no: D1095
+  # Optional per-unit URDF/joint-limit profile selector. Empty uses the base
+  # URDF. Before setting a serial, add and validate its matching entry in
+  # d1_description/config/hardware_profiles.yaml.
+  serial_no: ""
   # Verified on Dell G3 on 2026-08-19.
   network_interface: enp3s0
   expected_ipv4_subnet: 192.168.123.0/24

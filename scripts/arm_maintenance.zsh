@@ -4,11 +4,15 @@ set -eo pipefail
 SCRIPT_DIR=${0:A:h}
 WORKSPACE=${SCRIPT_DIR:h}
 CONFIG_PATH="${WORKSPACE}/src/d1_bringup/config/real_machine.yaml"
+LOCAL_CONFIG_PATH="${WORKSPACE}/src/d1_bringup/config/real_machine.local.yaml"
+EFFECTIVE_CONFIG_PATH="${WORKSPACE}/src/d1_bringup/config/real_machine.effective.yaml"
+CONFIG_TOOL="${WORKSPACE}/deploy/lib/deployment_config_tool.py"
 SDK_BUILD_DIR="${WORKSPACE:h}/D1-SDK/build-linux"
 ANGLE_READER="${SDK_BUILD_DIR}/get_arm_joint_angle"
 SEVEN_JOINT_COMMAND="${SDK_BUILD_DIR}/multiple_joint_angle_control"
 OPERATION=""
 CONFIRM=""
+EXPLICIT_CONFIG=false
 
 usage() {
   print "Usage:"
@@ -39,6 +43,7 @@ while (( $# > 0 )); do
     --config)
       (( $# >= 2 )) || { print -u2 "--config requires a path"; exit 2; }
       CONFIG_PATH=${2:A}
+      EXPLICIT_CONFIG=true
       shift 2
       ;;
     -h|--help)
@@ -52,6 +57,11 @@ while (( $# > 0 )); do
       ;;
   esac
 done
+
+if [[ "${EXPLICIT_CONFIG}" == false && -f "${LOCAL_CONFIG_PATH}" ]]; then
+  python3 "${CONFIG_TOOL}" --materialize "${EFFECTIVE_CONFIG_PATH}" >/dev/null
+  CONFIG_PATH="${EFFECTIVE_CONFIG_PATH}"
+fi
 
 case "${OPERATION}" in
   stowed)

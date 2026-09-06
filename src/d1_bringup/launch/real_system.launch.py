@@ -96,8 +96,6 @@ def _launch_setup(context):
     arm_serial = LaunchConfiguration("arm_serial").perform(context).strip() or str(
         arm.get("serial_no", "")
     ).strip()
-    if not arm_serial:
-        raise RuntimeError("real_system requires an explicit physical arm serial")
     requested_command_rate = LaunchConfiguration("real_command_rate_hz").perform(context).strip()
     command_rate_hz = float(requested_command_rate or arm["command_rate_hz"])
     if not math.isfinite(command_rate_hz) or command_rate_hz <= 0.0:

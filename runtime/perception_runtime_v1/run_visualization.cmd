@@ -9,8 +9,8 @@ if not exist "%PYTHON_EXE%" (
   pause
   exit /b 1
 )
-if not exist "%~dp0weights\best.pt" (
-  echo [ERROR] Frozen weight not found: %~dp0weights\best.pt
+if not exist "%~dp0weights\mcislab_trash_collect.pt" (
+  echo [ERROR] Frozen weight not found: %~dp0weights\mcislab_trash_collect.pt
   pause
   exit /b 1
 )

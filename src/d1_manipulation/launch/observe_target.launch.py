@@ -85,7 +85,7 @@ def _launch_setup(context):
             "deployment configuration"
         )
     else:
-        perception_model = runtime_root / "weights" / "best.pt"
+        perception_model = runtime_root / "weights" / "mcislab_trash_collect.pt"
     if not perception_model.is_file():
         raise RuntimeError(f"perception model is unavailable: {perception_model}")
     return [
@@ -224,7 +224,7 @@ def generate_launch_description():
                 default_value="",
                 description=(
                     "Perception weight path. Required for real deployment; simulation "
-                    "uses weights/best.pt when empty."
+                    "uses weights/mcislab_trash_collect.pt when empty."
                 ),
             ),
             DeclareLaunchArgument("dds_domain_id", default_value="42"),

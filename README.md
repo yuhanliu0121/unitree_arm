@@ -22,6 +22,7 @@ The external contract is documented in
 | `tools/` | Calibration, validation, workspace analysis, and asset-generation utilities |
 | `docs/` | Architecture, calibration, experiment, and handoff documentation |
 | `third_party/` | Official D1 SDK files and the in-tree `unitree-d1-control` component |
+| `deploy/` | Native amd64/arm64 Docker environment and D1 onboard deployment scripts |
 
 Generated `build/`, `install/`, and `log/` trees remain at the workspace root
 and are ignored by Git.
@@ -68,15 +69,18 @@ Calibration-only entry points are under `tools/calibration/scripts/`.
 
 ## Real-machine bringup
 
-The deployment owner must review
-`src/d1_bringup/config/real_machine.yaml`, replace its development perception
-weights, and fill the Go2-owned network/TF values. Then run the motionless
+Run `./deploy/configure_d1_manipulation.sh`, complete and validate the generated
+`src/d1_bringup/config/real_machine.local.yaml`, select the perception weights,
+and fill the Go2-owned network/TF values. Then run the motionless
 preflight before starting the control stack:
 
 ```zsh
-./scripts/real_preflight.zsh --arm-serial D1095
-./scripts/real_bringup.zsh --arm-serial D1095 --rviz
+./deploy/configure_d1_manipulation.sh --validate
+./scripts/real_preflight.zsh
+./scripts/real_bringup.zsh --rviz
 ```
 
 See `src/d1_bringup/config/README.md` for configuration ownership and
 `docs/codex_handoff.md` for the current architecture and known limitations.
+For a clean target machine, follow the three-step procedure in
+`deploy/README.md`.

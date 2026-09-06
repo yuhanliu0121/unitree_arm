@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+.pytest_cache
+build
+install
+log
+**/build
+**/install
+**/log
+doc
+paper_object_perception
+validation/real_pregrasp_alignment/**/*.db3
+validation/real_pregrasp_alignment/**/*.zstd

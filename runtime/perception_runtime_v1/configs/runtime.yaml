@@ -1,7 +1,7 @@
 release_id: perception_runtime_v1_20260801
 
 model:
-  path: weights/best.pt
+  path: weights/mcislab_trash_collect.pt
   imgsz: 960
   confidence: 0.50
   nms_iou: 0.70

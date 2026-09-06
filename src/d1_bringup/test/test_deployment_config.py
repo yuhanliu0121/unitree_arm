@@ -67,11 +67,11 @@ def test_perception_model_path_is_required(tmp_path):
 
 
 def test_perception_model_path_resolves_relative_to_config(tmp_path):
-    model = tmp_path / "weights" / "best.pt"
+    model = tmp_path / "weights" / "mcislab_trash_collect.pt"
     model.parent.mkdir()
     model.write_bytes(b"weights")
     assert resolve_perception_model_path(
-        {"perception": {"model_path": "weights/best.pt"}},
+        {"perception": {"model_path": "weights/mcislab_trash_collect.pt"}},
         tmp_path / "real_machine.yaml",
     ) == model
 
