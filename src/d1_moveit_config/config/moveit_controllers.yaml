@@ -6,7 +6,10 @@ trajectory_execution:
   # enough wall-clock margin for that scheduling jitter.
   allowed_execution_duration_scaling: 1.5
   allowed_goal_duration_margin: 2.0
-  allowed_start_tolerance: 0.01
+  # Keep consecutive trajectories consistent with the arm controller's
+  # 0.04-rad terminal tolerance. A state accepted as the previous goal must
+  # also be accepted as the next prevalidated trajectory's start state.
+  allowed_start_tolerance: 0.04
 
 moveit_simple_controller_manager:
   controller_names:
