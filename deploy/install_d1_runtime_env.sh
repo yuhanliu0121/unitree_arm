@@ -49,7 +49,7 @@ BUILD_ARGS+=("${WORKSPACE}")
 printf 'Building %s from the environment-only Dockerfile...\n' "${IMAGE}"
 "${D1_DOCKER[@]}" "${BUILD_ARGS[@]}"
 
-BUILD_COMMAND='set -e; mkdir -p "$HOME"; colcon build --symlink-install'
+BUILD_COMMAND='set -e; mkdir -p "$HOME"; export PATH=/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER VIRTUAL_ENV; hash -r; colcon build --symlink-install --cmake-clean-cache'
 if [[ "${ARCH}" == amd64 ]]; then
   BUILD_COMMAND+=' --cmake-args -DD1_BUILD_COMMISSIONING_TOOLS=ON'
 fi
