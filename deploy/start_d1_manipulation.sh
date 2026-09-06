@@ -13,7 +13,7 @@ WANTS_RVIZ=false
 EXPLICIT_CONFIG=false
 LOCAL_CONFIG="${WORKSPACE}/src/d1_bringup/config/real_machine.local.yaml"
 EFFECTIVE_CONFIG="${WORKSPACE}/src/d1_bringup/config/real_machine.effective.yaml"
-CONFIG_TOOL="${WORKSPACE}/deploy/lib/deployment_config_tool.py"
+CONFIGURE_SCRIPT="${WORKSPACE}/deploy/configure_d1_manipulation.sh"
 
 usage() {
   cat <<'EOF'
@@ -38,20 +38,23 @@ for argument in "$@"; do
   REAL_ARGS+=("${argument}")
 done
 
-if [[ "${EXPLICIT_CONFIG}" == false && -f "${LOCAL_CONFIG}" ]]; then
-  python3 "${CONFIG_TOOL}" --materialize "${EFFECTIVE_CONFIG}"
-  REAL_ARGS+=(--config /workspace/src/d1_bringup/config/real_machine.effective.yaml)
-  printf 'Using validated local deployment configuration: %s\n' "${LOCAL_CONFIG}"
-elif [[ "${EXPLICIT_CONFIG}" == false ]]; then
-  printf 'No local deployment overlay found; using checked-in development defaults.\n'
-  printf 'Run ./deploy/configure_d1_manipulation.sh before a new-machine deployment.\n'
-fi
-
 d1_select_docker || d1_die "Docker daemon is unavailable; run install_d1_runtime_env.sh first"
 "${D1_DOCKER[@]}" image inspect "${IMAGE}" >/dev/null 2>&1 || \
   d1_die "runtime image ${IMAGE} is missing; run install_d1_runtime_env.sh"
 [[ -r "${WORKSPACE}/install/setup.bash" ]] || \
   d1_die "workspace is not built; run install_d1_runtime_env.sh"
+
+if [[ "${EXPLICIT_CONFIG}" == false && -f "${LOCAL_CONFIG}" ]]; then
+  # Use the public configuration entry point rather than invoking its Python
+  # implementation directly.  This preserves Docker-based RealSense discovery
+  # on deployment hosts that do not have native librealsense utilities.
+  "${CONFIGURE_SCRIPT}" --materialize "${EFFECTIVE_CONFIG}"
+  REAL_ARGS+=(--config /workspace/src/d1_bringup/config/real_machine.effective.yaml)
+  printf 'Using validated local deployment configuration: %s\n' "${LOCAL_CONFIG}"
+elif [[ "${EXPLICIT_CONFIG}" == false ]]; then
+  d1_die "local deployment configuration is missing; run ./deploy/configure_d1_manipulation.sh first"
+fi
+
 mkdir -p "${WORKSPACE}/log/runtime"
 
 if "${D1_DOCKER[@]}" container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then

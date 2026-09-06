@@ -49,6 +49,15 @@ BUILD_ARGS+=("${WORKSPACE}")
 printf 'Building %s from the environment-only Dockerfile...\n' "${IMAGE}"
 "${D1_DOCKER[@]}" "${BUILD_ARGS[@]}"
 
+if [[ "${RUN_TESTS}" == true ]]; then
+  printf 'Testing deployment entry points and configuration tooling...\n'
+  "${D1_DOCKER[@]}" run --rm \
+    --entrypoint /bin/bash \
+    --volume "${WORKSPACE}:/workspace" \
+    "${IMAGE}" -lc \
+    "bash -n /workspace/deploy/*.sh /workspace/deploy/lib/*.sh && /usr/bin/python3 -m unittest discover -s /workspace/deploy/test -p 'test_*.py' -v"
+fi
+
 BUILD_COMMAND='set -e; mkdir -p "$HOME"; export PATH=/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_PROMPT_MODIFIER VIRTUAL_ENV; hash -r; colcon build --symlink-install --cmake-clean-cache'
 if [[ "${ARCH}" == amd64 ]]; then
   BUILD_COMMAND+=' --cmake-args -DD1_BUILD_COMMISSIONING_TOOLS=ON'
