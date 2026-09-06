@@ -80,14 +80,15 @@ sim_pid=$!
 sim_ready=false
 for attempt in {1..120}; do
   kill -0 ${sim_pid} 2>/dev/null || { tail -n 60 ${sim_log} >&2; exit 1; }
-  if grep -q 'D1 MuJoCo service ready' ${sim_log}; then
+  if grep -q 'D1 MuJoCo service ready' ${sim_log} && \
+     grep -q 'ROS camera streams ready' ${sim_log}; then
     sim_ready=true
     break
   fi
   sleep 0.5
 done
 [[ ${sim_ready} == true ]] || {
-  print -u2 'MuJoCo DDS readiness timeout'
+  print -u2 'MuJoCo DDS/camera readiness timeout'
   tail -n 60 ${sim_log} >&2
   exit 1
 }

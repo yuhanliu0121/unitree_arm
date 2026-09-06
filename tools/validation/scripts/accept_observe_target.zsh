@@ -117,14 +117,15 @@ for attempt in {1..120}; do
     tail -n 60 ${sim_log} >&2
     exit 1
   fi
-  if grep -q 'D1 MuJoCo service ready' ${sim_log}; then
+  if grep -q 'D1 MuJoCo service ready' ${sim_log} && \
+     grep -q 'ROS camera streams ready' ${sim_log}; then
     sim_ready=true
     break
   fi
   sleep 0.5
 done
 if [[ ${sim_ready} != true ]]; then
-  print -u2 'MuJoCo DDS readiness timeout.'
+  print -u2 'MuJoCo DDS/camera readiness timeout.'
   tail -n 60 ${sim_log} >&2
   exit 1
 fi
