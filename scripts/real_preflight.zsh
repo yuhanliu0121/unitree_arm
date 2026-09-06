@@ -19,7 +19,10 @@ while (( $# > 0 )); do
         print -u2 "--arm-serial requires a value"
         exit 2
       fi
-      LAUNCH_ARGS+=("arm_serial:=$2")
+      # An empty serial explicitly selects the base URDF.  ROS 2 rejects the
+      # corresponding empty launch assignment (`arm_serial:=`), so rely on
+      # the launch argument's empty default instead of forwarding it.
+      [[ -z "$2" ]] || LAUNCH_ARGS+=("arm_serial:=$2")
       shift 2
       ;;
     --config)

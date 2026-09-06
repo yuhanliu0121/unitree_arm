@@ -199,10 +199,10 @@ mkdir -p "${ROS_LOG_DIR}"
 GRAVITY_CALIBRATION=$(mktemp --suffix=.yaml /tmp/d1_gravity_calibration.XXXXXX)
 
 PREFLIGHT_ARGS=(
-  --arm-serial "${ARM_SERIAL}"
   "config:=${CONFIG_PATH}"
   "gravity_output_path:=${GRAVITY_CALIBRATION}"
 )
+[[ -z "${ARM_SERIAL}" ]] || PREFLIGHT_ARGS+=(--arm-serial "${ARM_SERIAL}")
 [[ -z "${CAMERA_DRIVER_LOCATION}" ]] || PREFLIGHT_ARGS+=("camera_driver_location:=${CAMERA_DRIVER_LOCATION}")
 
 print "[1/3] Verifying the D1 onboard SDK service and protocol version..."
@@ -231,12 +231,12 @@ print "Press Ctrl+C to stop the stack and all of its child processes."
 print "No pick/drop motion starts automatically."
 LAUNCH_ARGS=(
   "config:=${CONFIG_PATH}"
-  "arm_serial:=${ARM_SERIAL}"
   "gravity_calibration:=${GRAVITY_CALIBRATION}"
   "launch_rviz:=${LAUNCH_RVIZ}"
   "camera_driver_location:=${EFFECTIVE_CAMERA_DRIVER_LOCATION}"
   "joint6_bypass:=${JOINT6_BYPASS}"
 )
+[[ -z "${ARM_SERIAL}" ]] || LAUNCH_ARGS+=("arm_serial:=${ARM_SERIAL}")
 if [[ "${JOINT6_BYPASS}" == true ]]; then
   print -u2 "*** JOINT6 BYPASS REQUESTED: gripper motion and retention will be simulated ***"
   print -u2 "*** EMPTY-WORKSPACE COMMISSIONING ONLY; this is not a physical grasp test ***"
