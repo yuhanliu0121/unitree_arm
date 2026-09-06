@@ -7,8 +7,10 @@ import argparse
 import ipaddress
 import json
 import math
+import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -86,7 +88,7 @@ def detect_platform(requested: str) -> tuple[str, str]:
     raise ValueError(f"unsupported host architecture: {architecture}")
 
 
-def _run(command: list[str]) -> str:
+def _run(command: list[str], timeout: float = 3.0) -> str:
     try:
         completed = subprocess.run(
             command,
@@ -94,7 +96,7 @@ def _run(command: list[str]) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=3.0,
+            timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -129,23 +131,41 @@ def detect_d1_interfaces() -> list[str]:
     return candidates
 
 
-def detect_realsense_devices() -> list[tuple[str, str]]:
+def parse_realsense_device_list(output: str) -> list[tuple[str, str]]:
     devices: list[tuple[str, str]] = []
-    for device in sorted(Path("/sys/bus/usb/devices").glob("*")):
-        try:
-            vendor = (device / "idVendor").read_text(encoding="utf-8").strip().lower()
-            product = (device / "product").read_text(encoding="utf-8").strip()
-        except OSError:
+    for line in output.splitlines():
+        columns = re.split(r"\s{2,}", line.strip())
+        if len(columns) < 3 or columns[0] == "Device Name":
             continue
-        if vendor != "8086" or "realsense" not in product.lower():
+        product, serial = columns[0], columns[1]
+        if "realsense" not in product.lower() or not serial:
             continue
-        try:
-            serial = (device / "serial").read_text(encoding="utf-8").strip()
-        except OSError:
-            serial = ""
-        if serial:
+        if all(existing_serial != serial for existing_serial, _ in devices):
             devices.append((serial, product))
     return devices
+
+
+def detect_realsense_devices() -> list[tuple[str, str]]:
+    # The USB descriptor serial exposed by sysfs is not necessarily the ASIC
+    # serial accepted by librealsense's serial_no selector. Always obtain the
+    # identity through librealsense itself.
+    supplied_output = os.environ.get("D1_REALSENSE_DEVICE_LIST", "")
+    if supplied_output:
+        return parse_realsense_device_list(supplied_output)
+
+    candidates = [
+        shutil.which("rs-enumerate-devices"),
+        "/opt/ros/humble/bin/rs-enumerate-devices",
+    ]
+    for executable in candidates:
+        if not executable or not Path(executable).is_file():
+            continue
+        devices = parse_realsense_device_list(
+            _run([executable, "-s"], timeout=15.0)
+        )
+        if devices:
+            return devices
+    return []
 
 
 def _yaml_string(value: str) -> str:
@@ -266,6 +286,8 @@ def validate_config(config: dict[str, Any], local_path: Path) -> list[str]:
         errors.append(f"arm.network_interface does not exist on this host: {interface}")
 
     camera = config.get("wrist_camera", {})
+    if str(camera.get("driver_location", "")).strip() not in {"local", "remote"}:
+        errors.append("wrist_camera.driver_location must be local or remote")
     if not str(camera.get("serial_no", "")).strip():
         errors.append("wrist_camera.serial_no is required")
     if camera.get("frame_rate_hz") not in SUPPORTED_FRAME_RATES:
@@ -314,6 +336,27 @@ def validate_config(config: dict[str, Any], local_path: Path) -> list[str]:
     return errors
 
 
+def validate_attached_hardware(config: dict[str, Any]) -> list[str]:
+    camera = config.get("wrist_camera", {})
+    if str(camera.get("driver_location", "")).strip() != "local":
+        return []
+
+    configured_serial = str(camera.get("serial_no", "")).strip()
+    devices = detect_realsense_devices()
+    if not devices:
+        return [
+            "no RealSense device was detected by librealsense; connect the wrist "
+            "camera before validating a local-camera deployment"
+        ]
+    detected_serials = [serial for serial, _ in devices]
+    if configured_serial and configured_serial not in detected_serials:
+        return [
+            "wrist_camera.serial_no does not match an attached RealSense: "
+            f"configured={configured_serial}, detected={', '.join(detected_serials)}"
+        ]
+    return []
+
+
 def default_paths() -> tuple[Path, Path]:
     workspace = Path(__file__).resolve().parents[2]
     config_dir = workspace / "src" / "d1_bringup" / "config"
@@ -348,6 +391,7 @@ def main() -> int:
         try:
             config = materialize(args.defaults, args.config)
             errors = validate_config(config, args.config)
+            errors.extend(validate_attached_hardware(config))
             detected_platform, _ = detect_platform(args.platform)
             configured_platform = str(
                 config.get("deployment", {}).get("platform", "")
