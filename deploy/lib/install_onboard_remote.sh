@@ -47,6 +47,13 @@ tar -C "${WORK_DIR}" -xzf "${BUNDLE}"
 SOURCE=${WORK_DIR}/unitree-d1-control
 OFFICIAL_SDK=${WORK_DIR}/D1_SDK
 
+# Factory D1 computers may have an unsynchronised clock.  Source timestamps
+# inherited from the deployment host can then appear to be years in the
+# future, which makes Make report clock skew and can invalidate its dependency
+# decisions.  This is a fresh build, so normalise the extracted tree to the
+# board's current clock before configuring it.
+find "${SOURCE}" "${OFFICIAL_SDK}" -exec touch {} +
+
 cmake -S "${SOURCE}" -B "${WORK_DIR}/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DD1_CONTROL_BUILD_HOST=OFF \
@@ -55,7 +62,11 @@ cmake -S "${SOURCE}" -B "${WORK_DIR}/build" \
   -DD1_OFFICIAL_SDK_ROOT="${OFFICIAL_SDK}"
 cmake --build "${WORK_DIR}/build" -j"$(nproc)" \
   --target d1_control_node local_protocol_test
-ctest --test-dir "${WORK_DIR}/build" --output-on-failure
+(
+  cd "${WORK_DIR}/build"
+  grep -q 'add_test(local_protocol_test' CTestTestfile.cmake
+  ctest --output-on-failure
+)
 "${WORK_DIR}/build/d1_control_node" --version
 
 mkdir -p "${BACKUP_DIR}"
