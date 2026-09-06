@@ -76,6 +76,22 @@ print '[1/3] Starting MuJoCo RGB-D scene...'
 cd ${workspace}
 setsid ${sim_args[@]} >${sim_log} 2>&1 &
 sim_pid=$!
+
+sim_ready=false
+for attempt in {1..120}; do
+  kill -0 ${sim_pid} 2>/dev/null || { tail -n 60 ${sim_log} >&2; exit 1; }
+  if grep -q 'D1 MuJoCo service ready' ${sim_log}; then
+    sim_ready=true
+    break
+  fi
+  sleep 0.5
+done
+[[ ${sim_ready} == true ]] || {
+  print -u2 'MuJoCo DDS readiness timeout'
+  tail -n 60 ${sim_log} >&2
+  exit 1
+}
+
 print '[2/3] Starting control, MoveIt, perception, and PickObject...'
 setsid ${conda_bin} run --no-capture-output -n trash_collection ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} backend:=simulation enable_commissioning_api:=true >${stack_log} 2>&1 &
 stack_pid=$!
@@ -97,7 +113,8 @@ if [[ ${rviz} == true && -t 0 ]]; then
 fi
 print "[3/3] Running visual ${object} stage: ${stage}"
 set +e
-ros2 run d1_manipulation ${pick_client} --stage ${stage} 2>&1 | tee ${goal_log}
+${conda_bin} run --no-capture-output -n trash_collection \
+  ros2 run d1_manipulation ${pick_client} --stage ${stage} 2>&1 | tee ${goal_log}
 goal_status=${pipestatus[1]}
 set -e
 if (( goal_status == 0 )) && grep -q 'PICK STAGE SUCCEEDED' ${goal_log}; then

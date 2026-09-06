@@ -110,6 +110,25 @@ cd ${workspace}
 setsid ${sim_args[@]} >${sim_log} 2>&1 &
 sim_pid=$!
 
+sim_ready=false
+for attempt in {1..120}; do
+  if ! kill -0 ${sim_pid} 2>/dev/null; then
+    print -u2 'MuJoCo exited before its DDS service became ready.'
+    tail -n 60 ${sim_log} >&2
+    exit 1
+  fi
+  if grep -q 'D1 MuJoCo service ready' ${sim_log}; then
+    sim_ready=true
+    break
+  fi
+  sleep 0.5
+done
+if [[ ${sim_ready} != true ]]; then
+  print -u2 'MuJoCo DDS readiness timeout.'
+  tail -n 60 ${sim_log} >&2
+  exit 1
+fi
+
 print '[2/3] Starting ros2_control, MoveIt, and ObserveTarget...'
 setsid ${conda_bin} run --no-capture-output -n trash_collection \
   ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} backend:=simulation \
@@ -171,7 +190,8 @@ wait_for_enter \
 
 print '[3/3] Sending the seed-0 yellow cube centre to ObserveTarget...'
 set +e
-ros2 run d1_manipulation observe_seed_cube 2>&1 | tee ${goal_log}
+${conda_bin} run --no-capture-output -n trash_collection \
+  ros2 run d1_manipulation observe_seed_cube 2>&1 | tee ${goal_log}
 goal_status=${pipestatus[1]}
 set -e
 

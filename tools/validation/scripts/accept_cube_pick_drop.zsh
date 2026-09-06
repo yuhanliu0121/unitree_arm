@@ -77,6 +77,22 @@ print '[1/4] Starting deterministic MuJoCo acceptance scene...'
 cd ${workspace}
 setsid ${sim_args[@]} >${sim_log} 2>&1 &
 sim_pid=$!
+
+sim_ready=false
+for attempt in {1..120}; do
+  kill -0 ${sim_pid} 2>/dev/null || { tail -n 80 ${sim_log} >&2; exit 1; }
+  if grep -q 'D1 MuJoCo service ready' ${sim_log}; then
+    sim_ready=true
+    break
+  fi
+  sleep 0.5
+done
+[[ ${sim_ready} == true ]] || {
+  print -u2 'MuJoCo DDS readiness timeout'
+  tail -n 80 ${sim_log} >&2
+  exit 1
+}
+
 print '[2/4] Starting control, MoveIt, perception, PickObject and DropObject...'
 setsid ${conda_bin} run --no-capture-output -n trash_collection ros2 launch d1_manipulation observe_target.launch.py launch_rviz:=${rviz} backend:=simulation >${stack_log} 2>&1 &
 stack_pid=$!
@@ -102,7 +118,8 @@ if [[ ${rviz} == true && -t 0 ]]; then
 fi
 print "[3/4] Picking ${class_name} into CARRY..."
 set +e
-ros2 run d1_manipulation ${pick_client} --stage carry 2>&1 | tee ${pick_log}
+${conda_bin} run --no-capture-output -n trash_collection \
+  ros2 run d1_manipulation ${pick_client} --stage carry 2>&1 | tee ${pick_log}
 pick_status=${pipestatus[1]}
 set -e
 if (( pick_status != 0 )) || ! grep -q 'PICK STAGE SUCCEEDED' ${pick_log}; then
@@ -118,7 +135,8 @@ if [[ ${rviz} == true && -t 0 ]]; then
 fi
 print "[4/4] Releasing ${class_name} into the acceptance trash bin..."
 set +e
-ros2 run d1_manipulation drop_seed_bin --object ${class_name} 2>&1 | tee ${drop_log}
+${conda_bin} run --no-capture-output -n trash_collection \
+  ros2 run d1_manipulation drop_seed_bin --object ${class_name} 2>&1 | tee ${drop_log}
 drop_status=${pipestatus[1]}
 set -e
 if (( drop_status != 0 )) || ! grep -q 'DROP SUCCEEDED' ${drop_log}; then
