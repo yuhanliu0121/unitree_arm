@@ -77,6 +77,10 @@ if [[ "${ARCH}" == amd64 ]]; then
     --env ROS_HOME=/tmp/d1-ros-home
     --env YOLO_CONFIG_DIR=/tmp/d1-yolo
     --volume "${WORKSPACE}:/workspace"
+    # Privileged mode grants device access, while these bind mounts keep the
+    # container's device tree and udev metadata in sync after USB hot-plug.
+    --volume /dev:/dev
+    --volume /run/udev:/run/udev:ro
   )
   if [[ -n "${DISPLAY:-}" ]]; then
     DEV_ARGS+=(

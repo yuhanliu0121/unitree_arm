@@ -69,6 +69,11 @@ DOCKER_ARGS=(
   --env YOLO_CONFIG_DIR=/tmp/d1-yolo
   --volume "${WORKSPACE}:/workspace"
   --volume "${WORKSPACE}/log/runtime:/tmp/d1_ros_logs"
+  # Keep RealSense USB, video, and IMU nodes visible if it is re-enumerated
+  # after this runtime container starts. Privileged mode alone only grants
+  # permission; it does not keep the container's private /dev tree updated.
+  --volume /dev:/dev
+  --volume /run/udev:/run/udev:ro
 )
 
 if [[ "${WANTS_RVIZ}" == true ]]; then
