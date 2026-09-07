@@ -2,6 +2,9 @@
 /.agents/
 /.codex/
 
+# Local backups of retired documentation; not part of the distributed project.
+/.local_archive/
+
 # ROS 2 / CMake build products (including nested vendor workspaces)
 build/
 install/
