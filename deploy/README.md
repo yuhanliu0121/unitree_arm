@@ -694,7 +694,7 @@ The Go2 task node must use the same `ROS_DOMAIN_ID` as the manipulation service 
 /arm/task_status
 ```
 
-For request fields, result fields, state enumerations, and failure-handling behavior, see the [D1 Manipulation API documentation](../docs/arm_manipulation_api_cn.md).
+For request fields, result fields, state enumerations, and failure-handling behavior, see the [D1 Manipulation API documentation](../docs/api/README_CN.md).
 
 
 

@@ -694,7 +694,7 @@ Go2 任务节点必须使用与机械臂服务相同的 `ROS_DOMAIN_ID`，并依
 /arm/task_status
 ```
 
-具体请求参数、返回字段、状态枚举和失败处理方式详见：[D1 机械臂抓放 API 文档](../docs/arm_manipulation_api_cn.md)
+具体请求参数、返回字段、状态枚举和失败处理方式详见：[D1 机械臂抓放 API 文档](../docs/api/README_CN.md)
 
 
 
