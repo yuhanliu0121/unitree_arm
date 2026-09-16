@@ -1,5 +1,7 @@
 # Unitree D1 Autonomous Visual Picking and Dropping
 
+https://github.com/user-attachments/assets/ea0639d1-6915-44bc-8747-e0715464bca7
+
 [简体中文](README_CN.md) | English
 
 This project uses a **Unitree D1-550 arm, an Intel RealSense D435i wrist camera, and ROS 2 Humble** to perform autonomous visual recognition, picking, carrying, and dropping. The client supplies only an approximate object location or a drop target. The arm module handles perception, motion planning, execution, and failure recovery, without requiring the client to specify grasp poses or joint trajectories.

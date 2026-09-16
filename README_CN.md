@@ -1,5 +1,7 @@
 # Unitree D1 机械臂自主视觉抓取与投放
 
+https://github.com/user-attachments/assets/ea0639d1-6915-44bc-8747-e0715464bca7
+
 简体中文 | [English](README.md)
 
 本项目基于 **Unitree D1-550 机械臂、Intel RealSense D435i 腕部相机和 ROS 2 Humble**，实现从视觉识别到抓取、携带和投放的自主作业流程。调用方只需提供物体的大致位置或投放点，机械臂模块负责感知、运动规划、动作执行及失败恢复，无需调用方指定抓取位姿或关节轨迹。
